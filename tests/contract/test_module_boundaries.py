@@ -25,6 +25,7 @@ def test_execution_and_exchange_contracts_are_available():
     execution = importlib.import_module("triggertrade.execution")
     exchanges = importlib.import_module("triggertrade.exchanges")
 
-    assert hasattr(execution, "ExecutionAdapter")
     assert hasattr(execution, "OrderStatus")
+    assert hasattr(execution, "ExecutionService")
+    assert hasattr(execution, "TradeIntent")
     assert hasattr(exchanges, "ExchangeAdapter")

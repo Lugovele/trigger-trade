@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
 from enum import StrEnum
-from typing import Protocol
 
 
 class OrderStatus(StrEnum):
@@ -19,20 +19,28 @@ class OrderStatus(StrEnum):
     UNKNOWN = "unknown"
 
 
+class Side(StrEnum):
+    BUY = "Buy"
+    SELL = "Sell"
+
+
+class OrderType(StrEnum):
+    LIMIT = "Limit"
+
+
 @dataclass(frozen=True)
-class ExecutionRequest:
+class TradeIntent:
     intent_id: str
-    idempotency_key: str
     symbol: str
+    side: Side
+    order_type: OrderType
+    quantity: Decimal
+    price: Decimal
 
 
 @dataclass(frozen=True)
-class ExecutionResult:
-    request_id: str
-    status: OrderStatus
-    exchange_order_id: str | None = None
-
-
-class ExecutionAdapter(Protocol):
-    def submit(self, request: ExecutionRequest) -> ExecutionResult:
-        """Submit through an execution adapter after risk approval."""
+class RiskDecision:
+    risk_decision_id: str
+    intent_id: str
+    approved: bool
+    reason: str = "manual technical fixture"

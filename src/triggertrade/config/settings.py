@@ -31,6 +31,11 @@ class BybitEnvironment(StrEnum):
     DEMO = "demo"
 
 
+class ExecutionVenue(StrEnum):
+    LOCAL_PAPER = "local_paper"
+    BYBIT_DEMO = "bybit_demo"
+
+
 @dataclass(frozen=True)
 class WatchlistItem:
     symbol: str
@@ -81,6 +86,7 @@ class AppConfig:
     runtime_mode: RuntimeMode = RuntimeMode.DEVELOPMENT
     trading_mode: TradingMode = TradingMode.PAPER
     live_trading_enabled: bool = False
+    execution_venue: ExecutionVenue = ExecutionVenue.LOCAL_PAPER
     market: Market = Market.SPOT
     exchange: ExchangeConfig = field(default_factory=ExchangeConfig)
     bybit: BybitConfig = field(default_factory=BybitConfig)
@@ -108,6 +114,11 @@ def load_config(env: Mapping[str, str] | None = None) -> AppConfig:
         source.get("TRIGGERTRADE_LIVE_TRADING_ENABLED", "false"),
         "TRIGGERTRADE_LIVE_TRADING_ENABLED",
     )
+    execution_venue = _enum_value(
+        ExecutionVenue,
+        source.get("TRIGGERTRADE_EXECUTION_VENUE", ExecutionVenue.LOCAL_PAPER.value),
+        "TRIGGERTRADE_EXECUTION_VENUE",
+    )
     market = _enum_value(
         Market,
         source.get("TRIGGERTRADE_MARKET", Market.SPOT.value),
@@ -134,6 +145,7 @@ def load_config(env: Mapping[str, str] | None = None) -> AppConfig:
         runtime_mode=runtime_mode,
         trading_mode=trading_mode,
         live_trading_enabled=live_trading_enabled,
+        execution_venue=execution_venue,
         market=market,
         exchange=exchange,
         bybit=bybit,
@@ -155,7 +167,13 @@ def load_bybit_credentials(env: Mapping[str, str] | None = None) -> ApiCredentia
 
 
 def _enum_value(
-    enum_type: type[TradingMode] | type[RuntimeMode] | type[Market] | type[BybitEnvironment],
+    enum_type: (
+        type[TradingMode]
+        | type[RuntimeMode]
+        | type[Market]
+        | type[BybitEnvironment]
+        | type[ExecutionVenue]
+    ),
     raw: str,
     env_name: str,
 ):

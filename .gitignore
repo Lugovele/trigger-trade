@@ -22,6 +22,7 @@ venv/
 env/
 ENV/
 .pytest_cache/
+pytest-tmp/
 .mypy_cache/
 .ruff_cache/
 .coverage
@@ -55,6 +56,7 @@ market_snapshots/
 
 # Temporary files
 tmp/
+.tmp/
 temp/
 *.tmp
 *.bak

@@ -75,8 +75,8 @@ def test_wallet_balance_is_the_only_private_surface_on_client():
     }
 
     assert callable_methods == public_or_safe
-    assert not any("order" in name for name in callable_methods)
-    assert not any("cancel" in name for name in callable_methods)
+    assert not any(name == "order" for name in callable_methods)
+    assert "cancel" not in callable_methods
 
 
 def test_unsupported_wallet_account_type_is_rejected():

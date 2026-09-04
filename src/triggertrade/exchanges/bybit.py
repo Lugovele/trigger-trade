@@ -19,6 +19,10 @@ from triggertrade.config import ApiCredentials, BybitConfig
 class BybitApiError(RuntimeError):
     """Raised for sanitized Bybit API failures."""
 
+    def __init__(self, message: str, code: str | None = None) -> None:
+        super().__init__(message)
+        self.code = code
+
 
 @dataclass(frozen=True)
 class BybitResponse:
@@ -31,9 +35,26 @@ HttpTransport = Callable[[Request, int], bytes]
 
 
 class BybitDemoClient:
-    """Minimal read-only client for Bybit Demo spot/account checks."""
+    """Minimal Bybit Demo spot/account client with a narrow endpoint allowlist."""
 
     _WALLET_BALANCE_PATH = "/v5/account/wallet-balance"
+    _ORDER_CREATE_PATH = "/v5/order/create"
+    _ORDER_CANCEL_PATH = "/v5/order/cancel"
+    _ORDER_REALTIME_PATH = "/v5/order/realtime"
+    _ORDER_HISTORY_PATH = "/v5/order/history"
+    _SIGNED_GET_ALLOWLIST = frozenset(
+        {
+            _WALLET_BALANCE_PATH,
+            _ORDER_REALTIME_PATH,
+            _ORDER_HISTORY_PATH,
+        }
+    )
+    _SIGNED_POST_ALLOWLIST = frozenset(
+        {
+            _ORDER_CREATE_PATH,
+            _ORDER_CANCEL_PATH,
+        }
+    )
 
     def __init__(
         self,
@@ -91,6 +112,66 @@ class BybitDemoClient:
             raise BybitApiError(f"unsupported Bybit account type; expected one of: {allowed}")
         return self._private_get_wallet_balance({"accountType": normalized_account})
 
+    def _create_spot_limit_order(
+        self,
+        *,
+        symbol: str,
+        side: str,
+        qty: str,
+        price: str,
+        order_link_id: str,
+    ) -> BybitResponse:
+        _validate_order_link_id(order_link_id)
+        body = {
+            "category": "spot",
+            "symbol": _spot_symbol(symbol),
+            "side": side,
+            "orderType": "Limit",
+            "qty": qty,
+            "price": price,
+            "timeInForce": "PostOnly",
+            "isLeverage": 0,
+            "orderFilter": "Order",
+            "orderLinkId": order_link_id,
+        }
+        return self._private_post(self._ORDER_CREATE_PATH, body)
+
+    def _get_spot_order_realtime(self, symbol: str, order_link_id: str) -> BybitResponse:
+        _validate_order_link_id(order_link_id)
+        return self._private_get(
+            self._ORDER_REALTIME_PATH,
+            {
+                "category": "spot",
+                "symbol": _spot_symbol(symbol),
+                "orderLinkId": order_link_id,
+                "orderFilter": "Order",
+            },
+        )
+
+    def _get_spot_order_history(self, symbol: str, order_link_id: str) -> BybitResponse:
+        _validate_order_link_id(order_link_id)
+        return self._private_get(
+            self._ORDER_HISTORY_PATH,
+            {
+                "category": "spot",
+                "symbol": _spot_symbol(symbol),
+                "orderLinkId": order_link_id,
+                "orderFilter": "Order",
+            },
+        )
+
+    def _cancel_spot_order(self, *, symbol: str, order_link_id: str) -> BybitResponse:
+        _validate_order_link_id(order_link_id)
+        return self._private_post(
+            self._ORDER_CANCEL_PATH,
+            {
+                "category": "spot",
+                "symbol": _spot_symbol(symbol),
+                "orderLinkId": order_link_id,
+                "orderFilter": "Order",
+            },
+        )
+
     def _public_get(
         self,
         path: str,
@@ -100,30 +181,57 @@ class BybitDemoClient:
         return self._send(request)
 
     def _private_get_wallet_balance(self, query: dict[str, str]) -> BybitResponse:
+        return self._private_get(self._WALLET_BALANCE_PATH, query)
+
+    def _private_get(self, path: str, query: dict[str, str]) -> BybitResponse:
+        if path not in self._SIGNED_GET_ALLOWLIST:
+            raise BybitApiError("private GET endpoint is not allowlisted")
         if self._credentials is None:
             raise BybitApiError("Bybit credentials are required for private connectivity")
         query_string = urlencode(query)
-        timestamp = str(self._clock_ms())
-        recv_window = str(self._config.recv_window_ms)
-        signature = _sign_get_request(
-            timestamp=timestamp,
-            api_key=self._credentials.api_key,
-            recv_window=recv_window,
-            query_string=query_string,
-            api_secret=self._credentials.api_secret,
-        )
+        headers = self._signed_headers(query_string)
         request = Request(
-            self._url(self._WALLET_BALANCE_PATH, query),
-            headers={
-                "X-BAPI-API-KEY": self._credentials.api_key,
-                "X-BAPI-SIGN": signature,
-                "X-BAPI-SIGN-TYPE": "2",
-                "X-BAPI-TIMESTAMP": timestamp,
-                "X-BAPI-RECV-WINDOW": recv_window,
-            },
+            self._url(path, query),
+            headers=headers,
             method="GET",
         )
         return self._send(request)
+
+    def _private_post(self, path: str, body: dict[str, Any]) -> BybitResponse:
+        if path not in self._SIGNED_POST_ALLOWLIST:
+            raise BybitApiError("private POST endpoint is not allowlisted")
+        if self._credentials is None:
+            raise BybitApiError("Bybit credentials are required for private connectivity")
+        body_json = json.dumps(body, separators=(",", ":"))
+        headers = self._signed_headers(body_json)
+        headers["Content-Type"] = "application/json"
+        request = Request(
+            self._url(path),
+            data=body_json.encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        return self._send(request)
+
+    def _signed_headers(self, payload: str) -> dict[str, str]:
+        if self._credentials is None:
+            raise BybitApiError("Bybit credentials are required for private connectivity")
+        timestamp = str(self._clock_ms())
+        recv_window = str(self._config.recv_window_ms)
+        signature = _sign_request(
+            timestamp=timestamp,
+            api_key=self._credentials.api_key,
+            recv_window=recv_window,
+            payload=payload,
+            api_secret=self._credentials.api_secret,
+        )
+        return {
+            "X-BAPI-API-KEY": self._credentials.api_key,
+            "X-BAPI-SIGN": signature,
+            "X-BAPI-SIGN-TYPE": "2",
+            "X-BAPI-TIMESTAMP": timestamp,
+            "X-BAPI-RECV-WINDOW": recv_window,
+        }
 
     def _send(self, request: Request) -> BybitResponse:
         try:
@@ -144,7 +252,10 @@ class BybitDemoClient:
             result=raw.get("result") or {},
         )
         if response.ret_code != 0:
-            raise BybitApiError(f"Bybit API returned retCode={response.ret_code}")
+            raise BybitApiError(
+                f"Bybit API returned retCode={response.ret_code}",
+                code=str(response.ret_code),
+            )
         return response
 
     def _url(self, path: str, query: dict[str, str] | None = None) -> str:
@@ -162,8 +273,25 @@ def _sign_get_request(
     query_string: str,
     api_secret: str,
 ) -> str:
-    payload = f"{timestamp}{api_key}{recv_window}{query_string}"
-    return hmac.new(api_secret.encode("utf-8"), payload.encode("utf-8"), sha256).hexdigest()
+    return _sign_request(
+        timestamp=timestamp,
+        api_key=api_key,
+        recv_window=recv_window,
+        payload=query_string,
+        api_secret=api_secret,
+    )
+
+
+def _sign_request(
+    *,
+    timestamp: str,
+    api_key: str,
+    recv_window: str,
+    payload: str,
+    api_secret: str,
+) -> str:
+    raw = f"{timestamp}{api_key}{recv_window}{payload}"
+    return hmac.new(api_secret.encode("utf-8"), raw.encode("utf-8"), sha256).hexdigest()
 
 
 def parse_wallet_balance(result: dict[str, Any]) -> dict[str, Decimal]:
@@ -182,6 +310,16 @@ def _spot_symbol(symbol: str) -> str:
     if normalized != "BTCUSDT":
         raise BybitApiError("this integration slice supports only spot BTCUSDT")
     return normalized
+
+
+def _validate_order_link_id(order_link_id: str) -> None:
+    if not order_link_id:
+        raise BybitApiError("orderLinkId is required")
+    if len(order_link_id) > 36:
+        raise BybitApiError("orderLinkId must be no longer than 36 characters")
+    allowed = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_")
+    if any(char not in allowed for char in order_link_id):
+        raise BybitApiError("orderLinkId contains unsupported characters")
 
 
 def _urlopen_transport(request: Request, timeout: int) -> bytes:
