@@ -13,6 +13,8 @@ def test_primary_module_boundaries_are_importable():
         "triggertrade.persistence",
         "triggertrade.services",
         "triggertrade.dashboard",
+        "triggertrade.exchanges.bybit",
+        "triggertrade.market_data.bybit",
     ]
 
     for module in modules:
