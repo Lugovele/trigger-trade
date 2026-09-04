@@ -10,6 +10,8 @@ from triggertrade.exchanges import BybitDemoClient, BybitResponse
 
 
 class BybitExecutionAdapter:
+    uses_private_exchange_orders = True
+
     def __init__(self, client: BybitDemoClient) -> None:
         self._client = client
 

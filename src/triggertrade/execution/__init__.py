@@ -8,10 +8,12 @@ from .contracts import (
     TradeIntent,
 )
 from .service import ExecutionError, ExecutionService
+from .paper import PaperExecutionAdapter
 
 __all__ = [
     "ExecutionError",
     "ExecutionService",
+    "PaperExecutionAdapter",
     "OrderStatus",
     "OrderType",
     "RiskDecision",

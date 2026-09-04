@@ -29,6 +29,19 @@ class ExecutionRecord:
     last_error_code: str | None = None
 
 
+@dataclass(frozen=True)
+class ExecutionFill:
+    fill_id: str
+    intent_id: str
+    client_order_id: str
+    symbol: str
+    side: str
+    quantity: str
+    price: str
+    fee: str
+    created_at: str
+
+
 class ExecutionStore:
     def __init__(self, path: str | Path = "runtime/triggertrade.sqlite3") -> None:
         self.path = Path(path)
@@ -145,6 +158,37 @@ class ExecutionStore:
             ).fetchall()
         return tuple(_row_to_record(row) for row in rows)
 
+    def save_fill(self, fill: ExecutionFill) -> ExecutionFill:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO execution_fills (
+                    fill_id, intent_id, client_order_id, symbol, side,
+                    quantity, price, fee, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    fill.fill_id,
+                    fill.intent_id,
+                    fill.client_order_id,
+                    fill.symbol,
+                    fill.side,
+                    fill.quantity,
+                    fill.price,
+                    fill.fee,
+                    fill.created_at,
+                ),
+            )
+        return fill
+
+    def fills_for_intent(self, intent_id: str) -> tuple[ExecutionFill, ...]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM execution_fills WHERE intent_id = ? ORDER BY created_at, fill_id",
+                (intent_id,),
+            ).fetchall()
+        return tuple(_row_to_fill(row) for row in rows)
+
     def _fetch_one(
         self,
         query: str,
@@ -178,6 +222,21 @@ class ExecutionStore:
                     exchange_status TEXT,
                     reconciliation_state TEXT,
                     last_error_code TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS execution_fills (
+                    fill_id TEXT PRIMARY KEY,
+                    intent_id TEXT NOT NULL,
+                    client_order_id TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    side TEXT NOT NULL,
+                    quantity TEXT NOT NULL,
+                    price TEXT NOT NULL,
+                    fee TEXT NOT NULL,
+                    created_at TEXT NOT NULL
                 )
                 """
             )
@@ -225,4 +284,18 @@ def _row_to_record(row: sqlite3.Row) -> ExecutionRecord:
         exchange_status=row["exchange_status"],
         reconciliation_state=row["reconciliation_state"],
         last_error_code=row["last_error_code"],
+    )
+
+
+def _row_to_fill(row: sqlite3.Row) -> ExecutionFill:
+    return ExecutionFill(
+        fill_id=row["fill_id"],
+        intent_id=row["intent_id"],
+        client_order_id=row["client_order_id"],
+        symbol=row["symbol"],
+        side=row["side"],
+        quantity=row["quantity"],
+        price=row["price"],
+        fee=row["fee"],
+        created_at=row["created_at"],
     )

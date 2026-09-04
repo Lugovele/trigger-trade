@@ -101,8 +101,40 @@ def test_mismatched_market_observation_rejected(tmp_path):
     assert "RSK-005" in decision.blocking_rule_ids
 
 
-def test_non_demo_environment_rejected(tmp_path):
+def test_local_paper_environment_allowed(tmp_path):
     config = load_config({"TRIGGERTRADE_EXECUTION_VENUE": "local_paper"})
+    decision = _manager(tmp_path, config=config).evaluate(
+        intent=_intent(),
+        observation=_observation(),
+        available_quote_balance=Decimal("100"),
+    )
+
+    assert decision.approved
+
+
+def test_unsafe_bybit_live_endpoint_rejected(tmp_path):
+    config = load_config(
+        {
+            "TRIGGERTRADE_EXECUTION_VENUE": "bybit_demo",
+            "BYBIT_BASE_URL": "https://api.bybit.com",
+        }
+    )
+    decision = _manager(tmp_path, config=config).evaluate(
+        intent=_intent(),
+        observation=_observation(),
+        available_quote_balance=Decimal("100"),
+    )
+
+    assert "RSK-004" in decision.blocking_rule_ids
+
+
+def test_local_paper_with_live_public_endpoint_rejected(tmp_path):
+    config = load_config(
+        {
+            "TRIGGERTRADE_EXECUTION_VENUE": "local_paper",
+            "BYBIT_BASE_URL": "https://api.bybit.com",
+        }
+    )
     decision = _manager(tmp_path, config=config).evaluate(
         intent=_intent(),
         observation=_observation(),

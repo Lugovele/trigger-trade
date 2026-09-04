@@ -80,12 +80,22 @@ class RiskManager:
         return any(record.intent_id == intent.intent_id for record in self._execution_store.unresolved())
 
     def _demo_safety_ok(self, intent: TradeIntent) -> bool:
+        venue_ok = (
+            (
+                self._config.execution_venue is ExecutionVenue.LOCAL_PAPER
+                and self._config.bybit.environment is BybitEnvironment.DEMO
+                and self._config.bybit.base_url == "https://api-demo.bybit.com"
+            )
+            or (
+                self._config.execution_venue is ExecutionVenue.BYBIT_DEMO
+                and self._config.bybit.environment is BybitEnvironment.DEMO
+                and self._config.bybit.base_url == "https://api-demo.bybit.com"
+            )
+        )
         return (
             self._config.trading_mode is TradingMode.PAPER
             and not self._config.live_trading_enabled
-            and self._config.execution_venue is ExecutionVenue.BYBIT_DEMO
-            and self._config.bybit.environment is BybitEnvironment.DEMO
-            and self._config.bybit.base_url == "https://api-demo.bybit.com"
+            and venue_ok
             and self._config.market is Market.SPOT
             and intent.symbol == "BTCUSDT"
             and intent.order_type is OrderType.LIMIT

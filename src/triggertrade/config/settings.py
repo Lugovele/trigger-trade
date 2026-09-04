@@ -107,6 +107,16 @@ class RiskRulesConfig:
 
 
 @dataclass(frozen=True)
+class PaperRuntimeConfig:
+    symbol: str = "BTCUSDT"
+    candle_interval: str = "1"
+    poll_interval_seconds: int = 30
+    paper_quote_balance: Decimal = Decimal("100")
+    db_path: str = "runtime/triggertrade_paper.sqlite3"
+    version: str = "paper-runtime-v1"
+
+
+@dataclass(frozen=True)
 class AppConfig:
     runtime_mode: RuntimeMode = RuntimeMode.DEVELOPMENT
     trading_mode: TradingMode = TradingMode.PAPER
@@ -122,6 +132,7 @@ class AppConfig:
     trigger_rule: TriggerRuleConfig = field(default_factory=TriggerRuleConfig)
     strategy_rule: StrategyRuleConfig = field(default_factory=StrategyRuleConfig)
     risk_rules: RiskRulesConfig = field(default_factory=RiskRulesConfig)
+    paper_runtime: PaperRuntimeConfig = field(default_factory=PaperRuntimeConfig)
 
 
 def load_config(env: Mapping[str, str] | None = None) -> AppConfig:
@@ -183,6 +194,19 @@ def load_config(env: Mapping[str, str] | None = None) -> AppConfig:
         ),
         stale_after_seconds=trigger_rule.stale_after_seconds,
     )
+    paper_runtime = PaperRuntimeConfig(
+        symbol=source.get("TRIGGERTRADE_RUNTIME_SYMBOL", "BTCUSDT").strip().upper(),
+        candle_interval=source.get("TRIGGERTRADE_CANDLE_INTERVAL", "1").strip(),
+        poll_interval_seconds=_int_value(
+            source.get("TRIGGERTRADE_POLL_INTERVAL_SECONDS", "30"),
+            "TRIGGERTRADE_POLL_INTERVAL_SECONDS",
+        ),
+        paper_quote_balance=_decimal_value(
+            source.get("TRIGGERTRADE_PAPER_QUOTE_BALANCE", "100"),
+            "TRIGGERTRADE_PAPER_QUOTE_BALANCE",
+        ),
+        db_path=source.get("TRIGGERTRADE_RUNTIME_DB_PATH", PaperRuntimeConfig.db_path).strip(),
+    )
 
     if trading_mode is TradingMode.LIVE or live_trading_enabled:
         _require_live_secret(source, exchange.api_key_env)
@@ -202,6 +226,7 @@ def load_config(env: Mapping[str, str] | None = None) -> AppConfig:
         trigger_rule=trigger_rule,
         strategy_rule=strategy_rule,
         risk_rules=risk_rules,
+        paper_runtime=paper_runtime,
     )
 
 

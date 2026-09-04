@@ -18,7 +18,7 @@ from triggertrade.execution.bybit import BybitExecutionAdapter, map_bybit_order_
 from triggertrade.execution.contracts import OrderStatus, OrderType, RiskDecision, TradeIntent
 from triggertrade.exchanges import BybitApiError
 from triggertrade.market_data import BybitInstrument
-from triggertrade.persistence import ExecutionRecord, ExecutionStore
+from triggertrade.persistence import ExecutionFill, ExecutionRecord, ExecutionStore
 
 from .precision import validate_limit_order_precision
 
@@ -156,6 +156,18 @@ class ExecutionService:
             return self._store.update(updated)
 
         if order is None:
+            if not getattr(self._adapter, "uses_private_exchange_orders", True):
+                order = _paper_order_from_record(record)
+            else:
+                updated = replace(
+                    record,
+                    status=OrderStatus.UNKNOWN,
+                    updated_at=_now(),
+                    reconciliation_state="not_found",
+                )
+                return self._store.update(updated)
+
+        if order is None:
             updated = replace(
                 record,
                 status=OrderStatus.UNKNOWN,
@@ -174,6 +186,20 @@ class ExecutionService:
             reconciliation_state="reconciled",
             last_error_code=None,
         )
+        for fill in order.get("fills") or ():
+            self._store.save_fill(
+                ExecutionFill(
+                    fill_id=str(fill.get("execId") or f"{record.client_order_id}-fill"),
+                    intent_id=record.intent_id,
+                    client_order_id=record.client_order_id,
+                    symbol=record.symbol,
+                    side=record.side,
+                    quantity=str(fill.get("execQty") or record.requested_qty),
+                    price=str(fill.get("execPrice") or record.requested_price),
+                    fee=str(fill.get("execFee") or "0"),
+                    created_at=str(fill.get("execTime") or _now()),
+                )
+            )
         return self._store.update(updated)
 
     def recover_unresolved(self) -> tuple[ExecutionRecord, ...]:
@@ -201,12 +227,16 @@ class ExecutionService:
             raise ExecutionError("execution requires paper trading mode for this demo slice")
         if self._config.live_trading_enabled:
             raise ExecutionError("live trading must remain disabled")
-        if self._config.execution_venue is not ExecutionVenue.BYBIT_DEMO:
-            raise ExecutionError("execution venue must be bybit_demo")
-        if self._config.bybit.environment is not BybitEnvironment.DEMO:
-            raise ExecutionError("Bybit environment must be demo")
-        if self._config.bybit.base_url != "https://api-demo.bybit.com":
-            raise ExecutionError("Bybit Demo execution requires the demo base URL")
+        if self._config.execution_venue is ExecutionVenue.LOCAL_PAPER:
+            if getattr(self._adapter, "uses_private_exchange_orders", True):
+                raise ExecutionError("local paper execution requires a paper adapter")
+        elif self._config.execution_venue is ExecutionVenue.BYBIT_DEMO:
+            if self._config.bybit.environment is not BybitEnvironment.DEMO:
+                raise ExecutionError("Bybit environment must be demo")
+            if self._config.bybit.base_url != "https://api-demo.bybit.com":
+                raise ExecutionError("Bybit Demo execution requires the demo base URL")
+        else:
+            raise ExecutionError("execution venue must be local_paper or bybit_demo")
         if self._config.market is not Market.SPOT:
             raise ExecutionError("only spot market is supported")
         if intent.symbol != "BTCUSDT":
@@ -233,3 +263,19 @@ def _now() -> str:
 
 def _error_code(exc: BybitApiError) -> str:
     return getattr(exc, "code", None) or exc.__class__.__name__
+
+
+def _paper_order_from_record(record: ExecutionRecord) -> dict[str, object]:
+    return {
+        "orderId": record.exchange_order_id or f"paper-{record.client_order_id}",
+        "orderStatus": "Filled",
+        "fills": (
+            {
+                "execId": f"paper-fill-{record.client_order_id}",
+                "execQty": record.requested_qty,
+                "execPrice": record.requested_price,
+                "execFee": "0",
+                "execTime": _now(),
+            },
+        ),
+    }
