@@ -36,6 +36,11 @@ class TradeIntent:
     order_type: OrderType
     quantity: Decimal
     price: Decimal
+    strategy_rule_id: str = "manual"
+    strategy_rule_version: str = "0"
+    reason_signal_ids: tuple[str, ...] = ()
+    reason_trigger_ids: tuple[str, ...] = ()
+    created_at: str | None = None
 
 
 @dataclass(frozen=True)
@@ -43,4 +48,10 @@ class RiskDecision:
     risk_decision_id: str
     intent_id: str
     approved: bool
+    checked_rule_ids: tuple[str, ...] = ()
+    blocking_rule_ids: tuple[str, ...] = ()
+    approved_notional: Decimal | None = None
+    approved_quantity: Decimal | None = None
+    rejection_reason: str | None = None
+    created_at: str | None = None
     reason: str = "manual technical fixture"

@@ -23,6 +23,9 @@ from triggertrade.persistence import ExecutionRecord, ExecutionStore
 from .precision import validate_limit_order_precision
 
 
+_MANDATORY_RISK_RULE_IDS = frozenset({"RSK-001", "RSK-002", "RSK-003", "RSK-004", "RSK-005"})
+
+
 class ExecutionError(RuntimeError):
     """Raised when execution must fail closed."""
 
@@ -181,6 +184,17 @@ class ExecutionService:
             raise ExecutionError("risk decision is not bound to this intent")
         if not risk_decision.approved:
             raise ExecutionError("risk decision rejected this intent")
+        checked_rule_ids = frozenset(risk_decision.checked_rule_ids)
+        if not _MANDATORY_RISK_RULE_IDS.issubset(checked_rule_ids):
+            raise ExecutionError("approved risk decision is missing mandatory rule evidence")
+        if risk_decision.blocking_rule_ids:
+            raise ExecutionError("approved risk decision contains blocking rule evidence")
+        if risk_decision.approved_quantity is None or risk_decision.approved_notional is None:
+            raise ExecutionError("approved risk decision is missing approved quantity or notional")
+        if risk_decision.approved_quantity != intent.quantity:
+            raise ExecutionError("approved risk quantity does not match intent quantity")
+        if risk_decision.approved_notional != intent.quantity * intent.price:
+            raise ExecutionError("approved risk notional does not match intent notional")
 
     def _validate_environment(self, intent: TradeIntent) -> None:
         if self._config.trading_mode is not TradingMode.PAPER:

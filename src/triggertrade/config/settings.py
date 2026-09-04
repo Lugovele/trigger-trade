@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from decimal import Decimal
 from enum import StrEnum
 import os
 from typing import Mapping
@@ -82,6 +83,30 @@ class RiskConfig:
 
 
 @dataclass(frozen=True)
+class TriggerRuleConfig:
+    rule_id: str = "TRG-001"
+    version: str = "0.1.0"
+    status: str = "DRAFT_DEMO_ONLY"
+    lookback_window: str = "1m"
+    threshold_pct: Decimal = Decimal("-1.0")
+    stale_after_seconds: int = 60
+
+
+@dataclass(frozen=True)
+class StrategyRuleConfig:
+    rule_id: str = "STR-001"
+    version: str = "0.1.0"
+    status: str = "DRAFT_DEMO_ONLY"
+    enabled: bool = True
+
+
+@dataclass(frozen=True)
+class RiskRulesConfig:
+    max_demo_order_notional: Decimal = Decimal("6")
+    stale_after_seconds: int = 60
+
+
+@dataclass(frozen=True)
 class AppConfig:
     runtime_mode: RuntimeMode = RuntimeMode.DEVELOPMENT
     trading_mode: TradingMode = TradingMode.PAPER
@@ -94,6 +119,9 @@ class AppConfig:
     triggers: Mapping[str, TriggerConfig] = field(default_factory=dict)
     strategies: Mapping[str, StrategyConfig] = field(default_factory=dict)
     risk: RiskConfig = field(default_factory=RiskConfig)
+    trigger_rule: TriggerRuleConfig = field(default_factory=TriggerRuleConfig)
+    strategy_rule: StrategyRuleConfig = field(default_factory=StrategyRuleConfig)
+    risk_rules: RiskRulesConfig = field(default_factory=RiskRulesConfig)
 
 
 def load_config(env: Mapping[str, str] | None = None) -> AppConfig:
@@ -134,6 +162,27 @@ def load_config(env: Mapping[str, str] | None = None) -> AppConfig:
         base_url=source.get("BYBIT_BASE_URL", BybitConfig.base_url).rstrip("/"),
     )
     watchlist = _watchlist(source.get("TRIGGERTRADE_WATCHLIST", ""))
+    trigger_rule = TriggerRuleConfig(
+        lookback_window=source.get("TRIGGERTRADE_TRG_001_LOOKBACK_WINDOW", "1m"),
+        threshold_pct=_decimal_value(
+            source.get("TRIGGERTRADE_TRG_001_THRESHOLD_PCT", "-1.0"),
+            "TRIGGERTRADE_TRG_001_THRESHOLD_PCT",
+        ),
+        stale_after_seconds=_int_value(
+            source.get("TRIGGERTRADE_STALE_AFTER_SECONDS", "60"),
+            "TRIGGERTRADE_STALE_AFTER_SECONDS",
+        ),
+    )
+    strategy_rule = StrategyRuleConfig(
+        enabled=_bool_value(source.get("TRIGGERTRADE_STR_001_ENABLED", "true"), "TRIGGERTRADE_STR_001_ENABLED")
+    )
+    risk_rules = RiskRulesConfig(
+        max_demo_order_notional=_decimal_value(
+            source.get("TRIGGERTRADE_MAX_DEMO_ORDER_NOTIONAL", "6"),
+            "TRIGGERTRADE_MAX_DEMO_ORDER_NOTIONAL",
+        ),
+        stale_after_seconds=trigger_rule.stale_after_seconds,
+    )
 
     if trading_mode is TradingMode.LIVE or live_trading_enabled:
         _require_live_secret(source, exchange.api_key_env)
@@ -150,6 +199,9 @@ def load_config(env: Mapping[str, str] | None = None) -> AppConfig:
         exchange=exchange,
         bybit=bybit,
         watchlist=watchlist,
+        trigger_rule=trigger_rule,
+        strategy_rule=strategy_rule,
+        risk_rules=risk_rules,
     )
 
 
@@ -202,3 +254,20 @@ def _bool_value(raw: str, env_name: str) -> bool:
 def _watchlist(raw: str) -> tuple[WatchlistItem, ...]:
     symbols = [symbol.strip().upper() for symbol in raw.split(",") if symbol.strip()]
     return tuple(WatchlistItem(symbol=symbol) for symbol in symbols)
+
+
+def _decimal_value(raw: str, env_name: str) -> Decimal:
+    try:
+        return Decimal(raw.strip())
+    except Exception as exc:
+        raise ConfigError(f"{env_name} must be a decimal value") from exc
+
+
+def _int_value(raw: str, env_name: str) -> int:
+    try:
+        value = int(raw.strip())
+    except ValueError as exc:
+        raise ConfigError(f"{env_name} must be an integer") from exc
+    if value <= 0:
+        raise ConfigError(f"{env_name} must be positive")
+    return value

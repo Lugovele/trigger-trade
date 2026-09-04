@@ -39,6 +39,43 @@ def test_wrong_intent_risk_binding_rejected(tmp_path):
         )
 
 
+def test_synthetic_approved_risk_without_rule_evidence_rejected(tmp_path):
+    service = _service(tmp_path)
+    intent = _intent()
+
+    with pytest.raises(ExecutionError, match="mandatory rule evidence"):
+        service.submit_approved_limit_order(
+            intent=intent,
+            risk_decision=RiskDecision("risk-1", intent.intent_id, True),
+        )
+
+
+def test_approved_risk_with_blocking_evidence_rejected(tmp_path):
+    service = _service(tmp_path)
+
+    with pytest.raises(ExecutionError, match="blocking rule evidence"):
+        service.submit_approved_limit_order(
+            intent=_intent(),
+            risk_decision=_risk(blocking_rule_ids=("RSK-003",)),
+        )
+
+
+def test_approved_risk_quantity_and_notional_must_match_intent(tmp_path):
+    service = _service(tmp_path)
+
+    with pytest.raises(ExecutionError, match="quantity"):
+        service.submit_approved_limit_order(
+            intent=_intent(),
+            risk_decision=_risk(approved_quantity=Decimal("0.002")),
+        )
+
+    with pytest.raises(ExecutionError, match="notional"):
+        service.submit_approved_limit_order(
+            intent=_intent(),
+            risk_decision=_risk(approved_notional=Decimal("11")),
+        )
+
+
 def test_demo_environment_allowed_and_order_submitted(tmp_path):
     adapter = FakeAdapter(order_status="New")
     service = _service(tmp_path, adapter=adapter)
@@ -160,8 +197,21 @@ def _intent():
     )
 
 
-def _risk():
-    return RiskDecision("risk-1", "intent-1", True)
+def _risk(
+    *,
+    blocking_rule_ids=(),
+    approved_quantity=Decimal("0.001"),
+    approved_notional=Decimal("10.00000"),
+):
+    return RiskDecision(
+        "risk-1",
+        "intent-1",
+        True,
+        checked_rule_ids=("RSK-001", "RSK-002", "RSK-003", "RSK-004", "RSK-005"),
+        blocking_rule_ids=blocking_rule_ids,
+        approved_quantity=approved_quantity,
+        approved_notional=approved_notional,
+    )
 
 
 class FakeAdapter(BybitExecutionAdapter):

@@ -93,6 +93,10 @@ def run_smoke(env: dict[str, str]) -> SmokeResult:
         risk_decision_id=f"manual-risk-{intent.intent_id}",
         intent_id=intent.intent_id,
         approved=True,
+        checked_rule_ids=("RSK-001", "RSK-002", "RSK-003", "RSK-004", "RSK-005"),
+        blocking_rule_ids=(),
+        approved_notional=quantity * price,
+        approved_quantity=quantity,
         reason="manual demo smoke allow fixture",
     )
 
