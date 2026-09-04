@@ -22,3 +22,24 @@ The project is intentionally small. The infrastructure exists to keep money-movi
 - `docs/execution-and-safety.md`
 - `docs/development-lifecycle.md`
 - `docs/mvp-scope.md`
+
+## Local Dashboard
+
+Run the read-only local dashboard with:
+
+```bash
+python -m triggertrade.dashboard
+```
+
+Default URL: `http://127.0.0.1:8765/`.
+
+The dashboard reads the continuous paper runtime SQLite state from
+`runtime/triggertrade_paper.sqlite3` unless `TRIGGERTRADE_RUNTIME_DB_PATH` is
+set. It shows runtime checkpoint state, latest decision, recent candle
+lifecycles, paper trades/fills, and the full trace from candle to trigger,
+strategy, risk, and execution records.
+
+The dashboard is intentionally read-only. It does not evaluate triggers, create
+strategy decisions, approve risk, call execution services, place/cancel orders,
+read `.env`, or expose API credentials. P&L, portfolio accounting, alerts, and
+operator controls are intentionally deferred until backend semantics exist.
