@@ -29,7 +29,7 @@ from triggertrade.persistence import (
 )
 from triggertrade.services.dual_lane_runtime import DualLaneRuntime
 from triggertrade.execution import PaperExecutionAdapter
-from tests.unit.test_dual_lane_runtime import VolumeConfirmedMarketClient, _runtime
+from tests.unit.test_dual_lane_runtime import VolumeConfirmedMarketClient, _bootstrap_legacy_spot_sets, _runtime
 
 
 def test_empty_evidence_is_collecting_and_does_not_promote():
@@ -313,7 +313,7 @@ def _runtime_with_operator(tmp_path, db, operator, *, market_client=None, clock=
     }
     config = load_config(env)
     trigger_sets = TriggerSetStore(db)
-    bootstrap_current_trigger_sets(trigger_sets)
+    _bootstrap_legacy_spot_sets(trigger_sets)
     return DualLaneRuntime(
         config=config,
         market_client=market_client or VolumeConfirmedMarketClient(),

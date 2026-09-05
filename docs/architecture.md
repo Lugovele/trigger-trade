@@ -161,6 +161,14 @@ Lane identity is part of the business key for every runtime lifecycle: `lane + s
 
 The TEST lane is analysis-only. It may run trigger, strategy, and risk logic and may persist decisions, but it must not call Bybit private/order APIs or affect ACTIVE paper execution. Promotion from TESTING to ACTIVE is an explicit audited transition; the dashboard does not provide automatic promotion, rule editing, order placement, or strategy/risk controls. Its only operator control is the persisted local STOP/RESUME gate for new ACTIVE submissions.
 
+The current production runtime target is Bybit Demo `BTCUSDT` linear
+perpetuals. It consumes one canonical completed `category=linear` 1m candle
+stream for ACTIVE and TEST lanes. ACTIVE may create `FuturesTradeIntent`
+records and submit only through `FuturesExecutionService` and the Bybit Demo
+futures adapter after futures risk approval. TEST uses a source-aware local
+simulation model for closed-trade evidence and must never call Bybit
+private/order endpoints.
+
 ## Rule Analytics and Recommendations
 
 Rule identity is split between a logical rule id and immutable rule versions. Trigger Sets must reference exact `rule_id + version` pairs. Once a rule version has been recorded for TESTING or ACTIVE evidence, semantic fields such as formula, thresholds, inputs, boundary behavior, stale-data behavior, missing-data behavior, and output semantics must not be edited in place. Any material change creates a new version and preserves historical reproducibility.
@@ -168,6 +176,10 @@ Rule identity is split between a logical rule id and immutable rule versions. Tr
 Recommendations are audited experiment proposals. The lifecycle is `Observation -> Hypothesis -> Recommendation -> Candidate Trigger Set -> TESTING -> Evaluation -> Decision`. A recommendation may create or reference a TESTING candidate set through explicit reviewed code/config, but it must never promote TESTING to ACTIVE, mutate ACTIVE, or call execution. Analytics evaluates performance at Trigger Set version level, not by declaring an isolated trigger profitable.
 
 Dashboard Rule Detail and Analytics pages are read-only projections over persistence. They may link rules, exact versions, trigger sets, recommendations, and supported evidence counts. They must not evaluate triggers, approve risk, place/cancel orders, expose arbitrary SQL, expose `.env`, or render secrets.
+
+Analytics facts must preserve evidence source. Exchange-derived accounting and
+TEST-lane simulation facts are not interchangeable; baseline comparisons are
+available only for like-for-like accounting samples.
 
 Canonical registry bootstrap is a shared service-layer startup concern. It writes only configured RuleDefinitions, immutable TriggerSetVersions, memberships, and Recommendations into the intended runtime SQLite database before runtime/dashboard services open their stores. Runtime evidence remains separate: bootstrap must not create candle lifecycles, orders, fills, performance history, P&L, or synthetic analytics rows. If an existing exact rule/set/recommendation identity has different semantics, bootstrap fails closed through persistence immutability instead of silently mutating history.
 

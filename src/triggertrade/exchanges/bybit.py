@@ -43,12 +43,14 @@ class BybitDemoClient:
     _ORDER_REALTIME_PATH = "/v5/order/realtime"
     _ORDER_HISTORY_PATH = "/v5/order/history"
     _EXECUTION_LIST_PATH = "/v5/execution/list"
+    _POSITION_LIST_PATH = "/v5/position/list"
     _SIGNED_GET_ALLOWLIST = frozenset(
         {
             _WALLET_BALANCE_PATH,
             _ORDER_REALTIME_PATH,
             _ORDER_HISTORY_PATH,
             _EXECUTION_LIST_PATH,
+            _POSITION_LIST_PATH,
         }
     )
     _SIGNED_POST_ALLOWLIST = frozenset(
@@ -141,6 +143,15 @@ class BybitDemoClient:
             allowed = ", ".join(self._config.account_types)
             raise BybitApiError(f"unsupported Bybit account type; expected one of: {allowed}")
         return self._private_get_wallet_balance({"accountType": normalized_account})
+
+    def linear_position_list(self, symbol: str = "BTCUSDT") -> BybitResponse:
+        return self._private_get(
+            self._POSITION_LIST_PATH,
+            {
+                "category": "linear",
+                "symbol": _linear_symbol(symbol),
+            },
+        )
 
     def _create_spot_limit_order(
         self,

@@ -11,6 +11,9 @@ from triggertrade.persistence import (
     TraceStore,
     TriggerSetStore,
     bootstrap_current_trigger_sets,
+    current_active_trigger_set,
+    current_rule_definitions,
+    current_testing_trigger_set,
 )
 from triggertrade.services.dual_lane_runtime import DualLaneRuntime
 from triggertrade.trigger_sets import Lane, TriggerSetStatus
@@ -129,7 +132,7 @@ def test_active_restart_reconciles_existing_execution_before_duplicate_risk(tmp_
 def test_draft_and_archive_sets_are_not_evaluated(tmp_path):
     path = tmp_path / "dual.sqlite3"
     trigger_sets = TriggerSetStore(path)
-    bootstrap_current_trigger_sets(trigger_sets, created_at="2026-09-05T00:00:00+00:00")
+    _bootstrap_legacy_spot_sets(trigger_sets, created_at="2026-09-05T00:00:00+00:00")
     trigger_sets.transition_status(
         set_id="triggertrade-core-candidate",
         version="v2-test",
@@ -200,7 +203,7 @@ def _runtime(
     db_path = path or (tmp_path / "dual.sqlite3")
     trigger_set_store = trigger_sets or TriggerSetStore(db_path)
     if trigger_sets is None:
-        bootstrap_current_trigger_sets(trigger_set_store)
+        _bootstrap_legacy_spot_sets(trigger_set_store)
     if test_adapter_factory is None:
         def test_adapter_factory():
             adapter = PaperExecutionAdapter(clock_ms=lambda: 456)
@@ -224,7 +227,7 @@ def _runtime(
 def test_testing_set_waits_for_candle_after_activation(tmp_path):
     path = tmp_path / "dual.sqlite3"
     trigger_sets = TriggerSetStore(path)
-    bootstrap_current_trigger_sets(trigger_sets, created_at="2026-09-05T12:02:30+00:00")
+    _bootstrap_legacy_spot_sets(trigger_sets, created_at="2026-09-05T12:02:30+00:00")
 
     result = _runtime(tmp_path, closes=("100", "98"), path=path, trigger_sets=trigger_sets).process_once()
 
@@ -413,3 +416,10 @@ def parse_candles_for_volume_confirmed():
 
     candles = parse_spot_candles(VolumeConfirmedMarketClient().recent_candles("BTCUSDT", "1", 70).result)
     return tuple(sorted(candles, key=lambda candle: candle.start_time_ms))
+
+
+def _bootstrap_legacy_spot_sets(store: TriggerSetStore, *, created_at: str = "2026-09-05T00:00:00+00:00") -> None:
+    for rule in current_rule_definitions(created_at=created_at):
+        store.save_rule(rule)
+    store.create_set(current_active_trigger_set(created_at=created_at))
+    store.create_set(current_testing_trigger_set(created_at=created_at))

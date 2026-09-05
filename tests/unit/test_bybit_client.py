@@ -65,6 +65,7 @@ def test_wallet_balance_is_the_only_private_surface_on_client():
         "instrument_metadata",
         "linear_instrument_metadata",
         "linear_recent_candles",
+        "linear_position_list",
         "linear_ticker",
         "public_connectivity",
         "recent_candles",

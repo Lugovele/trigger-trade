@@ -20,9 +20,11 @@ def test_bybit_demo_base_url_selection():
     assert config.watchlist[0].symbol == "BTCUSDT"
 
 
-def test_only_spot_market_is_supported_in_this_slice():
-    with pytest.raises(ConfigError):
-        load_config({"TRIGGERTRADE_MARKET": "linear"})
+def test_linear_market_is_supported_for_futures_runtime():
+    config = load_config({"TRIGGERTRADE_MARKET": "linear"})
+
+    assert config.market is Market.LINEAR
+    assert config.futures_runtime.category == "linear"
 
 
 def test_live_trading_enabled_fails_closed():

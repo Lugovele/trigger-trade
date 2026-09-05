@@ -183,8 +183,8 @@ def test_readiness_uses_accounting_closed_trades_when_tables_exist(tmp_path):
     accounting = FuturesAccountingStore(db)
     result = close_futures_trade(
         trade_id="candidate-closed",
-        entry_fills=(_fill("candidate-entry", trade_id="candidate-closed", set_id="triggertrade-core-candidate", set_version="v2-test"),),
-        exit_fills=(_fill("candidate-exit", trade_id="candidate-closed", action="CLOSE_LONG", price=Decimal("101"), set_id="triggertrade-core-candidate", set_version="v2-test"),),
+        entry_fills=(_fill("candidate-entry", trade_id="candidate-closed", set_id="triggertrade-futures-candidate", set_version="v2-test"),),
+        exit_fills=(_fill("candidate-exit", trade_id="candidate-closed", action="CLOSE_LONG", price=Decimal("101"), set_id="triggertrade-futures-candidate", set_version="v2-test"),),
     )
     accounting.record_closed_trade(result)
 
@@ -200,13 +200,13 @@ def test_dashboard_performance_uses_accounting_metrics_and_no_frontend_math(tmp_
     accounting = FuturesAccountingStore(db)
     result = close_futures_trade(
         trade_id="perf-trade",
-        entry_fills=(_fill("perf-entry", trade_id="perf-trade", set_id="triggertrade-core", set_version="v1", fee=Decimal("0.1")),),
-        exit_fills=(_fill("perf-exit", trade_id="perf-trade", action="CLOSE_LONG", price=Decimal("110"), set_id="triggertrade-core", set_version="v1", fee=Decimal("0.1")),),
+        entry_fills=(_fill("perf-entry", trade_id="perf-trade", set_id="triggertrade-futures-core", set_version="v1", fee=Decimal("0.1")),),
+        exit_fills=(_fill("perf-exit", trade_id="perf-trade", action="CLOSE_LONG", price=Decimal("110"), set_id="triggertrade-futures-core", set_version="v1", fee=Decimal("0.1")),),
     )
     candidate_result = close_futures_trade(
         trade_id="candidate-perf-trade",
-        entry_fills=(_fill("candidate-perf-entry", trade_id="candidate-perf-trade", set_id="triggertrade-core-candidate", set_version="v2-test", fee=Decimal("0.1")),),
-        exit_fills=(_fill("candidate-perf-exit", trade_id="candidate-perf-trade", action="CLOSE_LONG", price=Decimal("105"), set_id="triggertrade-core-candidate", set_version="v2-test", fee=Decimal("0.1")),),
+        entry_fills=(_fill("candidate-perf-entry", trade_id="candidate-perf-trade", set_id="triggertrade-futures-candidate", set_version="v2-test", fee=Decimal("0.1")),),
+        exit_fills=(_fill("candidate-perf-exit", trade_id="candidate-perf-trade", action="CLOSE_LONG", price=Decimal("105"), set_id="triggertrade-futures-candidate", set_version="v2-test", fee=Decimal("0.1")),),
     )
     accounting.record_closed_trade(result)
     accounting.record_closed_trade(candidate_result)
@@ -215,7 +215,7 @@ def test_dashboard_performance_uses_accounting_metrics_and_no_frontend_math(tmp_
     comparisons = DashboardReadModel(db).list_baseline_comparisons()
     html = render_dashboard(DashboardReadModel(db), initial_page="analytics")
 
-    active = next(row for row in rows if row.set_id == "triggertrade-core")
+    active = next(row for row in rows if row.set_id == "triggertrade-futures-core")
     assert active.closed_trades == 1
     assert active.net_pnl == "0.8"
     assert active.expectancy == "0.8"
@@ -224,7 +224,7 @@ def test_dashboard_performance_uses_accounting_metrics_and_no_frontend_math(tmp_
     assert comparisons[0].available is True
     assert "Baseline Comparison" in html
     assert "Direction mix C/B" in html
-    assert "triggertrade-core-candidate@v2-test" in html
+    assert "triggertrade-futures-candidate@v2-test" in html
     assert "no frontend financial calculations" in html
     assert "BYBIT_API_SECRET" not in html
 

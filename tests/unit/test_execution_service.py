@@ -114,9 +114,11 @@ def test_insufficient_available_quote_balance_blocks_submission(tmp_path):
         service.submit_approved_limit_order(intent=_intent(), risk_decision=_risk())
 
 
-def test_non_spot_category_blocked_by_config_loader():
-    with pytest.raises(Exception):
-        load_config({"TRIGGERTRADE_MARKET": "linear"})
+def test_non_spot_category_blocked_by_spot_execution_service(tmp_path):
+    service = _service(tmp_path, config=load_config({"TRIGGERTRADE_EXECUTION_VENUE": "bybit_demo", "TRIGGERTRADE_MARKET": "linear"}))
+
+    with pytest.raises(ExecutionError, match="spot"):
+        service.submit_approved_limit_order(intent=_intent(), risk_decision=_risk())
 
 
 def test_same_intent_cannot_create_two_submissions(tmp_path):

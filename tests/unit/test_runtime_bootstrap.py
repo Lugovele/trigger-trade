@@ -40,14 +40,14 @@ def test_empty_runtime_db_bootstraps_canonical_registries_without_fake_evidence(
     model = DashboardReadModel(db)
 
     assert result.db_path == db
-    assert result.rules_count == 5
-    assert result.trigger_sets_count == 2
+    assert result.rules_count == 9
+    assert result.trigger_sets_count == 4
     assert result.recommendations_count == 1
     assert {rule.rule_id for rule in model.list_rules()} >= {"TRG-001", "TRG-002", "CTX-REGIME"}
-    assert model.get_rule_detail("TRG-002", "0.1.0").rule["status"] == "TESTING"
+    assert model.get_rule_detail("TRG-002", "0.2.0").rule["status"] == "TESTING"
     assert model.get_rule_detail("CTX-REGIME", "0.1.0").rule["rule_type"] == "context"
     assert model.get_live_overview().rule_set == "v1"
-    assert model.get_live_overview().rules_count == 3
+    assert model.get_live_overview().rules_count == 4
     assert model.get_test_overview().rule_set == "v2-test"
     assert model.list_set_performance() == ()
     assert _counts(db)["lane_lifecycles"] == 0
@@ -64,7 +64,7 @@ def test_bootstrap_is_idempotent_across_repeated_startups(tmp_path):
     third = _counts(db)
 
     assert first == second == third
-    assert first == {"rules": 5, "sets": 2, "memberships": 7, "recommendations": 1, "lane_lifecycles": 0}
+    assert first == {"rules": 9, "sets": 4, "memberships": 16, "recommendations": 1, "lane_lifecycles": 0}
 
 
 def test_same_version_same_semantics_ok_and_different_semantics_fail_closed(tmp_path):
@@ -96,7 +96,8 @@ def test_legacy_runtime_history_survives_registry_bootstrap(tmp_path):
 
     assert RuntimeStore(db).get_lifecycle("BTCUSDT:1m:2026-09-05T12:00:00+00:00") is not None
     assert TriggerSetStore(db).get_active_set("BTCUSDT", "1m").version == "v1"
-    assert TriggerSetStore(db).get_set("triggertrade-core-candidate", "v2-test").status is TriggerSetStatus.TESTING
+    assert TriggerSetStore(db).get_set("triggertrade-core-candidate", "v2-test").status is TriggerSetStatus.ARCHIVE
+    assert TriggerSetStore(db).get_set("triggertrade-futures-candidate", "v2-test").status is TriggerSetStatus.TESTING
 
 
 def test_configured_bootstrap_uses_env_file_and_process_env_precedence(tmp_path):
@@ -138,11 +139,21 @@ def test_dashboard_startup_bootstraps_registry_before_read_only_render(tmp_path)
 
 def test_runtime_builder_bootstraps_same_configured_db_path(tmp_path):
     db = tmp_path / "runtime-builder.sqlite3"
-    runtime = build_runtime_from_env({"TRIGGERTRADE_RUNTIME_DB_PATH": str(db)})
+    runtime = build_runtime_from_env(
+        {
+            "TRIGGERTRADE_RUNTIME_DB_PATH": str(db),
+            "TRIGGERTRADE_MARKET": "linear",
+            "TRIGGERTRADE_CATEGORY": "linear",
+            "TRIGGERTRADE_EXECUTION_VENUE": "bybit_demo_futures",
+            "BYBIT_API_KEY": "unit-key",
+            "BYBIT_API_SECRET": "unit-secret",
+        }
+    )
 
     assert runtime._trigger_set_store.path == db
     assert TriggerSetStore(db).get_active_set("BTCUSDT", "1m").version == "v1"
-    assert TriggerSetStore(db).get_set("triggertrade-core-candidate", "v2-test") is not None
+    assert TriggerSetStore(db).get_active_set("BTCUSDT", "1m").set_id == "triggertrade-futures-core"
+    assert TriggerSetStore(db).get_set("triggertrade-futures-candidate", "v2-test") is not None
 
 def test_bootstrap_fails_closed_on_existing_candidate_set_semantic_mismatch(tmp_path):
     db = tmp_path / "runtime.sqlite3"

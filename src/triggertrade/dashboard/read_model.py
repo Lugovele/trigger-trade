@@ -1586,11 +1586,13 @@ def _trade_row(row: sqlite3.Row) -> PaperTradeRow:
 
 def _accounting_trade_facts(conn: sqlite3.Connection, set_id: str, version: str) -> tuple[TradePerformanceFact, ...]:
     try:
+        source_expr = "evidence_source" if _has_column(conn, "futures_closed_trades", "evidence_source") else "'exchange'"
         rows = conn.execute(
-            """
+            f"""
             SELECT trade_id, trigger_set_id, trigger_set_version, symbol, direction,
                    closed_at, net_pnl, gross_pnl, entry_fee, exit_fee, other_fees,
-                   funding, duration_seconds, regime_label
+                   funding, duration_seconds, regime_label,
+                   COALESCE({source_expr}, 'exchange') AS evidence_source
             FROM futures_closed_trades
             WHERE trigger_set_id = ? AND trigger_set_version = ?
             ORDER BY closed_at, trade_id
@@ -1615,6 +1617,7 @@ def _accounting_trade_facts(conn: sqlite3.Connection, set_id: str, version: str)
             funding=Decimal(row["funding"]),
             duration_seconds=int(row["duration_seconds"]),
             regime_label=row["regime_label"],
+            evidence_source=row["evidence_source"],
         )
         for row in rows
     )
@@ -1622,11 +1625,13 @@ def _accounting_trade_facts(conn: sqlite3.Connection, set_id: str, version: str)
 
 def _accounting_trade_facts_by_regime(conn: sqlite3.Connection, regime: str) -> tuple[TradePerformanceFact, ...]:
     try:
+        source_expr = "evidence_source" if _has_column(conn, "futures_closed_trades", "evidence_source") else "'exchange'"
         rows = conn.execute(
-            """
+            f"""
             SELECT trade_id, trigger_set_id, trigger_set_version, symbol, direction,
                    closed_at, net_pnl, gross_pnl, entry_fee, exit_fee, other_fees,
-                   funding, duration_seconds, regime_label
+                   funding, duration_seconds, regime_label,
+                   COALESCE({source_expr}, 'exchange') AS evidence_source
             FROM futures_closed_trades
             WHERE COALESCE(regime_label, 'unavailable') = ?
             ORDER BY closed_at, trade_id
@@ -1651,9 +1656,17 @@ def _accounting_trade_facts_by_regime(conn: sqlite3.Connection, regime: str) -> 
             funding=Decimal(row["funding"]),
             duration_seconds=int(row["duration_seconds"]),
             regime_label=row["regime_label"],
+            evidence_source=row["evidence_source"],
         )
         for row in rows
     )
+
+
+def _has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
+    try:
+        return column in {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    except sqlite3.Error:
+        return False
 
 
 def _regime_metric_values(facts: tuple[TradePerformanceFact, ...]) -> tuple[str, str, str]:

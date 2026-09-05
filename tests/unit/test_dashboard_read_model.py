@@ -420,7 +420,7 @@ def test_rule_detail_and_recommendations_read_model(tmp_path):
 
     assert detail is not None
     assert detail.rule["definition"]["logical_name"] == "TRG-VOLUME"
-    assert detail.versions[0]["version"] == "0.1.0"
+    assert {version["version"] for version in detail.versions} >= {"0.1.0", "0.2.0"}
     assert detail.used_in_sets[0]["set_id"] == "triggertrade-core-candidate"
     assert detail.recommendations[0]["recommendation_id"] == "REC-TRG-VOLUME-001"
 

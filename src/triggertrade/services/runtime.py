@@ -546,20 +546,22 @@ class RuntimeGapError(RuntimeError):
 
 
 def build_runtime_from_env(env: dict[str, str]):
-    from triggertrade.persistence import TriggerSetStore
-    from triggertrade.persistence import OperatorStateStore
-    from triggertrade.services.dual_lane_runtime import DualLaneRuntime
+    from triggertrade.config import load_bybit_credentials
+    from triggertrade.persistence import FuturesExecutionStore, OperatorStateStore, TriggerSetStore
+    from triggertrade.persistence.futures_accounting_store import FuturesAccountingStore
+    from triggertrade.services.futures_runtime import FuturesDualLaneRuntime
 
     runtime_env = dict(env)
-    runtime_env["TRIGGERTRADE_EXECUTION_VENUE"] = ExecutionVenue.LOCAL_PAPER.value
     config = load_config(runtime_env)
     db_path = runtime_db_path(config, runtime_env)
     ensure_runtime_registry_initialized(db_path)
-    market_client = BybitDemoClient(config=config.bybit)
-    return DualLaneRuntime(
+    credentials = load_bybit_credentials(runtime_env)
+    market_client = BybitDemoClient(config=config.bybit, credentials=credentials)
+    return FuturesDualLaneRuntime(
         config=config,
         market_client=market_client,
-        execution_store=ExecutionStore(db_path),
+        futures_execution_store=FuturesExecutionStore(db_path),
+        accounting_store=FuturesAccountingStore(db_path),
         trace_store=TraceStore(db_path),
         runtime_store=RuntimeStore(db_path),
         trigger_set_store=TriggerSetStore(db_path),
@@ -572,7 +574,7 @@ def main() -> int:
     try:
         build_runtime_from_env(env).run_forever()
     except ConfigError as exc:
-        print(f"paper runtime refused to start: {exc}")
+        print(f"futures runtime refused to start: {exc}")
         return 1
     return 0
 

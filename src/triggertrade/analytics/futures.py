@@ -21,6 +21,7 @@ class TradePerformanceFact:
     funding: Decimal
     duration_seconds: int
     regime_label: str | None = None
+    evidence_source: str = "exchange"
 
 
 @dataclass(frozen=True)
@@ -169,6 +170,16 @@ def compare_baseline(
     _validate_trade_membership(candidate_trades, set_id=candidate_set_id, version=candidate_version, label="candidate sample")
     if not baseline_trades or not candidate_trades:
         return BaselineComparison(baseline_set, candidate_set, None, False, "baseline or candidate sample unavailable")
+    baseline_sources = {trade.evidence_source for trade in baseline_trades}
+    candidate_sources = {trade.evidence_source for trade in candidate_trades}
+    if baseline_sources != candidate_sources:
+        return BaselineComparison(
+            baseline_set,
+            candidate_set,
+            None,
+            False,
+            "baseline and candidate evidence sources differ; comparison requires like-for-like accounting facts",
+        )
     overlap_start = max(min(trade.closed_at for trade in baseline_trades), min(trade.closed_at for trade in candidate_trades))
     overlap_end = min(max(trade.closed_at for trade in baseline_trades), max(trade.closed_at for trade in candidate_trades))
     if overlap_start > overlap_end:

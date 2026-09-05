@@ -53,7 +53,7 @@ def load_runtime_config(
 
 def runtime_db_path(config: AppConfig, env: Mapping[str, str] | None = None) -> Path:
     source = os.environ if env is None else env
-    return Path(source.get("TRIGGERTRADE_RUNTIME_DB_PATH", config.paper_runtime.db_path).strip())
+    return Path(source.get("TRIGGERTRADE_RUNTIME_DB_PATH", config.futures_runtime.db_path).strip())
 
 
 def ensure_runtime_registry_initialized(

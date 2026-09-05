@@ -30,12 +30,19 @@ def test_candidate_set_references_exact_volume_rule_version_without_active_mutat
     bootstrap_current_trigger_sets(store, created_at="2026-09-05T00:00:00+00:00")
 
     active = store.get_active_set("BTCUSDT", "1m")
-    candidate = store.get_set("triggertrade-core-candidate", "v2-test")
+    spot_candidate = store.get_set("triggertrade-core-candidate", "v2-test")
+    candidate = store.get_set("triggertrade-futures-candidate", "v2-test")
 
-    assert active.rule_versions == (("TRG-001", "0.1.0"), ("STR-001", "0.1.0"), ("RSK-PAPER-001", "0.1.0"))
+    assert active.rule_versions == (
+        ("TRG-001", "0.2.0"),
+        ("STR-FUT-001", "0.1.0"),
+        ("RSK-FUTURES-001", "0.1.0"),
+        ("CTX-REGIME", "0.1.0"),
+    )
     assert active.status is TriggerSetStatus.ACTIVE
+    assert spot_candidate.status is TriggerSetStatus.ARCHIVE
     assert candidate.status is TriggerSetStatus.TESTING
-    assert ("TRG-002", "0.1.0") in candidate.rule_versions
+    assert ("TRG-002", "0.2.0") in candidate.rule_versions
 
 
 
@@ -64,9 +71,12 @@ def test_bootstrap_adds_new_candidate_version_over_legacy_v1_test(tmp_path):
     bootstrap_current_trigger_sets(store, created_at="2026-09-06T00:00:00+00:00")
 
     legacy = store.get_set("triggertrade-core-candidate", "v1-test")
-    candidate = store.get_set("triggertrade-core-candidate", "v2-test")
+    spot_candidate = store.get_set("triggertrade-core-candidate", "v2-test")
+    candidate = store.get_set("triggertrade-futures-candidate", "v2-test")
     assert ("TRG-002", "0.1.0") not in legacy.rule_versions
-    assert ("TRG-002", "0.1.0") in candidate.rule_versions
+    assert ("TRG-002", "0.1.0") in spot_candidate.rule_versions
+    assert spot_candidate.status is TriggerSetStatus.ARCHIVE
+    assert ("TRG-002", "0.2.0") in candidate.rule_versions
     assert candidate.status is TriggerSetStatus.TESTING
 
 def test_recommendation_registry_separates_observation_hypothesis_and_experiment(tmp_path):

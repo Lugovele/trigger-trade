@@ -5,10 +5,13 @@ from __future__ import annotations
 from pathlib import Path
 import json
 import sqlite3
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from triggertrade.execution import RiskDecision, TradeIntent
 from triggertrade.triggers import Signal
+
+if TYPE_CHECKING:
+    from triggertrade.execution.futures import FuturesRiskDecision, FuturesTradeIntent
 
 
 class TraceStore:
@@ -75,6 +78,37 @@ class TraceStore:
                 ),
             )
 
+    def save_futures_strategy_decision(self, intent: FuturesTradeIntent, signal_ids: tuple[str, ...]) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO strategy_decisions (
+                    intent_id, strategy_rule_id, strategy_rule_version, symbol,
+                    side, signal_ids, trigger_ids, created_at,
+                    lane, trigger_set_id, trigger_set_version,
+                    regime_context_id, regime_rule_id, regime_rule_version,
+                    regime_state
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    intent.intent_id,
+                    intent.strategy_rule_id,
+                    intent.strategy_rule_version,
+                    intent.symbol,
+                    intent.action.value,
+                    json.dumps(signal_ids),
+                    json.dumps(tuple(signal.split("-", 1)[0].upper() for signal in signal_ids)),
+                    intent.created_at,
+                    intent.lane,
+                    intent.trigger_set_id,
+                    intent.trigger_set_version,
+                    intent.regime_context_id,
+                    intent.regime_rule_id,
+                    intent.regime_rule_version,
+                    intent.regime_state,
+                ),
+            )
+
     def save_risk_decision(self, decision: RiskDecision) -> None:
         with self._connect() as conn:
             conn.execute(
@@ -99,6 +133,39 @@ class TraceStore:
                     decision.lane,
                     decision.trigger_set_id,
                     decision.trigger_set_version,
+                ),
+            )
+
+    def save_futures_risk_decision(
+        self,
+        decision: FuturesRiskDecision,
+        *,
+        trigger_set_id: str | None = None,
+        trigger_set_version: str | None = None,
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO risk_decisions (
+                    risk_decision_id, intent_id, approved, checked_rule_ids,
+                    blocking_rule_ids, approved_notional, approved_quantity,
+                    rejection_reason, created_at, lane, trigger_set_id,
+                    trigger_set_version
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    decision.risk_decision_id,
+                    decision.intent_id,
+                    int(decision.approved),
+                    json.dumps(decision.checked_rule_ids),
+                    json.dumps(decision.blocking_rule_ids),
+                    None if decision.approved_notional is None else str(decision.approved_notional),
+                    None if decision.approved_quantity is None else str(decision.approved_quantity),
+                    decision.rejection_reason,
+                    decision.created_at,
+                    decision.lane,
+                    trigger_set_id,
+                    trigger_set_version,
                 ),
             )
 

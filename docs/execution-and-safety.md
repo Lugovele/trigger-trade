@@ -126,6 +126,13 @@ Before any futures order submission the execution boundary must validate:
 - net-edge evidence;
 - operator pause for new ACTIVE entries.
 
+The continuous futures runtime must not force the legacy `LOCAL_PAPER`
+execution venue. ACTIVE uses the futures execution service and Bybit Demo
+linear adapter; TEST uses the isolated local simulator and records
+`evidence_source=test_simulation`. Operator pause is enforced at the ACTIVE
+execution boundary before any new Bybit order submission, while reconciliation
+and TEST simulation remain allowed.
+
 Order lifecycle keeps the same safety shape as Spot: reserve before submit,
 stable client order id, no blind retry after timeout, `UNKNOWN` for ambiguous
 state, explicit reconciliation, and cancellation/recovery allowed while trading

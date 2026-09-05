@@ -96,6 +96,8 @@ class ClosedTradeResult:
     exit_slippage: SlippageMeasurement | None = None
     return_on_margin: Decimal | None = None
     return_on_equity: Decimal | None = None
+    evidence_source: str = "exchange"
+    simulation_model_version: str | None = None
 
 
 @dataclass(frozen=True)
@@ -224,6 +226,8 @@ def close_futures_trade(
         regime_label=entry_fills[0].regime_label,
         entry_slippage=measure_slippage(entry_fills),
         exit_slippage=measure_slippage(exit_fills),
+        evidence_source=_single_source(entry_fills + exit_fills),
+        simulation_model_version=None,
     )
 
 
@@ -340,6 +344,13 @@ def _single_contract_size(fills: tuple[FuturesFillEvent, ...]) -> Decimal:
     if size <= 0:
         raise AccountingError("contract size must be positive")
     return size
+
+
+def _single_source(fills: tuple[FuturesFillEvent, ...]) -> str:
+    sources = {fill.source for fill in fills}
+    if len(sources) != 1:
+        raise AccountingError("fills contain mixed evidence sources")
+    return sources.pop()
 
 
 def _validate_fee_assets(fills: tuple[FuturesFillEvent, ...], settlement_asset: str) -> None:

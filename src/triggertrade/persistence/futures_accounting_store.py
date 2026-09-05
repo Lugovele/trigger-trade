@@ -172,10 +172,14 @@ class FuturesAccountingStore:
                     trigger_set_version TEXT,
                     regime_label TEXT,
                     entry_slippage_cost TEXT,
-                    exit_slippage_cost TEXT
+                    exit_slippage_cost TEXT,
+                    evidence_source TEXT NOT NULL DEFAULT 'exchange',
+                    simulation_model_version TEXT
                 )
                 """
             )
+            _add_column_if_missing(conn, "futures_closed_trades", "evidence_source", "TEXT NOT NULL DEFAULT 'exchange'")
+            _add_column_if_missing(conn, "futures_closed_trades", "simulation_model_version", "TEXT")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS futures_equity_snapshots (
@@ -230,6 +234,8 @@ _CLOSED_TRADE_COLUMNS = (
     "regime_label",
     "entry_slippage_cost",
     "exit_slippage_cost",
+    "evidence_source",
+    "simulation_model_version",
 )
 _EQUITY_COLUMNS = tuple(asdict(EquitySnapshot("", "", "", Decimal("0"), Decimal("0"), Decimal("0"), Decimal("0"), Decimal("0"), Decimal("0"), Decimal("0"), Decimal("0"), Decimal("0"), Decimal("0"))).keys())
 
@@ -297,6 +303,8 @@ def _closed_trade_values(result: ClosedTradeResult) -> tuple[str | int | None, .
         result.regime_label,
         None if result.entry_slippage is None or result.entry_slippage.slippage_cost is None else str(result.entry_slippage.slippage_cost),
         None if result.exit_slippage is None or result.exit_slippage.slippage_cost is None else str(result.exit_slippage.slippage_cost),
+        result.evidence_source,
+        result.simulation_model_version,
     )
 
 
@@ -354,3 +362,9 @@ def _row_to_funding(row: sqlite3.Row) -> FuturesFundingEvent:
         asset=row["asset"],
         source=row["source"],
     )
+
+
+def _add_column_if_missing(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+    columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in columns:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")

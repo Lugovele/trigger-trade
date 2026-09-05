@@ -479,6 +479,22 @@ def bootstrap_current_trigger_sets(store: TriggerSetStore, *, created_at: str = 
         store.save_rule(rule)
     store.create_set(current_active_trigger_set(created_at=created_at))
     store.create_set(current_testing_trigger_set(created_at=created_at))
+    store.transition_status(
+        set_id="triggertrade-core",
+        version="v1",
+        status=TriggerSetStatus.ARCHIVE,
+        changed_at=created_at,
+        reason="archived by futures runtime migration; spot history remains readable",
+    )
+    store.transition_status(
+        set_id="triggertrade-core-candidate",
+        version="v2-test",
+        status=TriggerSetStatus.ARCHIVE,
+        changed_at=created_at,
+        reason="archived by futures runtime migration; spot test history remains readable",
+    )
+    store.create_set(current_futures_active_trigger_set(created_at=created_at))
+    store.create_set(current_futures_testing_trigger_set(created_at=created_at))
     store.save_recommendation(current_volume_recommendation(created_at=created_at))
 
 
@@ -495,6 +511,25 @@ def current_rule_definitions(*, created_at: str) -> tuple[RuleDefinition, ...]:
             definition={"lookback_window": "1m", "threshold_source": "TRIGGERTRADE_TRG_001_THRESHOLD_PCT", "boundary": "inclusive_lte"},
             created_at=created_at,
             provenance="implemented vertical slice d081274",
+        ),
+        RuleDefinition(
+            rule_id="TRG-001",
+            version="0.2.0",
+            name="Percentage price move",
+            status=RuleStatus.ACTIVE,
+            asset_scope="BTCUSDT linear perpetual",
+            rule_type=RuleType.TRIGGER,
+            condition="linear_perpetual_price_change_pct <= configured demo threshold pct",
+            definition={
+                "lookback_window": "1m",
+                "input_contract": "Bybit Demo category=linear BTCUSDT completed 1m close-to-close observation",
+                "threshold_source": "TRIGGERTRADE_TRG_001_THRESHOLD_PCT",
+                "boundary": "inclusive_lte",
+                "demo_only": "true",
+                "profitability_claim": "none",
+            },
+            created_at=created_at,
+            provenance="futures integration remediation; preserves TRG-001@0.1.0 spot semantics",
         ),
         RuleDefinition(
             rule_id="TRG-002",
@@ -521,6 +556,31 @@ def current_rule_definitions(*, created_at: str) -> tuple[RuleDefinition, ...]:
             provenance="candidate recommendation REC-TRG-VOLUME-001; not validated profitable production rule",
         ),
         RuleDefinition(
+            rule_id="TRG-002",
+            version="0.2.0",
+            name="Robust Volume Confirmation",
+            status=RuleStatus.TESTING,
+            asset_scope="BTCUSDT linear perpetual",
+            rule_type=RuleType.TRIGGER,
+            condition="linear relative_volume >= 2.0 AND volume_percentile >= 90",
+            definition={
+                "logical_name": "TRG-VOLUME",
+                "input_contract": "Bybit Demo category=linear BTCUSDT completed 1m candle volume",
+                "lookback_completed_candles": "60",
+                "volume_unit": "Bybit linear perpetual contract volume",
+                "median": "median of previous 60 completed candle volumes; even count uses average of sorted positions 30 and 31",
+                "relative_volume": "current_volume / median_volume_60",
+                "percentile_rank": "count(previous_volume <= current_volume) / 60 * 100; ties count as <=",
+                "boundary": "inclusive: relative_volume >= 2.0 and percentile_rank >= 90",
+                "missing_data": "NOT_CONFIRMED for fewer than 60 previous candles, missing current volume, or zero median",
+                "stale_data": "NOT_CONFIRMED for stale or incomplete current candle",
+                "candidate_only": "true",
+                "profitability_claim": "none",
+            },
+            created_at=created_at,
+            provenance="futures integration remediation; preserves TRG-002@0.1.0 spot semantics",
+        ),
+        RuleDefinition(
             rule_id="STR-001",
             version="0.1.0",
             name="BUY intent from TRG-001 candidate",
@@ -533,6 +593,26 @@ def current_rule_definitions(*, created_at: str) -> tuple[RuleDefinition, ...]:
             provenance="implemented vertical slice d081274",
         ),
         RuleDefinition(
+            rule_id="STR-FUT-001",
+            version="0.1.0",
+            name="Integration Directional Futures Strategy",
+            status=RuleStatus.ACTIVE,
+            asset_scope="BTCUSDT linear perpetual",
+            rule_type=RuleType.STRATEGY,
+            condition="OPEN_LONG only for FLAT + TRG-001 futures BUY_CANDIDATE + downtrend regime + explicit demo expected move",
+            definition={
+                "position_state_required": "FLAT",
+                "open_long_regimes": "DOWNTREND,STRONG_DOWNTREND",
+                "open_short": "not supported in runtime version 0.1.0",
+                "close_or_flip": "not supported in runtime version 0.1.0",
+                "expected_move_source": "TRIGGERTRADE_DEMO_EXPECTED_GROSS_MOVE; integration-only, not profitability evidence",
+                "no_action": "all other trigger/regime/position/expected-move cases",
+                "demo_only": "true",
+            },
+            created_at=created_at,
+            provenance="demo-only ACTIVE futures integration strategy; reduced OPEN_LONG-only semantics with no profitability claim",
+        ),
+        RuleDefinition(
             rule_id="RSK-PAPER-001",
             version="0.1.0",
             name="Paper risk profile RSK-001..RSK-005",
@@ -543,6 +623,18 @@ def current_rule_definitions(*, created_at: str) -> tuple[RuleDefinition, ...]:
             definition={"rules": "RSK-001,RSK-002,RSK-003,RSK-004,RSK-005"},
             created_at=created_at,
             provenance="implemented vertical slice d081274",
+        ),
+        RuleDefinition(
+            rule_id="RSK-FUTURES-001",
+            version="0.1.0",
+            name="Futures risk profile FRSK-001..FRSK-011",
+            status=RuleStatus.ACTIVE,
+            asset_scope="BTCUSDT linear perpetual",
+            rule_type=RuleType.RISK,
+            condition="demo linear futures gates: position/exposure/leverage/margin/duplicate/pause/net-edge/safety",
+            definition={"rules": "FRSK-001..FRSK-011", "demo_only": "true", "default_leverage": "1"},
+            created_at=created_at,
+            provenance="perpetual futures architecture and runtime integration",
         ),
         RuleDefinition(
             rule_id="CTX-REGIME",
@@ -605,6 +697,51 @@ def current_testing_trigger_set(*, created_at: str) -> TriggerSetVersion:
         config_snapshot={"threshold": "demo-config", "execution": "isolated_test_paper", "candidate_rule": "TRG-002@0.1.0"},
         created_at=created_at,
         provenance="REC-TRG-VOLUME-001 accepted for TESTING candidate evaluation; ACTIVE set unchanged",
+    )
+
+
+def current_futures_active_trigger_set(*, created_at: str) -> TriggerSetVersion:
+    return TriggerSetVersion(
+        set_id="triggertrade-futures-core",
+        version="v1",
+        purpose="Current active Bybit Demo linear futures runtime set",
+        status=TriggerSetStatus.ACTIVE,
+        symbol="BTCUSDT",
+        timeframe="1m",
+        rule_versions=(
+            ("TRG-001", "0.2.0"),
+            ("STR-FUT-001", "0.1.0"),
+            ("RSK-FUTURES-001", "0.1.0"),
+            ("CTX-REGIME", "0.1.0"),
+        ),
+        strategy_version="STR-FUT-001@0.1.0",
+        risk_profile_version="RSK-FUTURES-001@0.1.0",
+        config_snapshot={"market": "linear", "execution": "bybit_demo_futures", "demo_only": "true"},
+        created_at=created_at,
+        provenance="futures runtime integration remediation; old spot set archived",
+    )
+
+
+def current_futures_testing_trigger_set(*, created_at: str) -> TriggerSetVersion:
+    return TriggerSetVersion(
+        set_id="triggertrade-futures-candidate",
+        version="v2-test",
+        purpose="Forward-test futures baseline plus linear TRG-VOLUME confirmation",
+        status=TriggerSetStatus.TESTING,
+        symbol="BTCUSDT",
+        timeframe="1m",
+        rule_versions=(
+            ("TRG-001", "0.2.0"),
+            ("TRG-002", "0.2.0"),
+            ("STR-FUT-001", "0.1.0"),
+            ("RSK-FUTURES-001", "0.1.0"),
+            ("CTX-REGIME", "0.1.0"),
+        ),
+        strategy_version="STR-FUT-001@0.1.0",
+        risk_profile_version="RSK-FUTURES-001@0.1.0",
+        config_snapshot={"market": "linear", "execution": "local_test_simulation", "candidate_rule": "TRG-002@0.2.0", "demo_only": "true"},
+        created_at=created_at,
+        provenance="futures TEST simulator candidate set; no private Bybit calls",
     )
 
 

@@ -120,3 +120,34 @@ python -m triggertrade.services.regime_smoke
 
 The smoke uses Bybit Demo public linear candles only; it does not load private
 credentials or call order endpoints.
+
+## Continuous Futures Runtime
+
+`python -m triggertrade.services.runtime` now starts the continuous futures
+runtime, not the legacy Spot local-paper runner. It requires explicit safe
+configuration:
+
+- `TRIGGERTRADE_MARKET=linear`
+- `TRIGGERTRADE_CATEGORY=linear`
+- `TRIGGERTRADE_EXECUTION_VENUE=bybit_demo_futures`
+- `TRIGGERTRADE_ACTIVE_EXECUTION_VENUE=bybit_demo_futures`
+- `TRIGGERTRADE_TEST_EXECUTION_VENUE=local_test_simulation`
+- Bybit Demo credentials in local ignored `.env`
+
+The runtime consumes one canonical Bybit Demo `category=linear` completed 1m
+BTCUSDT candle stream for both lanes. ACTIVE creates `FuturesTradeIntent`
+records and may submit only through `FuturesExecutionService` plus
+`BybitFuturesExecutionAdapter` after approved futures risk and operator-pause
+checks. TEST uses an isolated deterministic simulator with
+`evidence_source=test_simulation`; it never calls Bybit private/order APIs.
+
+The first integrated futures strategy rule is `STR-FUT-001@0.1.0`. It is
+demo-only and OPEN_LONG-only for this integration unit. It requires a
+futures `TRG-001@0.2.0` BUY_CANDIDATE, downtrend regime context, FLAT position
+state, and an explicit demo expected gross move input. It does not implement
+OPEN_SHORT, closes, or flips yet.
+
+Analytics keeps exchange accounting facts and TEST simulation facts
+source-aware. Like-for-like baseline comparison is unavailable when evidence
+sources differ; the dashboard must label that honestly instead of treating
+simulated TEST results as equivalent to exchange fills.
