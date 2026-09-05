@@ -59,3 +59,21 @@ def test_visual_fixture_values_are_not_production_data(tmp_path):
     assert "99.98%" not in html
     assert VISUAL_TRIGGER_SETS[1]["status"] == "TESTING"
     assert "RSI threshold" in VISUAL_RULE_NAMES
+
+
+def test_dashboard_uses_one_shared_horizontal_container(tmp_path):
+    db = _empty_db(tmp_path)
+    html = render_dashboard(DashboardReadModel(db))
+
+    assert ':root{--bg:' in html
+    assert '--page-max:1440px' in html
+    assert '--page-pad:22px' in html
+    assert '.container{width:100%;max-width:var(--page-max);margin:0 auto;padding-inline:var(--page-pad)}' in html
+    assert 'class="container toolbar-inner"' in html
+    assert 'class="container tabsbar-inner"' in html
+    assert 'class="content container"' in html
+    assert 'padding:0 22px' not in html
+    assert 'padding:0 12px' not in html
+    assert 'padding:10px 22px 18px' not in html
+    assert 'padding:8px 10px 12px' not in html
+    assert ':root{--page-pad:12px}' in html
