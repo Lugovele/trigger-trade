@@ -134,3 +134,21 @@ is paused.
 No futures bootstrap or dashboard path may call transfer, withdrawal,
 cancel-all, close-all, leverage escalation, or mainnet endpoints. Emergency
 close semantics remain out of scope.
+
+## Futures Accounting Safety
+
+Futures accounting consumes explicit execution/fill/funding/equity facts and
+does not create orders. It must not infer actual fills from requested quantity
+or from a terminal order status unless the source is an explicit local paper
+simulation. Exchange-discovered fill and fee events require stable event ids so
+restart/reconciliation cannot duplicate financial facts.
+
+Closed-trade net P&L subtracts actual positive fee costs and adds signed actual
+funding impact. Actual slippage is recorded as diagnostic evidence relative to
+requested/reference price, but it is not subtracted again because gross P&L is
+already based on actual fill prices. If fee currency differs from settlement
+asset and no explicit conversion is available, accounting fails closed.
+
+Unrealized P&L records its valuation source. Missing or stale mark/valuation
+data is unavailable, not zero. Equity drawdown uses real persisted equity
+snapshots only; synthetic series are forbidden.

@@ -175,6 +175,40 @@ class FuturesTradeRow:
 
 
 @dataclass(frozen=True)
+class FuturesClosedTradeRow:
+    trade_id: str
+    closed_at: str
+    symbol: str
+    direction: str
+    quantity: str
+    leverage: str
+    entry_vwap: str
+    exit_vwap: str
+    gross_pnl: str
+    fees: str
+    funding: str
+    net_pnl: str
+    duration_seconds: int
+    trigger_set: str
+    regime: str
+
+
+@dataclass(frozen=True)
+class FuturesEquityRow:
+    observed_at: str
+    source: str
+    wallet_balance: str
+    equity: str
+    available_margin: str
+    used_margin: str
+    unrealized_pnl: str
+    realized_pnl: str
+    drawdown_absolute: str
+    drawdown_percent: str
+    max_drawdown: str
+
+
+@dataclass(frozen=True)
 class OperatorStateView:
     state: str
     changed_at: str
@@ -892,6 +926,75 @@ class DashboardReadModel:
             for row in rows
         )
 
+    def list_futures_closed_trades(self, limit: int = 20) -> tuple[FuturesClosedTradeRow, ...]:
+        if not self.db_path.exists():
+            return ()
+        try:
+            with self._connect() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT *
+                    FROM futures_closed_trades
+                    ORDER BY closed_at DESC
+                    LIMIT ?
+                    """,
+                    (limit,),
+                ).fetchall()
+        except sqlite3.Error:
+            return ()
+        return tuple(
+            FuturesClosedTradeRow(
+                trade_id=row["trade_id"],
+                closed_at=row["closed_at"],
+                symbol=row["symbol"],
+                direction=row["direction"],
+                quantity=row["quantity"],
+                leverage=row["leverage"],
+                entry_vwap=row["entry_vwap"],
+                exit_vwap=row["exit_vwap"],
+                gross_pnl=row["gross_pnl"],
+                fees=str(row["entry_fee"]) + " + " + str(row["exit_fee"]) + " + " + str(row["other_fees"]),
+                funding=row["funding"],
+                net_pnl=row["net_pnl"],
+                duration_seconds=int(row["duration_seconds"]),
+                trigger_set=_compact_set(row["trigger_set_id"], row["trigger_set_version"]),
+                regime=row["regime_label"] or "unavailable",
+            )
+            for row in rows
+        )
+
+    def get_latest_futures_equity(self) -> FuturesEquityRow | None:
+        if not self.db_path.exists():
+            return None
+        try:
+            with self._connect() as conn:
+                row = _fetch_optional(
+                    conn,
+                    """
+                    SELECT *
+                    FROM futures_equity_snapshots
+                    ORDER BY observed_at DESC, snapshot_id DESC
+                    LIMIT 1
+                    """,
+                )
+        except sqlite3.Error:
+            return None
+        if row is None:
+            return None
+        return FuturesEquityRow(
+            observed_at=row["observed_at"],
+            source=row["source"],
+            wallet_balance=row["wallet_balance"],
+            equity=row["equity"],
+            available_margin=row["available_margin"],
+            used_margin=row["used_margin"],
+            unrealized_pnl=row["unrealized_pnl"],
+            realized_pnl=row["realized_pnl"],
+            drawdown_absolute=row["drawdown_absolute"],
+            drawdown_percent=row["drawdown_percent"],
+            max_drawdown=row["max_drawdown"],
+        )
+
     def get_operator_trading_state(self) -> OperatorStateView:
         if not self.db_path.exists():
             return OperatorStateView("TRADING_ENABLED", "-", "system_default", "default: no persisted operator pause")
@@ -1171,6 +1274,16 @@ def _trade_row(row: sqlite3.Row) -> PaperTradeRow:
         risk_decision_id=row["risk_decision_id"],
         execution_id=row["exchange_order_id"] or row["client_order_id"],
     )
+
+
+def _compact_set(set_id: str | None, version: str | None) -> str:
+    if not set_id and not version:
+        return "unavailable"
+    if not set_id:
+        return str(version)
+    if not version:
+        return str(set_id)
+    return f"{set_id}@{version}"
 
 
 def _decision_from_trace(trace: TraceView | None) -> DecisionView:

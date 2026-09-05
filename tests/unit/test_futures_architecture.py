@@ -425,12 +425,15 @@ def test_bybit_linear_fetch_cancel_use_linear_category():
     client = BybitDemoClient(credentials=ApiCredentials("unit-key", "unit-signing-value"), transport=transport)
     client._get_linear_order_realtime("BTCUSDT", "ttf-safe")
     client._get_linear_order_history("BTCUSDT", "ttf-safe")
+    client._get_linear_executions("BTCUSDT", "ttf-safe")
     client._cancel_linear_order(symbol="BTCUSDT", order_link_id="ttf-safe")
 
-    queries = [parse_qs(urlparse(request.full_url).query) for request in seen[:2]]
+    queries = [parse_qs(urlparse(request.full_url).query) for request in seen[:3]]
     assert queries[0]["category"] == ["linear"]
     assert queries[1]["category"] == ["linear"]
-    assert json.loads(seen[2].data.decode("utf-8"))["category"] == "linear"
+    assert queries[2]["category"] == ["linear"]
+    assert "/v5/execution/list" in seen[2].full_url
+    assert json.loads(seen[3].data.decode("utf-8"))["category"] == "linear"
 
 
 def test_parse_linear_instrument_metadata():

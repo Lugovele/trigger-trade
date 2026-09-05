@@ -132,6 +132,8 @@ def render_dashboard(read_model: DashboardReadModel, selected_set: str = "", ini
     recommendations = getattr(read_model, "list_recommendations", lambda: ())()
     performance = getattr(read_model, "list_set_performance", lambda: ())()
     test_evidence = getattr(read_model, "list_test_set_evidence", lambda: ())()
+    futures_closed_trades = getattr(read_model, "list_futures_closed_trades", lambda: ())()
+    futures_equity = getattr(read_model, "get_latest_futures_equity", lambda: None)()
     live_trace = read_model.get_latest_lane_trace("ACTIVE")
     test_trace = read_model.get_latest_lane_trace("TEST")
     return _page(
@@ -156,7 +158,7 @@ def render_dashboard(read_model: DashboardReadModel, selected_set: str = "", ini
       {_overview_section("testOverview", test, test_trades, test_trace, False)}
     </section>
     <section class="page {_active_page(initial_page, 'rules')}" id="rules">{_trigger_sets_panel(trigger_sets)}{_rules_panel(rules)}</section>
-    <section class="page {_active_page(initial_page, 'analytics')}" id="analytics">{_test_evidence_panel(test_evidence)}{_futures_panel(futures_trades)}{_performance_panel(performance)}{_recommendations_panel(recommendations)}</section>
+    <section class="page {_active_page(initial_page, 'analytics')}" id="analytics">{_test_evidence_panel(test_evidence)}{_futures_accounting_panel(futures_equity, futures_closed_trades)}{_futures_panel(futures_trades)}{_performance_panel(performance)}{_recommendations_panel(recommendations)}</section>
     <section class="page {_active_page(initial_page, 'logs')}" id="logs"><div class="panel"><div class="activity">{_logs(logs)}</div></div></section>
     <section class="page {_active_page(initial_page, 'settings')}" id="settings">{_health_panel(health)}<div class="panel"><div class="panel-head"><div class="panel-title">Connection events</div></div><div class="activity">{_logs(logs[:5])}</div></div></section>
   </div>
@@ -409,6 +411,31 @@ def _futures_panel(rows) -> str:
         for row in rows
     ) or "<tr><td colspan='11' class='muted'>No futures execution records yet. Dashboard does not fabricate positions, P&amp;L, fees, or funding.</td></tr>"
     return f"<div class='panel'><div class='panel-head'><div><div class='panel-title'>Futures readiness</div><div class='panel-meta'>Read-only persisted Bybit Demo linear perpetual records; no dashboard order controls.</div></div></div><div class='table-wrap'><table><thead><tr><th>Time</th><th>Symbol</th><th>Category</th><th>Action</th><th>Side</th><th>Qty</th><th>Limit</th><th>Lev</th><th>Net edge</th><th>Status</th><th>Order</th></tr></thead><tbody>{body}</tbody></table></div></div>"
+
+
+def _futures_accounting_panel(equity, rows) -> str:
+    if equity is None:
+        equity_body = "<div class='muted'>No futures equity snapshot recorded yet.</div>"
+    else:
+        equity_body = (
+            "<div class='set-detail'>"
+            f"{_kv('Source', equity.source)}"
+            f"{_kv('Observed', _compact(equity.observed_at))}"
+            f"{_kv('Wallet', equity.wallet_balance)}"
+            f"{_kv('Equity', equity.equity)}"
+            f"{_kv('Available margin', equity.available_margin)}"
+            f"{_kv('Used margin', equity.used_margin)}"
+            f"{_kv('Unrealized P&L', equity.unrealized_pnl)}"
+            f"{_kv('Realized P&L', equity.realized_pnl)}"
+            f"{_kv('Drawdown', equity.drawdown_absolute + ' / ' + equity.drawdown_percent + '%')}"
+            f"{_kv('Max drawdown', equity.max_drawdown)}"
+            "</div>"
+        )
+    body = "".join(
+        f"<tr><td class='mono'>{_h(_short(row.trade_id))}</td><td>{_h(_compact(row.closed_at))}</td><td>{_h(row.symbol)}</td><td>{_h(row.direction)}</td><td>{_h(row.quantity)}</td><td>{_h(row.leverage)}x</td><td>{_h(row.entry_vwap)}</td><td>{_h(row.exit_vwap)}</td><td>{_h(row.gross_pnl)}</td><td>{_h(row.fees)}</td><td>{_h(row.funding)}</td><td>{_h(row.net_pnl)}</td><td>{_h(str(row.duration_seconds))}s</td><td>{_h(row.trigger_set)}</td><td>{_h(row.regime)}</td></tr>"
+        for row in rows
+    ) or "<tr><td colspan='15' class='muted'>No accounting-backed closed futures trades recorded yet.</td></tr>"
+    return f"<div class='panel'><div class='panel-head'><div><div class='panel-title'>Futures Accounting</div><div class='panel-meta'>Backend-computed P&amp;L, fees, funding, equity and drawdown; no frontend financial calculations.</div></div></div>{equity_body}<div class='table-wrap'><table><thead><tr><th>Trade</th><th>Closed</th><th>Symbol</th><th>Dir</th><th>Qty</th><th>Lev</th><th>Entry VWAP</th><th>Exit VWAP</th><th>Gross</th><th>Fees</th><th>Funding</th><th>Net</th><th>Duration</th><th>Set</th><th>Regime</th></tr></thead><tbody>{body}</tbody></table></div></div>"
 
 
 def _definition_panel(title: str, value) -> str:

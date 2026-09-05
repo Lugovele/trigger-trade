@@ -227,6 +227,27 @@ Market regime labels are reserved as versioned context values:
 `STRONG_DOWNTREND`, `DOWNTREND`, `SIDEWAYS`, `UPTREND`,
 `STRONG_UPTREND`. This document does not define the final formula.
 
+## Futures Accounting Conventions
+
+Accounting is not an alpha rule and does not change Trigger Set promotion on
+its own. It records deterministic financial facts so later analytics can
+compare Trigger Sets honestly.
+
+For Bybit Demo `BTCUSDT` USDT linear perpetuals, gross P&L uses actual entry
+and exit VWAP:
+
+```text
+LONG  = (exit_vwap - entry_vwap) * quantity * contract_size
+SHORT = (entry_vwap - exit_vwap) * quantity * contract_size
+```
+
+Fees are actual positive costs. Funding is an actual signed account impact:
+positive funding improves net P&L and negative funding reduces it. Slippage is
+diagnostic-only in closed-trade net P&L because actual fill prices already
+affect gross P&L. Unrealized P&L prefers mark price and records the valuation
+source. Return-on-margin and return-on-equity remain unsupported until their
+capital-base semantics are separately reviewed.
+
 ## TRG-002 Robust Volume Confirmation
 
 Canonical rule id: `TRG-002`. Logical/display name: `TRG-VOLUME` / `Robust Volume Confirmation`. Initial version: `0.1.0`. Status: `TESTING` candidate only.

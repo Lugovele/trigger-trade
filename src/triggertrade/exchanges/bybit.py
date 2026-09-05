@@ -42,11 +42,13 @@ class BybitDemoClient:
     _ORDER_CANCEL_PATH = "/v5/order/cancel"
     _ORDER_REALTIME_PATH = "/v5/order/realtime"
     _ORDER_HISTORY_PATH = "/v5/order/history"
+    _EXECUTION_LIST_PATH = "/v5/execution/list"
     _SIGNED_GET_ALLOWLIST = frozenset(
         {
             _WALLET_BALANCE_PATH,
             _ORDER_REALTIME_PATH,
             _ORDER_HISTORY_PATH,
+            _EXECUTION_LIST_PATH,
         }
     )
     _SIGNED_POST_ALLOWLIST = frozenset(
@@ -227,6 +229,17 @@ class BybitDemoClient:
         _validate_order_link_id(order_link_id)
         return self._private_get(
             self._ORDER_HISTORY_PATH,
+            {
+                "category": "linear",
+                "symbol": _linear_symbol(symbol),
+                "orderLinkId": order_link_id,
+            },
+        )
+
+    def _get_linear_executions(self, symbol: str, order_link_id: str) -> BybitResponse:
+        _validate_order_link_id(order_link_id)
+        return self._private_get(
+            self._EXECUTION_LIST_PATH,
             {
                 "category": "linear",
                 "symbol": _linear_symbol(symbol),

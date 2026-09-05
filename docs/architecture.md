@@ -250,3 +250,37 @@ expected gross price move
 If expected gross move or required cost/funding inputs are unsupported, trade
 eligibility fails closed. Dashboard views may display backend-provided futures
 fields, but they do not calculate P&L, net edge, risk, or place orders.
+
+## Futures Accounting
+
+Futures accounting is a separate backend layer between execution facts and
+analytics aggregation. Execution records exchange lifecycle events; accounting
+converts explicit fill, fee, funding, valuation and equity facts into
+deterministic financial records; analytics may aggregate those records in a
+later lifecycle unit.
+
+Accounting version `futures-accounting-v1` supports Bybit Demo `BTCUSDT`
+USDT linear perpetuals. Quantity is an absolute base/contract quantity and
+direction determines P&L sign. For linear USDT contracts:
+
+```text
+LONG gross P&L  = (exit_vwap - entry_vwap) * quantity * contract_size
+SHORT gross P&L = (entry_vwap - exit_vwap) * quantity * contract_size
+```
+
+For the current BTCUSDT linear contract, `contract_size` defaults to `1`
+unless exchange metadata provides a different Decimal value. VWAP is
+`sum(fill_qty * fill_price) / sum(fill_qty)` and fails closed for missing,
+zero, or mixed-symbol facts.
+
+Actual fees are stored as positive costs and subtracted from closed net P&L.
+Actual funding is stored separately as a signed account impact and added to
+net P&L. Estimated fees, funding, and slippage remain distinct from actual
+accounting facts. Because gross P&L uses actual fill prices, actual slippage is
+stored as diagnostic attribution and is not subtracted again in v1.
+
+Unrealized P&L uses a recorded valuation price, with mark price preferred for
+futures. Equity and drawdown are computed only from persisted real snapshots:
+running peak, current equity, absolute drawdown, drawdown percent, and maximum
+drawdown. Dashboard pages may only render accounting-backed persisted values;
+they must not recompute financial results in HTML or JavaScript.

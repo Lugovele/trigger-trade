@@ -37,12 +37,12 @@ The dashboard and continuous paper runtime resolve the same SQLite path from `.e
 
 On startup they call the shared canonical registry bootstrap before opening runtime/read services. Configured Rule Versions, Trigger Sets, and Recommendations are visible even before runtime evidence exists.
 
-The dashboard is intentionally read-only for trading logic after startup initialization. It does not evaluate triggers, create strategy decisions, approve risk, call execution services, place/cancel orders, or expose API credentials. The startup bootstrap stores only canonical registry metadata, not fake candles, trades, fills, P&L, or performance evidence. P&L, portfolio accounting, and alerts are intentionally deferred until backend semantics exist.
+The dashboard is intentionally read-only for trading logic after startup initialization. It does not evaluate triggers, create strategy decisions, approve risk, call execution services, place/cancel orders, or expose API credentials. The startup bootstrap stores only canonical registry metadata, not fake candles, trades, fills, P&L, or performance evidence. Futures P&L shown in the dashboard must come from the backend accounting store; alerts remain deferred.
 ## Trigger Sets and Lanes
 
 The runtime now bootstraps versioned trigger sets and evaluates the current ACTIVE set alongside TESTING sets over the same completed candle. ACTIVE remains the only lane connected to paper execution. TEST lanes are persisted for comparison and dashboard visibility only; they do not submit Bybit orders or change trading configuration.
 
-Dashboard views show ACTIVE/TEST lane summaries, trigger set versions, rule registry details, runtime logs, and local-only read models. The interface intentionally keeps promotion, rule editing, P&L, and portfolio accounting deferred.
+Dashboard views show ACTIVE/TEST lane summaries, trigger set versions, rule registry details, runtime logs, and local-only read models. The interface intentionally keeps promotion and rule editing out of the UI. Financial values are displayed only when persisted by backend accounting.
 
 ## Rule Analytics and Recommendations
 
@@ -50,7 +50,7 @@ Rules now have a logical identity and immutable versions. Trigger Set membership
 
 The first candidate analytics experiment is `TRG-002@0.1.0`, display name `Robust Volume Confirmation`, logical name `TRG-VOLUME`. It is TESTING only and uses candidate/demo parameters: previous 60 completed BTCUSDT spot candles, median base volume baseline, `relative_volume >= 2.0`, and empirical percentile rank `count(previous_volume <= current_volume) / 60 * 100 >= 90`. These parameters are not validated production trading edge.
 
-The local dashboard adds read-only Rule Detail pages under `/rules/<rule_id>/<version>` and an Analytics tab with set-level supported counts plus Recommendation Registry entries. Analytics never promotes a set, mutates rules, calls execution, or fabricates unsupported P&L/win-rate/return/drawdown metrics.
+The local dashboard adds read-only Rule Detail pages under `/rules/<rule_id>/<version>` and an Analytics tab with set-level supported counts plus Recommendation Registry entries. Analytics never promotes a set, mutates rules, calls execution, or fabricates unsupported win-rate/return metrics. P&L, equity, fees, funding and drawdown are shown only from deterministic backend accounting records.
 
 ## Intraday Governance
 
@@ -87,6 +87,13 @@ is `1x`; leverage is treated as a risk parameter, not a profit lever.
 
 Futures risk includes Decimal-based margin, leverage, cost, funding, duplicate,
 operator-pause, and net-edge gates. If expected move or cost evidence is
-missing, the futures net-edge gate fails closed. Dashboard futures rows are
-read-only projections from persistence; P&L/performance accounting remains
-deferred until backend accounting semantics exist.
+missing, the futures net-edge gate fails closed.
+
+Deterministic futures accounting lives behind the backend accounting boundary
+with `futures-accounting-v1`. Closed-trade gross P&L for Bybit Demo
+`BTCUSDT` linear perpetuals is `LONG = (exit - entry) * quantity` and
+`SHORT = (entry - exit) * quantity`, with exchange contract size applied if
+metadata provides a non-1 value. Fees are positive costs, actual funding is a
+signed account impact, and slippage is diagnostic because actual fill prices
+already determine gross P&L. Dashboard futures rows are read-only projections
+from persistence.

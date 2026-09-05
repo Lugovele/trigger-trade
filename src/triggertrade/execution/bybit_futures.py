@@ -45,6 +45,10 @@ class BybitFuturesExecutionAdapter:
     def cancel_order(self, *, symbol: str, client_order_id: str) -> BybitResponse:
         return self._client._cancel_linear_order(symbol=symbol, order_link_id=client_order_id)
 
+    def fetch_executions(self, *, symbol: str, client_order_id: str) -> tuple[dict[str, Any], ...]:
+        rows = self._client._get_linear_executions(symbol, client_order_id).result.get("list") or []
+        return tuple(dict(row) for row in rows)
+
     def reconcile_order(self, *, symbol: str, client_order_id: str) -> dict[str, Any] | None:
         return self.fetch_order(symbol=symbol, client_order_id=client_order_id) or self.fetch_order_history(
             symbol=symbol,
