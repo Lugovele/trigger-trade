@@ -7,8 +7,6 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
-import os
-import sys
 import time
 from typing import Callable
 
@@ -33,6 +31,7 @@ from triggertrade.persistence import (
     TraceStore,
 )
 from triggertrade.risk import RiskManager
+from triggertrade.services.bootstrap import ensure_runtime_registry_initialized, merged_runtime_env, runtime_db_path
 from triggertrade.strategies import BuyCandidateStrategy
 from triggertrade.triggers import PercentagePriceMoveTrigger, SignalType
 
@@ -546,19 +545,6 @@ class RuntimeGapError(RuntimeError):
     pass
 
 
-def load_env_file(path: Path) -> dict[str, str]:
-    values: dict[str, str] = {}
-    if not path.exists():
-        return values
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        values[key.strip()] = value.strip()
-    return values
-
-
 def build_runtime_from_env(env: dict[str, str]):
     from triggertrade.persistence import TriggerSetStore
     from triggertrade.services.dual_lane_runtime import DualLaneRuntime
@@ -566,7 +552,8 @@ def build_runtime_from_env(env: dict[str, str]):
     runtime_env = dict(env)
     runtime_env["TRIGGERTRADE_EXECUTION_VENUE"] = ExecutionVenue.LOCAL_PAPER.value
     config = load_config(runtime_env)
-    db_path = Path(config.paper_runtime.db_path)
+    db_path = runtime_db_path(config, runtime_env)
+    ensure_runtime_registry_initialized(db_path)
     market_client = BybitDemoClient(config=config.bybit)
     return DualLaneRuntime(
         config=config,
@@ -579,8 +566,7 @@ def build_runtime_from_env(env: dict[str, str]):
 
 
 def main() -> int:
-    env = dict(os.environ)
-    env.update(load_env_file(Path(".env")))
+    env = merged_runtime_env()
     try:
         build_runtime_from_env(env).run_forever()
     except ConfigError as exc:

@@ -5,7 +5,7 @@ reasoning_effort = "high"
 description = "Read-only pre-commit reviewer for TriggerTrade changes."
 
 instructions = '''
-For analytics/recommendation changes, also inspect silent rule-version mutation, fake analytics metrics, unsupported profitability or causality claims, unsafe recommendation status transitions, route escaping, read-only dashboard boundaries, and legacy DB compatibility.
+For analytics/recommendation changes, also inspect silent rule-version mutation, fake analytics metrics, unsupported profitability or causality claims, unsafe recommendation status transitions, route escaping, read-only dashboard boundaries, shared registry bootstrap idempotency, dashboard/runtime DB path consistency, immutable semantic mismatch handling, and legacy DB compatibility.
 
 Project: TriggerTrade.
 
@@ -63,5 +63,5 @@ Status must be exactly one of:
 - CHANGES_REQUIRED
 - BLOCKED
 
-For analytics/recommendation changes, also inspect silent rule-version mutation, fake analytics metrics, unsupported profitability or causality claims, unsafe recommendation status transitions, route escaping, read-only dashboard boundaries, and legacy DB compatibility.
+For analytics/recommendation changes, also inspect silent rule-version mutation, fake analytics metrics, unsupported profitability or causality claims, unsafe recommendation status transitions, route escaping, read-only dashboard boundaries, shared registry bootstrap idempotency, dashboard/runtime DB path consistency, immutable semantic mismatch handling, and legacy DB compatibility.
 '''

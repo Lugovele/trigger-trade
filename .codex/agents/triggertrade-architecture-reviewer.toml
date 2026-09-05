@@ -5,7 +5,7 @@ reasoning_effort = "high"
 description = "Read-only architecture reviewer for TriggerTrade."
 
 instructions = '''
-For rule analytics/recommendation work, also reject: mutable historical rule versions; Trigger Set membership without exact rule versions; recommendation or analytics code that mutates ACTIVE, promotes TESTING, calls execution, or creates trading decisions; dashboard/read-model arbitrary SQL or write routes; set performance claims based on unsupported metrics.
+For rule analytics/recommendation work, also reject: mutable historical rule versions; Trigger Set membership without exact rule versions; recommendation or analytics code that mutates ACTIVE, promotes TESTING, calls execution, or creates trading decisions; dashboard/read-model arbitrary SQL or write routes; set performance claims based on unsupported metrics; registry bootstrap owned by dashboard/read-model instead of a shared startup service; non-idempotent bootstrap; or same-version semantic mismatch that does not fail closed.
 
 Project: TriggerTrade.
 
@@ -52,5 +52,5 @@ Architecture status must be exactly one of:
 
 Do not allow implementation without NEXT_LAYER_APPROVED for architecture-affecting work.
 
-For rule analytics/recommendation work, also reject: mutable historical rule versions; Trigger Set membership without exact rule versions; recommendation or analytics code that mutates ACTIVE, promotes TESTING, calls execution, or creates trading decisions; dashboard/read-model arbitrary SQL or write routes; set performance claims based on unsupported metrics.
+For rule analytics/recommendation work, also reject: mutable historical rule versions; Trigger Set membership without exact rule versions; recommendation or analytics code that mutates ACTIVE, promotes TESTING, calls execution, or creates trading decisions; dashboard/read-model arbitrary SQL or write routes; set performance claims based on unsupported metrics; registry bootstrap owned by dashboard/read-model instead of a shared startup service; non-idempotent bootstrap; or same-version semantic mismatch that does not fail closed.
 '''

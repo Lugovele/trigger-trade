@@ -196,6 +196,9 @@ def _runtime(
     }
     config = load_config(env)
     db_path = path or (tmp_path / "dual.sqlite3")
+    trigger_set_store = trigger_sets or TriggerSetStore(db_path)
+    if trigger_sets is None:
+        bootstrap_current_trigger_sets(trigger_set_store)
     if test_adapter_factory is None:
         def test_adapter_factory():
             adapter = PaperExecutionAdapter(clock_ms=lambda: 456)
@@ -208,7 +211,7 @@ def _runtime(
         execution_store=ExecutionStore(db_path),
         trace_store=TraceStore(db_path),
         runtime_store=RuntimeStore(db_path),
-        trigger_set_store=trigger_sets or TriggerSetStore(db_path),
+        trigger_set_store=trigger_set_store,
         active_adapter=active_adapter or PaperExecutionAdapter(clock_ms=lambda: 123),
         test_adapter_factory=test_adapter_factory,
         clock=clock or (lambda: datetime(2026, 9, 5, 12, 2, 30, tzinfo=UTC)),

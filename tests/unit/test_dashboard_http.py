@@ -176,7 +176,7 @@ def test_analytics_and_rule_detail_routes_render(tmp_path):
         assert "Analytics" in html
         assert "Performance" in html
         assert "Recommendations" in html
-        assert "P&amp;L, win rate, return and drawdown unavailable" in html
+        assert "No set-level runtime evidence recorded yet." in html
 
         conn.request("GET", "/rules/TRG-002/0.1.0")
         detail = conn.getresponse().read().decode("utf-8")
@@ -223,6 +223,46 @@ def test_dashboard_new_routes_are_read_only_and_safe_for_missing_ids(tmp_path):
         body = response.read().decode("utf-8")
         assert response.status == 404
         assert "Traceback" not in body
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+def test_dashboard_rules_and_analytics_alias_routes_render_bootstrapped_registry(tmp_path):
+    from http.client import HTTPConnection
+    from triggertrade.dashboard.__main__ import create_server_from_env
+
+    db = tmp_path / "dashboard.sqlite3"
+    server, initialized_db = create_server_from_env(
+        {"TRIGGERTRADE_RUNTIME_DB_PATH": str(db), "TRIGGERTRADE_DASHBOARD_PORT": "0"},
+        env_file=tmp_path / "missing.env",
+    )
+    assert initialized_db == db
+    host, port = server.server_address
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection(host, port, timeout=2)
+        conn.request("GET", "/rules")
+        rules = conn.getresponse()
+        rules_html = rules.read().decode("utf-8")
+        assert rules.status == 200
+        assert '<button class="tabbtn active" data-page="rules">Rules</button>' in rules_html
+        assert '<section class="page active" id="rules">' in rules_html
+        assert '<section class="page active" id="overview">' not in rules_html
+        assert "TRG-001" in rules_html
+        assert "TRG-002" in rules_html
+        assert "triggertrade-core-candidate" in rules_html
+
+        conn.request("GET", "/analytics")
+        analytics = conn.getresponse()
+        analytics_html = analytics.read().decode("utf-8")
+        assert analytics.status == 200
+        assert '<button class="tabbtn active" data-page="analytics">Analytics</button>' in analytics_html
+        assert '<section class="page active" id="analytics">' in analytics_html
+        assert '<section class="page active" id="overview">' not in analytics_html
+        assert "REC-TRG-VOLUME-001" in analytics_html
+        assert "No set-level runtime evidence recorded yet." in analytics_html
     finally:
         server.shutdown()
         server.server_close()

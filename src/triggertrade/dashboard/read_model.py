@@ -733,20 +733,38 @@ class DashboardReadModel:
                         (trigger_set.set_id, trigger_set.version),
                     )
                 except sqlite3.Error:
-                    counts = None
+                    try:
+                        counts = _fetch_optional(
+                            conn,
+                            """
+                            SELECT COUNT(*) AS candles,
+                                   0 AS signals,
+                                   SUM(CASE WHEN intent_id IS NOT NULL THEN 1 ELSE 0 END) AS intents,
+                                   SUM(CASE WHEN status = 'test_recorded' THEN 1 ELSE 0 END) AS test_executions,
+                                   MIN(candle_open_time) AS start_time,
+                                   MAX(candle_open_time) AS end_time
+                            FROM runtime_lane_lifecycles
+                            WHERE trigger_set_id = ? AND trigger_set_version = ?
+                            """,
+                            (trigger_set.set_id, trigger_set.version),
+                        )
+                    except sqlite3.Error:
+                        counts = None
                 period = "unavailable"
                 if counts is not None and counts["start_time"] and counts["end_time"]:
                     period = f"{counts['start_time']} -> {counts['end_time']}"
+                if counts is None or int(counts["candles"] or 0) == 0:
+                    continue
                 rows.append(
                     PerformanceRow(
                         set_id=trigger_set.set_id,
                         version=trigger_set.version,
                         status=trigger_set.status,
                         period=period,
-                        candles_processed=0 if counts is None else int(counts["candles"] or 0),
-                        signals=0 if counts is None else int(counts["signals"] or 0),
-                        candidate_intents=0 if counts is None else int(counts["intents"] or 0),
-                        test_executions=0 if counts is None else int(counts["test_executions"] or 0),
+                        candles_processed=int(counts["candles"] or 0),
+                        signals=int(counts["signals"] or 0),
+                        candidate_intents=int(counts["intents"] or 0),
+                        test_executions=int(counts["test_executions"] or 0),
                         unavailable_metrics="P&L, win rate, return and drawdown unavailable: no accounting semantics yet",
                     )
                 )

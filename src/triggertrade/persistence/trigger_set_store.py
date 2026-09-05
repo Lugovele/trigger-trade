@@ -477,15 +477,9 @@ class TriggerSetStore:
 def bootstrap_current_trigger_sets(store: TriggerSetStore, *, created_at: str = "2026-09-05T00:00:00+00:00") -> None:
     for rule in current_rule_definitions(created_at=created_at):
         store.save_rule(rule)
-    active = current_active_trigger_set(created_at=created_at)
-    if store.get_set(active.set_id, active.version) is None:
-        store.create_set(active)
-    testing = current_testing_trigger_set(created_at=created_at)
-    if store.get_set(testing.set_id, testing.version) is None:
-        store.create_set(testing)
-    recommendation = current_volume_recommendation(created_at=created_at)
-    if store.get_recommendation(recommendation.recommendation_id) is None:
-        store.save_recommendation(recommendation)
+    store.create_set(current_active_trigger_set(created_at=created_at))
+    store.create_set(current_testing_trigger_set(created_at=created_at))
+    store.save_recommendation(current_volume_recommendation(created_at=created_at))
 
 
 def current_rule_definitions(*, created_at: str) -> tuple[RuleDefinition, ...]:

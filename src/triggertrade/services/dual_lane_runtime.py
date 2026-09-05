@@ -20,7 +20,6 @@ from triggertrade.persistence import (
     RuntimeStore,
     TraceStore,
     TriggerSetStore,
-    bootstrap_current_trigger_sets,
 )
 from triggertrade.risk import RiskManager
 from triggertrade.services.runtime import (
@@ -73,7 +72,6 @@ class DualLaneRuntime:
 
     def process_once(self) -> DualLaneResult:
         self._validate_safe_config()
-        bootstrap_current_trigger_sets(self._trigger_set_store)
         try:
             instrument = parse_spot_instrument(
                 self._market_client.instrument_metadata(self._config.paper_runtime.symbol).result

@@ -10,8 +10,8 @@ import os
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
-from triggertrade.config import load_config
 from triggertrade.dashboard.read_model import DashboardReadModel
+from triggertrade.services.bootstrap import ensure_runtime_registry_for_env, merged_runtime_env, runtime_db_path
 
 
 DEFAULT_HOST = "127.0.0.1"
@@ -29,9 +29,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
-        if parsed.path == "/":
+        if parsed.path in {"/", "/rules", "/analytics"}:
             selected_set = parse_qs(parsed.query).get("set", [""])[0]
-            self._send_html(render_dashboard(self.server.read_model, selected_set))
+            initial_page = parsed.path.strip("/") or "overview"
+            self._send_html(render_dashboard(self.server.read_model, selected_set, initial_page))
             return
         if parsed.path.startswith("/set/"):
             self._send_html(render_dashboard(self.server.read_model, unquote(parsed.path.removeprefix("/set/"))))
@@ -83,7 +84,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
 
-def render_dashboard(read_model: DashboardReadModel, selected_set: str = "") -> str:
+def render_dashboard(read_model: DashboardReadModel, selected_set: str = "", initial_page: str = "overview") -> str:
+    if initial_page not in {"overview", "rules", "analytics", "logs", "settings"}:
+        initial_page = "overview"
     live = read_model.get_live_overview()
     test = read_model.get_test_overview()
     trigger_sets = read_model.list_trigger_sets()
@@ -109,17 +112,17 @@ def render_dashboard(read_model: DashboardReadModel, selected_set: str = "") -> 
       <button class="utility-btn" onclick="copyData()">Copy</button>
     </div>
   </div></div>
-  <div class="tabsbar"><div class="container tabsbar-inner"><div class="tabs"><button class="tabbtn active" data-page="overview">Overview</button><button class="tabbtn" data-page="rules">Rules</button><button class="tabbtn" data-page="analytics">Analytics</button></div></div></div>
+  <div class="tabsbar"><div class="container tabsbar-inner"><div class="tabs"><button class="tabbtn {_active_tab(initial_page, 'overview')}" data-page="overview">Overview</button><button class="tabbtn {_active_tab(initial_page, 'rules')}" data-page="rules">Rules</button><button class="tabbtn {_active_tab(initial_page, 'analytics')}" data-page="analytics">Analytics</button></div></div></div>
   <div class="content container">
-    <section class="page active" id="overview">
-      <div style="display:flex;justify-content:flex-end;margin-bottom:8px"><div class="env-switch" id="envSwitch"><button id="liveBtn" class="active live" onclick="setEnv('live')">LIVE</button><button id="testBtn" onclick="setEnv('test')">TEST</button></div></div>
+    <section class="page {_active_page(initial_page, 'overview')}" id="overview">
+      <div style="display:flex;justify-content:flex-end;margin-bottom:8px"><div class="env-switch" id="envSwitch"{_env_switch_style(initial_page)}><button id="liveBtn" class="active live" onclick="setEnv('live')">LIVE</button><button id="testBtn" onclick="setEnv('test')">TEST</button></div></div>
       {_overview_section("liveOverview", live, live_trades, live_trace, True)}
       {_overview_section("testOverview", test, test_trades, test_trace, False)}
     </section>
-    <section class="page" id="rules">{_trigger_sets_panel(trigger_sets)}{_rules_panel(rules)}</section>
-    <section class="page" id="analytics">{_performance_panel(performance)}{_recommendations_panel(recommendations)}</section>
-    <section class="page" id="logs"><div class="panel"><div class="activity">{_logs(logs)}</div></div></section>
-    <section class="page" id="settings">{_health_panel(health)}<div class="panel"><div class="panel-head"><div class="panel-title">Connection events</div></div><div class="activity">{_logs(logs[:5])}</div></div></section>
+    <section class="page {_active_page(initial_page, 'rules')}" id="rules">{_trigger_sets_panel(trigger_sets)}{_rules_panel(rules)}</section>
+    <section class="page {_active_page(initial_page, 'analytics')}" id="analytics">{_performance_panel(performance)}{_recommendations_panel(recommendations)}</section>
+    <section class="page {_active_page(initial_page, 'logs')}" id="logs"><div class="panel"><div class="activity">{_logs(logs)}</div></div></section>
+    <section class="page {_active_page(initial_page, 'settings')}" id="settings">{_health_panel(health)}<div class="panel"><div class="panel-head"><div class="panel-title">Connection events</div></div><div class="activity">{_logs(logs[:5])}</div></div></section>
   </div>
 </main>
 </div>
@@ -144,14 +147,24 @@ def create_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, db_path: s
     return DashboardServer((host, port), DashboardHandler, read_model=DashboardReadModel(db_path))
 
 
-def main() -> int:
-    env = dict(os.environ)
-    config = load_config(env)
+def create_server_from_env(
+    process_env: dict[str, str] | None = None,
+    *,
+    env_file: str | Path = ".env",
+) -> tuple[DashboardServer, Path]:
+    env = merged_runtime_env(os.environ if process_env is None else process_env, env_file=env_file)
+    config, bootstrap = ensure_runtime_registry_for_env(env)
     host = env.get("TRIGGERTRADE_DASHBOARD_HOST", DEFAULT_HOST)
     port = int(env.get("TRIGGERTRADE_DASHBOARD_PORT", str(DEFAULT_PORT)))
-    db_path = env.get("TRIGGERTRADE_RUNTIME_DB_PATH", config.paper_runtime.db_path)
-    server = create_server(host=host, port=port, db_path=db_path)
+    db_path = runtime_db_path(config, env)
+    return create_server(host=host, port=port, db_path=db_path), bootstrap.db_path
+
+
+def main() -> int:
+    server, db_path = create_server_from_env(os.environ)
+    host, port = server.server_address
     print(f"TriggerTrade dashboard: http://{host}:{port}/")
+    print(f"TriggerTrade registry DB: {db_path}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -160,6 +173,16 @@ def main() -> int:
         server.server_close()
     return 0
 
+def _active_page(current: str, expected: str) -> str:
+    return "active" if current == expected else ""
+
+
+def _active_tab(current: str, expected: str) -> str:
+    return "active" if current == expected else ""
+
+
+def _env_switch_style(current: str) -> str:
+    return "" if current == "overview" else " style=\"display:none\""
 
 def _overview_section(element_id, overview, trades, trace, is_live: bool) -> str:
     style = "" if is_live else ' style="display:none"'

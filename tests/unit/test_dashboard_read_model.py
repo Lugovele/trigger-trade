@@ -449,8 +449,25 @@ def test_set_performance_uses_supported_counts_only(tmp_path):
     db = tmp_path / "read_model.sqlite3"
     bootstrap_current_trigger_sets(TriggerSetStore(db), created_at="2026-09-05T00:00:00+00:00")
 
+    assert DashboardReadModel(db).list_set_performance() == ()
+
+    RuntimeStore(db).save_lane_lifecycle(
+        LaneCandleLifecycle(
+            lane="ACTIVE",
+            symbol="BTCUSDT",
+            timeframe="1m",
+            candle_id="BTCUSDT:1m:2026-09-05T12:10:00+00:00",
+            candle_open_time="2026-09-05T12:10:00+00:00",
+            trigger_set_id="triggertrade-core",
+            trigger_set_version="v1",
+            status="no_signal",
+            processed_at="2026-09-05T12:11:00+00:00",
+        )
+    )
+
     rows = DashboardReadModel(db).list_set_performance()
 
-    assert rows
-    assert all("P&L" in row.unavailable_metrics for row in rows)
-    assert all(row.candles_processed == 0 for row in rows)
+    assert len(rows) == 1
+    assert rows[0].set_id == "triggertrade-core"
+    assert rows[0].candles_processed == 1
+    assert "P&L" in rows[0].unavailable_metrics

@@ -129,3 +129,8 @@ The reviewer should verify that lane-specific idempotency keys include `lane`, `
 Analytics/recommendation changes require architecture review for rule-version immutability, recommendation boundaries, no automatic promotion, no execution shortcuts, and dashboard read-only behavior. Changes introducing or changing trigger semantics require trading-rules review for exact inputs, units, operators, boundary behavior, stale/missing behavior, and TEST/ACTIVE status.
 
 Recommendations must keep Observation, Hypothesis, and Recommended Experiment separate. Review evidence must not claim unsupported causality or fabricate P&L, win-rate, return, drawdown, or expectancy metrics when backend accounting semantics do not exist.
+
+
+## Registry Bootstrap Changes
+
+Changes to production registry initialization require architecture review. Reviewers should verify a single shared bootstrap path, consistent runtime/dashboard DB resolution, idempotency across repeated startup, safe additive legacy migration, no dashboard-owned business initialization, and fail-closed behavior for same-version semantic mismatch. Bootstrap evidence must distinguish configured registry entities from runtime evidence; tests must not populate fake candles, trades, fills, P&L, or recommendations to make the dashboard look active.

@@ -33,17 +33,11 @@ python -m triggertrade.dashboard
 
 Default URL: `http://127.0.0.1:8765/`.
 
-The dashboard reads the continuous paper runtime SQLite state from
-`runtime/triggertrade_paper.sqlite3` unless `TRIGGERTRADE_RUNTIME_DB_PATH` is
-set. It shows runtime checkpoint state, latest decision, recent candle
-lifecycles, paper trades/fills, and the full trace from candle to trigger,
-strategy, risk, and execution records.
+The dashboard and continuous paper runtime resolve the same SQLite path from `.env` plus process environment, with process environment taking precedence. The default is `runtime/triggertrade_paper.sqlite3` unless `TRIGGERTRADE_RUNTIME_DB_PATH` is set.
 
-The dashboard is intentionally read-only. It does not evaluate triggers, create
-strategy decisions, approve risk, call execution services, place/cancel orders,
-read `.env`, or expose API credentials. P&L, portfolio accounting, alerts, and
-operator controls are intentionally deferred until backend semantics exist.
+On startup they call the shared canonical registry bootstrap before opening runtime/read services. Configured Rule Versions, Trigger Sets, and Recommendations are visible even before runtime evidence exists.
 
+The dashboard is intentionally read-only after startup initialization. It does not evaluate triggers, create strategy decisions, approve risk, call execution services, place/cancel orders, or expose API credentials. The startup bootstrap stores only canonical registry metadata, not fake candles, trades, fills, P&L, or performance evidence. P&L, portfolio accounting, alerts, and operator controls are intentionally deferred until backend semantics exist.
 ## Trigger Sets and Lanes
 
 The runtime now bootstraps versioned trigger sets and evaluates the current ACTIVE set alongside TESTING sets over the same completed candle. ACTIVE remains the only lane connected to paper execution. TEST lanes are persisted for comparison and dashboard visibility only; they do not submit Bybit orders or change trading configuration.
