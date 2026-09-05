@@ -98,3 +98,9 @@ On restart:
 Paper mode should exercise the same trigger, strategy, risk, intent, persistence, and UI paths.
 
 Only the execution adapter should differ materially.
+
+## TEST Lane Safety
+
+A TEST lane may evaluate candidate trigger sets against the same completed market data as ACTIVE, but it must remain isolated from exchange order placement. TEST records can include simulated analysis outcomes and persisted audit evidence; they cannot call Bybit private/order endpoints, transfer funds, change leverage, or affect ACTIVE paper/live state.
+
+Execution idempotency must include lane and trigger-set identity so a TEST decision cannot collide with or replay an ACTIVE execution lifecycle.

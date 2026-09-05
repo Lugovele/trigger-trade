@@ -27,6 +27,9 @@ class ExecutionRecord:
     exchange_status: str | None = None
     reconciliation_state: str | None = None
     last_error_code: str | None = None
+    lane: str | None = None
+    trigger_set_id: str | None = None
+    trigger_set_version: str | None = None
 
 
 @dataclass(frozen=True)
@@ -61,8 +64,8 @@ class ExecutionStore:
                         intent_id, risk_decision_id, client_order_id, exchange_order_id,
                         symbol, side, order_type, requested_qty, requested_price, status,
                         created_at, updated_at, exchange_status, reconciliation_state,
-                        last_error_code
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        last_error_code, lane, trigger_set_id, trigger_set_version
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     _record_values(record),
                 )
@@ -93,7 +96,8 @@ class ExecutionStore:
                 SET risk_decision_id = ?, client_order_id = ?, exchange_order_id = ?,
                     symbol = ?, side = ?, order_type = ?, requested_qty = ?,
                     requested_price = ?, status = ?, updated_at = ?,
-                    exchange_status = ?, reconciliation_state = ?, last_error_code = ?
+                    exchange_status = ?, reconciliation_state = ?, last_error_code = ?,
+                    lane = ?, trigger_set_id = ?, trigger_set_version = ?
                 WHERE intent_id = ?
                 """,
                 (
@@ -110,6 +114,9 @@ class ExecutionStore:
                     record.exchange_status,
                     record.reconciliation_state,
                     record.last_error_code,
+                    record.lane,
+                    record.trigger_set_id,
+                    record.trigger_set_version,
                     record.intent_id,
                 ),
             )
@@ -221,10 +228,16 @@ class ExecutionStore:
                     updated_at TEXT NOT NULL,
                     exchange_status TEXT,
                     reconciliation_state TEXT,
-                    last_error_code TEXT
+                    last_error_code TEXT,
+                    lane TEXT,
+                    trigger_set_id TEXT,
+                    trigger_set_version TEXT
                 )
                 """
             )
+            _add_column_if_missing(conn, "execution_orders", "lane", "TEXT")
+            _add_column_if_missing(conn, "execution_orders", "trigger_set_id", "TEXT")
+            _add_column_if_missing(conn, "execution_orders", "trigger_set_version", "TEXT")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS execution_fills (
@@ -264,6 +277,9 @@ def _record_values(record: ExecutionRecord) -> tuple[str | None, ...]:
         record.exchange_status,
         record.reconciliation_state,
         record.last_error_code,
+        record.lane,
+        record.trigger_set_id,
+        record.trigger_set_version,
     )
 
 
@@ -284,6 +300,9 @@ def _row_to_record(row: sqlite3.Row) -> ExecutionRecord:
         exchange_status=row["exchange_status"],
         reconciliation_state=row["reconciliation_state"],
         last_error_code=row["last_error_code"],
+        lane=_optional_column(row, "lane"),
+        trigger_set_id=_optional_column(row, "trigger_set_id"),
+        trigger_set_version=_optional_column(row, "trigger_set_version"),
     )
 
 
@@ -299,3 +318,13 @@ def _row_to_fill(row: sqlite3.Row) -> ExecutionFill:
         fee=row["fee"],
         created_at=row["created_at"],
     )
+
+
+def _add_column_if_missing(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+    columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in columns:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
+def _optional_column(row: sqlite3.Row, column: str) -> str | None:
+    return row[column] if column in row.keys() else None

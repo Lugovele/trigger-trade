@@ -7,8 +7,6 @@ from .contracts import (
     Side,
     TradeIntent,
 )
-from .service import ExecutionError, ExecutionService
-from .paper import PaperExecutionAdapter
 
 __all__ = [
     "ExecutionError",
@@ -20,3 +18,15 @@ __all__ = [
     "Side",
     "TradeIntent",
 ]
+
+
+def __getattr__(name: str):
+    if name in {"ExecutionError", "ExecutionService"}:
+        from .service import ExecutionError, ExecutionService
+
+        return {"ExecutionError": ExecutionError, "ExecutionService": ExecutionService}[name]
+    if name == "PaperExecutionAdapter":
+        from .paper import PaperExecutionAdapter
+
+        return PaperExecutionAdapter
+    raise AttributeError(name)

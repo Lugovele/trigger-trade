@@ -10,12 +10,15 @@ from triggertrade.persistence import ExecutionRecord
 from triggertrade.persistence import ExecutionStore
 from triggertrade.risk import RULE_IDS, RiskManager
 
+NOW = datetime(2026, 9, 5, tzinfo=UTC)
+
 
 def test_approved_notional_within_limit(tmp_path):
     decision = _manager(tmp_path).evaluate(
         intent=_intent(),
         observation=_observation(),
         available_quote_balance=Decimal("100"),
+        now=NOW,
     )
 
     assert decision.approved is True
@@ -107,6 +110,7 @@ def test_local_paper_environment_allowed(tmp_path):
         intent=_intent(),
         observation=_observation(),
         available_quote_balance=Decimal("100"),
+        now=NOW,
     )
 
     assert decision.approved
@@ -174,7 +178,7 @@ def _intent():
     )
 
 
-def _observation(symbol="BTCUSDT", observed_at=datetime(2026, 9, 5, tzinfo=UTC)):
+def _observation(symbol="BTCUSDT", observed_at=NOW):
     return MarketObservation(
         symbol=symbol,
         observed_at=observed_at,

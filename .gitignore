@@ -60,3 +60,6 @@ tmp/
 temp/
 *.tmp
 *.bak
+
+# Local helper scripts
+start-dashboard.cmd

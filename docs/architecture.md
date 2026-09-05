@@ -136,3 +136,27 @@ dashboard -> place_order()
 - public multi-user product;
 - complex generalized backtesting infrastructure;
 - derivatives unless explicitly added later.
+
+## Versioned Trigger Sets and Parallel Lanes
+
+Trigger, strategy, and risk rules are grouped into immutable `TriggerSetVersion` records. A trigger set version records its symbol/timeframe scope, lifecycle status, rule membership, creation metadata, and a semantic hash. Existing rule formulas keep their own stable rule ids and versions; the trigger set is the runtime unit that chooses which versions run together.
+
+Supported trigger set statuses are:
+
+```text
+DRAFT -> TESTING -> ACTIVE -> ARCHIVE
+```
+
+Only one trigger set may be `ACTIVE` for a symbol/timeframe at a time. Multiple `TESTING` sets may run in parallel for comparison. `DRAFT` and `ARCHIVE` sets are retained for review/history and must not be evaluated by the runtime.
+
+The continuous runtime fans out one canonical completed market observation into isolated lanes:
+
+```text
+completed market candle
+        -> ACTIVE lane for the active trigger set
+        -> TEST lane for each testing trigger set
+```
+
+Lane identity is part of the business key for every runtime lifecycle: `lane + symbol + timeframe + candle_id + trigger_set_id + trigger_set_version`. This prevents ACTIVE and TEST records from colliding while still proving that both lanes evaluated the same market event.
+
+The TEST lane is analysis-only. It may run trigger, strategy, and risk logic and may persist decisions, but it must not call Bybit private/order APIs or affect ACTIVE paper execution. Promotion from TESTING to ACTIVE is an explicit audited transition; the dashboard does not provide automatic promotion or trading controls.

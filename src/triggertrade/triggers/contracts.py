@@ -24,3 +24,6 @@ class Signal:
     condition_result: bool
     signal_type: SignalType
     reason: str | None = None
+    lane: str | None = None
+    trigger_set_id: str | None = None
+    trigger_set_version: str | None = None

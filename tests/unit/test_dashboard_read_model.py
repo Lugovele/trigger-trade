@@ -4,7 +4,18 @@ import sqlite3
 from triggertrade.dashboard.read_model import DashboardReadModel
 from triggertrade.execution import OrderStatus, OrderType, RiskDecision, Side, TradeIntent
 from triggertrade.execution.service import client_order_id_for_intent
-from triggertrade.persistence import CandleLifecycle, ExecutionFill, ExecutionRecord, ExecutionStore, RuntimeCheckpoint, RuntimeStore, TraceStore
+from triggertrade.persistence import (
+    CandleLifecycle,
+    ExecutionFill,
+    ExecutionRecord,
+    ExecutionStore,
+    RuntimeCheckpoint,
+    LaneCandleLifecycle,
+    RuntimeStore,
+    TraceStore,
+    TriggerSetStore,
+    bootstrap_current_trigger_sets,
+)
 from triggertrade.triggers import Signal, SignalType
 
 
@@ -164,6 +175,7 @@ def _empty_db(tmp_path):
     RuntimeStore(db)
     TraceStore(db)
     ExecutionStore(db)
+    bootstrap_current_trigger_sets(TriggerSetStore(db), created_at="2026-09-05T00:00:00+00:00")
     return db
 
 
@@ -312,3 +324,87 @@ def _save_rejected_lifecycle(db):
             processed_at="2026-09-05T12:05:00+00:00",
         )
     )
+
+
+def test_lane_trace_reconstructs_full_keyed_lifecycle(tmp_path):
+    db = _empty_db(tmp_path)
+    _save_buy_lifecycle(db)
+    RuntimeStore(db).save_lane_lifecycle(
+        LaneCandleLifecycle(
+            lane="ACTIVE",
+            symbol="BTCUSDT",
+            timeframe="1m",
+            candle_id="BTCUSDT:1m:2026-09-05T12:01:00+00:00",
+            candle_open_time="2026-09-05T12:01:00+00:00",
+            trigger_set_id="triggertrade-core",
+            trigger_set_version="v1",
+            status="completed",
+            signal_id="sig-buy",
+            intent_id="intent-buy",
+            risk_decision_id="risk-buy",
+            execution_intent_id="intent-buy",
+            processed_at="2026-09-05T12:02:04+00:00",
+        )
+    )
+
+    trace = DashboardReadModel(db).get_lane_trace(
+        lane="ACTIVE",
+        symbol="BTCUSDT",
+        timeframe="1m",
+        candle_id="BTCUSDT:1m:2026-09-05T12:01:00+00:00",
+        trigger_set_id="triggertrade-core",
+        trigger_set_version="v1",
+    )
+
+    assert trace is not None
+    assert trace.lifecycle["lane"] == "ACTIVE"
+    assert trace.lifecycle["trigger_set_id"] == "triggertrade-core"
+    assert trace.trigger["trigger_rule_id"] == "TRG-001"
+    assert trace.strategy["strategy_rule_id"] == "STR-001"
+    assert trace.risk["risk_decision_id"] == "risk-buy"
+    assert trace.execution["intent_id"] == "intent-buy"
+
+
+def test_lane_trades_are_joined_through_lane_lifecycle(tmp_path):
+    db = _empty_db(tmp_path)
+    _save_buy_lifecycle(db)
+    RuntimeStore(db).save_lane_lifecycle(
+        LaneCandleLifecycle(
+            lane="ACTIVE",
+            symbol="BTCUSDT",
+            timeframe="1m",
+            candle_id="BTCUSDT:1m:2026-09-05T12:01:00+00:00",
+            candle_open_time="2026-09-05T12:01:00+00:00",
+            trigger_set_id="triggertrade-core",
+            trigger_set_version="v1",
+            status="completed",
+            signal_id="sig-buy",
+            intent_id="intent-buy",
+            risk_decision_id="risk-buy",
+            execution_intent_id="intent-buy",
+            processed_at="2026-09-05T12:02:04+00:00",
+        )
+    )
+    ExecutionStore(db).reserve(
+        ExecutionRecord(
+            intent_id="orphan-lane-order",
+            risk_decision_id="orphan-risk",
+            client_order_id="tt-orphan",
+            exchange_order_id="paper-orphan",
+            symbol="BTCUSDT",
+            side="Buy",
+            order_type="Limit",
+            requested_qty="0.001",
+            requested_price="10000.00",
+            status=OrderStatus.FILLED,
+            created_at="2026-09-05T12:10:00+00:00",
+            updated_at="2026-09-05T12:10:00+00:00",
+            lane="ACTIVE",
+            trigger_set_id="triggertrade-core",
+            trigger_set_version="v1",
+        )
+    )
+
+    trades = DashboardReadModel(db).list_lane_trades("ACTIVE")
+
+    assert [trade.intent_id for trade in trades] == ["intent-buy"]

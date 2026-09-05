@@ -74,6 +74,49 @@ class TraceView:
     fills: tuple[dict[str, Any], ...]
 
 
+@dataclass(frozen=True)
+class TriggerSetRow:
+    set_id: str
+    version: str
+    purpose: str
+    rules_count: int
+    created_at: str
+    status: str
+    symbol: str
+    timeframe: str
+    rules: tuple[dict[str, Any], ...] = ()
+
+
+@dataclass(frozen=True)
+class RuleRow:
+    rule_id: str
+    name: str
+    asset_scope: str
+    condition: str
+    used_in: str
+    version: str
+    status: str
+
+
+@dataclass(frozen=True)
+class OverviewView:
+    lane: str
+    status: str
+    rule_set: str
+    rules_count: int
+    latest_candle: str
+    latest_signal: str
+    trades_count: int
+    last_execution: str
+
+
+@dataclass(frozen=True)
+class LogRow:
+    time: str
+    message: str
+    status: str
+
+
 class DashboardReadModel:
     def __init__(self, db_path: str | Path) -> None:
         self.db_path = Path(db_path)
@@ -273,10 +316,353 @@ class DashboardReadModel:
             fills=fills,
         )
 
+    def get_latest_lane_trace(self, lane: str) -> TraceView | None:
+        if not lane or len(lane) > 20 or not self.db_path.exists():
+            return None
+        try:
+            with self._connect() as conn:
+                lifecycle = _fetch_optional(
+                    conn,
+                    """
+                    SELECT lane, symbol, timeframe, candle_id, candle_open_time,
+                           trigger_set_id, trigger_set_version, status, signal_id,
+                           intent_id, risk_decision_id, execution_intent_id,
+                           processed_at, error
+                    FROM runtime_lane_lifecycles
+                    WHERE lane = ?
+                    ORDER BY COALESCE(processed_at, candle_open_time) DESC
+                    LIMIT 1
+                    """,
+                    (lane,),
+                )
+        except sqlite3.Error:
+            return None
+        if lifecycle is None:
+            return None
+        return self.get_lane_trace(
+            lane=lifecycle["lane"],
+            symbol=lifecycle["symbol"],
+            timeframe=lifecycle["timeframe"],
+            candle_id=lifecycle["candle_id"],
+            trigger_set_id=lifecycle["trigger_set_id"],
+            trigger_set_version=lifecycle["trigger_set_version"],
+        )
+
+    def get_lane_trace(
+        self,
+        *,
+        lane: str,
+        symbol: str,
+        timeframe: str,
+        candle_id: str,
+        trigger_set_id: str,
+        trigger_set_version: str,
+    ) -> TraceView | None:
+        values = (lane, symbol, timeframe, candle_id, trigger_set_id, trigger_set_version)
+        if any(not value or len(value) > 240 for value in values) or not self.db_path.exists():
+            return None
+        try:
+            with self._connect() as conn:
+                lifecycle = _fetch_optional(
+                    conn,
+                    """
+                    SELECT lane, symbol, timeframe, candle_id, candle_open_time,
+                           trigger_set_id, trigger_set_version, status, signal_id,
+                           intent_id, risk_decision_id, execution_intent_id,
+                           processed_at, error
+                    FROM runtime_lane_lifecycles
+                    WHERE lane = ? AND symbol = ? AND timeframe = ? AND candle_id = ?
+                      AND trigger_set_id = ? AND trigger_set_version = ?
+                    """,
+                    values,
+                )
+                if lifecycle is None:
+                    return None
+                trigger = None
+                if lifecycle["signal_id"]:
+                    trigger = _fetch_optional(
+                        conn,
+                        """
+                        SELECT signal_id, trigger_rule_id, trigger_rule_version,
+                               symbol, observed_at, window, input_snapshot,
+                               condition_result, signal_type, lane,
+                               trigger_set_id, trigger_set_version
+                        FROM trigger_evaluations
+                        WHERE signal_id = ?
+                        """,
+                        (lifecycle["signal_id"],),
+                    )
+                strategy = None
+                if lifecycle["intent_id"]:
+                    strategy = _fetch_optional(
+                        conn,
+                        """
+                        SELECT intent_id, strategy_rule_id, strategy_rule_version,
+                               symbol, side, signal_ids, trigger_ids, created_at,
+                               lane, trigger_set_id, trigger_set_version
+                        FROM strategy_decisions
+                        WHERE intent_id = ?
+                        """,
+                        (lifecycle["intent_id"],),
+                    )
+                risk = None
+                if lifecycle["risk_decision_id"]:
+                    risk = _fetch_optional(
+                        conn,
+                        """
+                        SELECT risk_decision_id, intent_id, approved,
+                               checked_rule_ids, blocking_rule_ids,
+                               approved_notional, approved_quantity,
+                               rejection_reason, created_at, lane,
+                               trigger_set_id, trigger_set_version
+                        FROM risk_decisions
+                        WHERE risk_decision_id = ?
+                        """,
+                        (lifecycle["risk_decision_id"],),
+                    )
+                execution = None
+                fills: tuple[dict[str, Any], ...] = ()
+                if lifecycle["execution_intent_id"]:
+                    execution = _fetch_optional(
+                        conn,
+                        """
+                        SELECT intent_id, risk_decision_id, client_order_id,
+                               exchange_order_id, symbol, side, order_type,
+                               requested_qty, requested_price, status, created_at,
+                               updated_at, exchange_status, reconciliation_state,
+                               last_error_code, lane, trigger_set_id, trigger_set_version
+                        FROM execution_orders
+                        WHERE intent_id = ?
+                        """,
+                        (lifecycle["execution_intent_id"],),
+                    )
+                    fill_rows = conn.execute(
+                        """
+                        SELECT fill_id, intent_id, client_order_id, symbol, side,
+                               quantity, price, fee, created_at
+                        FROM execution_fills
+                        WHERE intent_id = ?
+                        ORDER BY created_at
+                        """,
+                        (lifecycle["execution_intent_id"],),
+                    ).fetchall()
+                    fills = tuple(_safe_dict(dict(row)) for row in fill_rows)
+        except sqlite3.Error:
+            return None
+        trigger_view = _decode_json_fields(trigger, {"input_snapshot"})
+        strategy_view = _decode_json_fields(strategy, {"signal_ids", "trigger_ids"})
+        return TraceView(
+            candle_id=candle_id,
+            lifecycle=_safe_dict(dict(lifecycle)),
+            trigger=trigger_view,
+            signal=_signal_view(trigger_view),
+            strategy=strategy_view,
+            trade_intent=_trade_intent_view(strategy_view),
+            risk=_decode_json_fields(risk, {"checked_rule_ids", "blocking_rule_ids"}),
+            execution=_safe_dict(dict(execution)) if execution is not None else None,
+            fills=fills,
+        )
+
+    def get_live_overview(self) -> OverviewView:
+        return self._overview("ACTIVE")
+
+    def get_test_overview(self) -> OverviewView:
+        return self._overview("TEST")
+
+    def list_trigger_sets(self) -> tuple[TriggerSetRow, ...]:
+        if not self.db_path.exists():
+            return ()
+        try:
+            with self._connect() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT s.set_id, s.version, s.purpose, s.status, s.symbol,
+                           s.timeframe, s.created_at, COUNT(m.rule_id) AS rules_count
+                    FROM trigger_set_versions s
+                    LEFT JOIN trigger_set_memberships m
+                      ON m.set_id = s.set_id AND m.set_version = s.version
+                    GROUP BY s.set_id, s.version, s.purpose, s.status, s.symbol,
+                             s.timeframe, s.created_at
+                    ORDER BY s.created_at DESC, s.set_id, s.version
+                    """
+                ).fetchall()
+        except sqlite3.Error:
+            return _legacy_trigger_sets()
+        return tuple(
+            TriggerSetRow(
+                set_id=row["set_id"],
+                version=row["version"],
+                purpose=row["purpose"],
+                rules_count=int(row["rules_count"]),
+                created_at=row["created_at"],
+                status=row["status"],
+                symbol=row["symbol"],
+                timeframe=row["timeframe"],
+                rules=self._rules_for_set(row["set_id"], row["version"]),
+            )
+            for row in rows
+        )
+
+    def list_rules(self) -> tuple[RuleRow, ...]:
+        if not self.db_path.exists():
+            return ()
+        try:
+            with self._connect() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT r.rule_id, r.version, r.name, r.status, r.asset_scope,
+                           r.condition,
+                           GROUP_CONCAT(m.set_version, ', ') AS used_in
+                    FROM rule_definitions r
+                    LEFT JOIN trigger_set_memberships m
+                      ON m.rule_id = r.rule_id AND m.rule_version = r.version
+                    GROUP BY r.rule_id, r.version, r.name, r.status, r.asset_scope,
+                             r.condition
+                    ORDER BY r.rule_id, r.version
+                    """
+                ).fetchall()
+        except sqlite3.Error:
+            return ()
+        return tuple(
+            RuleRow(
+                rule_id=row["rule_id"],
+                version=row["version"],
+                name=row["name"],
+                status=row["status"],
+                asset_scope=row["asset_scope"],
+                condition=row["condition"],
+                used_in=row["used_in"] or "-",
+            )
+            for row in rows
+        )
+
+    def get_trigger_set(self, set_id: str, version: str) -> TriggerSetRow | None:
+        return next((item for item in self.list_trigger_sets() if item.set_id == set_id and item.version == version), None)
+
+    def list_logs(self, limit: int = 20) -> tuple[LogRow, ...]:
+        if not self.db_path.exists():
+            return ()
+        safe_limit = max(1, min(int(limit), 100))
+        try:
+            with self._connect() as conn:
+                lane_rows = conn.execute(
+                    """
+                    SELECT processed_at, lane, status, candle_id, trigger_set_version, error
+                    FROM runtime_lane_lifecycles
+                    ORDER BY COALESCE(processed_at, candle_open_time) DESC
+                    LIMIT ?
+                    """,
+                    (safe_limit,),
+                ).fetchall()
+        except sqlite3.Error:
+            lane_rows = ()
+        logs = [
+            LogRow(
+                time=row["processed_at"] or "",
+                message=f"{row['lane']} {row['trigger_set_version']} {row['status']} for {row['candle_id']}",
+                status=row["lane"],
+            )
+            for row in lane_rows
+        ]
+        if logs:
+            return tuple(logs)
+        return tuple(
+            LogRow(
+                time=row.time,
+                message=f"{row.symbol} {row.trigger_result} -> {row.risk_result} -> {row.execution_status}",
+                status="ACTIVE",
+            )
+            for row in self.list_recent_activity(limit=safe_limit)
+        )
+
+    def get_api_health(self) -> tuple[dict[str, str], ...]:
+        state = self.get_latest_runtime_state()
+        return (
+            {
+                "connection": "Bybit Demo public market data",
+                "status": "available" if state.db_health == "OK" else "unknown",
+                "uptime": "not measured",
+                "last_success": state.last_processed_at or "not recorded",
+                "disconnects_24h": "not measured",
+                "last_error": "not recorded",
+            },
+        )
+
+    def list_lane_trades(self, lane: str, limit: int = 25) -> tuple[PaperTradeRow, ...]:
+        rows = self.list_recent_paper_trades(limit=limit)
+        if not self.db_path.exists():
+            return rows
+        try:
+            with self._connect() as conn:
+                has_lane = any(row["name"] == "lane" for row in conn.execute("PRAGMA table_info(execution_orders)").fetchall())
+        except sqlite3.Error:
+            return rows
+        if not has_lane:
+            return rows if lane == "ACTIVE" else ()
+        try:
+            with self._connect() as conn:
+                query_rows = conn.execute(
+                    """
+                    SELECT e.intent_id, e.risk_decision_id, e.client_order_id,
+                           e.exchange_order_id, e.symbol, e.side, e.order_type,
+                           e.requested_qty, e.requested_price, e.status,
+                           e.created_at, e.updated_at, e.exchange_status,
+                           e.reconciliation_state,
+                           f.price AS fill_price, f.quantity AS fill_quantity,
+                           f.created_at AS fill_time
+                    FROM runtime_lane_lifecycles l
+                    JOIN execution_orders e ON e.intent_id = l.execution_intent_id
+                    LEFT JOIN execution_fills f ON f.intent_id = e.intent_id
+                    WHERE l.lane = ?
+                    ORDER BY COALESCE(f.created_at, e.updated_at) DESC
+                    LIMIT ?
+                    """,
+                    (lane, max(1, min(int(limit), 100))),
+                ).fetchall()
+        except sqlite3.Error:
+            return ()
+        return tuple(_trade_row(row) for row in query_rows)
+
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True, timeout=1)
         conn.row_factory = sqlite3.Row
         return conn
+
+    def _overview(self, lane: str) -> OverviewView:
+        sets = self.list_trigger_sets()
+        status = "ACTIVE" if lane == "ACTIVE" else "TESTING"
+        trigger_set = next((item for item in sets if item.status == status), None)
+        trades = self.list_lane_trades(lane)
+        logs = [row for row in self.list_logs(50) if row.status == lane]
+        latest = logs[0] if logs else None
+        return OverviewView(
+            lane=lane,
+            status=status if trigger_set else "UNKNOWN",
+            rule_set="-" if trigger_set is None else trigger_set.version,
+            rules_count=0 if trigger_set is None else trigger_set.rules_count,
+            latest_candle="-" if latest is None else latest.message.rsplit(" ", 1)[-1],
+            latest_signal=self.get_latest_decision().signal_type if lane == "ACTIVE" else ("recorded" if latest else "none"),
+            trades_count=len(trades),
+            last_execution="none" if not trades else trades[0].status,
+        )
+
+    def _rules_for_set(self, set_id: str, version: str) -> tuple[dict[str, Any], ...]:
+        try:
+            with self._connect() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT r.rule_id, r.version, r.name, r.condition, r.status
+                    FROM trigger_set_memberships m
+                    JOIN rule_definitions r
+                      ON r.rule_id = m.rule_id AND r.version = m.rule_version
+                    WHERE m.set_id = ? AND m.set_version = ?
+                    ORDER BY m.position
+                    """,
+                    (set_id, version),
+                ).fetchall()
+        except sqlite3.Error:
+            return ()
+        return tuple(_safe_dict(dict(row)) for row in rows)
 
 
 def _empty_runtime_state(db_health: str) -> RuntimeStateView:
@@ -290,6 +676,21 @@ def _empty_runtime_state(db_health: str) -> RuntimeStateView:
         last_processed_candle_open_time=None,
         last_processed_at=None,
         db_health=db_health,
+    )
+
+
+def _legacy_trigger_sets() -> tuple[TriggerSetRow, ...]:
+    return (
+        TriggerSetRow(
+            set_id="legacy-runtime",
+            version="legacy",
+            purpose="Legacy runtime records before Trigger Set registry initialization",
+            rules_count=0,
+            created_at="-",
+            status="ACTIVE",
+            symbol="BTCUSDT",
+            timeframe="1m",
+        ),
     )
 
 

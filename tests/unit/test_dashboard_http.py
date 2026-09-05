@@ -5,7 +5,7 @@ import threading
 import pytest
 
 from triggertrade.dashboard.__main__ import DEFAULT_HOST, create_server, render_dashboard
-from triggertrade.dashboard.read_model import DashboardReadModel
+from triggertrade.dashboard.read_model import DashboardReadModel, OverviewView, TriggerSetRow
 from tests.unit.test_dashboard_read_model import _empty_db, _save_buy_lifecycle, _save_no_signal, _save_rejected_lifecycle
 
 
@@ -25,8 +25,11 @@ def test_non_local_bind_is_rejected(tmp_path):
 def test_empty_state_renders_without_traceback_or_secrets(tmp_path):
     html = render_dashboard(DashboardReadModel(tmp_path / "missing.sqlite3"))
 
-    assert "No runtime activity recorded yet." in html
-    assert "No paper fills recorded yet." in html
+    assert "Overview" in html
+    assert "Rules" in html
+    assert "LIVE" in html
+    assert "TEST" in html
+    assert "No paper trades recorded" in html
     assert "Traceback" not in html
     assert "BYBIT_API_SECRET" not in html
 
@@ -41,11 +44,10 @@ def test_activity_risk_rejection_trade_and_trace_render(tmp_path):
 
     assert "NO_SIGNAL" in html
     assert "REJECTED: RSK-003" in html
-    assert "Paper Trades" in html
-    assert "paper-fill" in html
-    assert "Full Trace" in html
-    assert "Signal" in html
-    assert "TradeIntent" in html
+    assert "Trades" in html
+    assert "filled" in html
+    assert "Trigger sets" in html
+    assert "Rule registry" in html
     assert "TRG-001" in html
     assert "STR-001" in html
     assert "Traceback" not in html
@@ -62,7 +64,7 @@ def test_dashboard_http_routes_are_read_only(tmp_path):
         with urlopen(f"{base_url}/", timeout=5) as response:
             body = response.read().decode("utf-8")
             assert response.status == HTTPStatus.OK
-            assert "Recent Activity" in body
+            assert "TriggerTrade" in body
             assert "NO_SIGNAL" in body
 
         with pytest.raises(Exception):
@@ -84,6 +86,7 @@ def test_no_write_or_order_route_names_rendered(tmp_path):
     assert "/order/create" not in html
     assert "ExecutionService" not in html
     assert "api-demo.bybit.com" not in html
+    assert "BYBIT_API_SECRET" not in html
 
 
 def test_secret_like_trace_values_are_not_rendered(tmp_path):
@@ -105,4 +108,48 @@ def test_secret_like_trace_values_are_not_rendered(tmp_path):
 
     assert "BYBIT_API_SECRET" not in html
     assert "unit-signing-value" not in html
-    assert "[redacted]" in html
+
+
+def test_trigger_set_drawer_data_is_script_escaped():
+    class FakeModel:
+        def get_live_overview(self):
+            return OverviewView("ACTIVE", "ACTIVE", "bad", 1, "-", "none", 0, "none")
+
+        def get_test_overview(self):
+            return OverviewView("TEST", "UNKNOWN", "-", 0, "-", "none", 0, "none")
+
+        def get_latest_lane_trace(self, lane):
+            return None
+
+        def list_trigger_sets(self):
+            return (
+                TriggerSetRow(
+                    set_id="bad</script><script>alert(1)</script>",
+                    version="v1",
+                    purpose="xss probe",
+                    rules_count=1,
+                    created_at="2026-09-05T00:00:00+00:00",
+                    status="ACTIVE",
+                    symbol="BTCUSDT",
+                    timeframe="1m",
+                    rules=({"rule_id": "BAD", "condition": "</script><script>alert(2)</script>"},),
+                ),
+            )
+
+        def list_rules(self):
+            return ()
+
+        def list_lane_trades(self, lane):
+            return ()
+
+        def list_logs(self):
+            return ()
+
+        def get_api_health(self):
+            return ()
+
+    html = render_dashboard(FakeModel())
+
+    assert "</script><script>" not in html
+    assert "setRules.replaceChildren" in html
+    assert "innerHTML=s.rules" not in html

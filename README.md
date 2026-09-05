@@ -43,3 +43,9 @@ The dashboard is intentionally read-only. It does not evaluate triggers, create
 strategy decisions, approve risk, call execution services, place/cancel orders,
 read `.env`, or expose API credentials. P&L, portfolio accounting, alerts, and
 operator controls are intentionally deferred until backend semantics exist.
+
+## Trigger Sets and Lanes
+
+The runtime now bootstraps versioned trigger sets and evaluates the current ACTIVE set alongside TESTING sets over the same completed candle. ACTIVE remains the only lane connected to paper execution. TEST lanes are persisted for comparison and dashboard visibility only; they do not submit Bybit orders or change trading configuration.
+
+Dashboard views show ACTIVE/TEST lane summaries, trigger set versions, rule registry details, runtime logs, and local-only read models. The interface intentionally keeps promotion, rule editing, P&L, portfolio accounting, and trading controls deferred.

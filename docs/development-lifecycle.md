@@ -115,3 +115,11 @@ Use temporary worktrees/branches only when isolation is useful:
 - explicit user request.
 
 Do not create them for every small task.
+
+## Trigger Set Changes
+
+Changes that add, remove, promote, archive, or alter trigger set membership require architecture review. If they change the semantic meaning of a trigger, strategy, or risk rule, they also require trading-rules review.
+
+A trigger set promotion must be explicit and audited. Tests may provide evidence that a TESTING set behaved as expected, but tests do not automatically promote that set to ACTIVE. The dashboard may display ACTIVE and TEST evidence, but it must not perform promotion or change rule configuration.
+
+The reviewer should verify that lane-specific idempotency keys include `lane`, `symbol`, `timeframe`, `candle_id`, `trigger_set_id`, and `trigger_set_version`, and that legacy records remain readable after schema extension.

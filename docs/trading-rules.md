@@ -160,3 +160,29 @@ RETIRED
 ```
 
 Only confirmed/active rules may affect runtime behavior.
+
+## Trigger Set Lifecycle
+
+Runtime behavior is selected through versioned trigger sets, not by editing a live rule in place. A trigger set is an immutable membership snapshot containing specific trigger, strategy, and risk rule versions.
+
+Lifecycle statuses:
+
+```text
+DRAFT
+TESTING
+ACTIVE
+ARCHIVE
+```
+
+Rules and trigger sets must remain immutable once used for `TESTING` or `ACTIVE` runtime evidence. To change behavior, create a new rule version or a new trigger set version. At most one trigger set may be `ACTIVE` for the same symbol/timeframe. Multiple `TESTING` sets may evaluate the same completed candle in a separate TEST lane.
+
+ACTIVE and TEST lane results must be attributed with:
+
+```text
+lane
+trigger_set_id
+trigger_set_version
+rule ids and rule versions
+```
+
+The initial `TRG-001` threshold remains a development/demo configuration value. It is not evidence of a profitable trading edge. Visual dashboard fixtures may mention reference-only ideas such as RSI or momentum, but those fixture labels are not production rule definitions and must not affect runtime behavior.

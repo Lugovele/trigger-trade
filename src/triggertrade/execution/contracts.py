@@ -41,6 +41,9 @@ class TradeIntent:
     reason_signal_ids: tuple[str, ...] = ()
     reason_trigger_ids: tuple[str, ...] = ()
     created_at: str | None = None
+    lane: str | None = None
+    trigger_set_id: str | None = None
+    trigger_set_version: str | None = None
 
 
 @dataclass(frozen=True)
@@ -55,3 +58,6 @@ class RiskDecision:
     rejection_reason: str | None = None
     created_at: str | None = None
     reason: str = "manual technical fixture"
+    lane: str | None = None
+    trigger_set_id: str | None = None
+    trigger_set_version: str | None = None

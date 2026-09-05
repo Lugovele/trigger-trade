@@ -24,8 +24,9 @@ class TraceStore:
                 """
                 INSERT OR REPLACE INTO trigger_evaluations (
                     signal_id, trigger_rule_id, trigger_rule_version, symbol,
-                    observed_at, window, input_snapshot, condition_result, signal_type
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    observed_at, window, input_snapshot, condition_result, signal_type,
+                    lane, trigger_set_id, trigger_set_version
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     signal.signal_id,
@@ -37,6 +38,9 @@ class TraceStore:
                     json.dumps(dict(signal.input_snapshot), sort_keys=True),
                     int(signal.condition_result),
                     signal.signal_type.value,
+                    signal.lane,
+                    signal.trigger_set_id,
+                    signal.trigger_set_version,
                 ),
             )
 
@@ -46,8 +50,9 @@ class TraceStore:
                 """
                 INSERT OR REPLACE INTO strategy_decisions (
                     intent_id, strategy_rule_id, strategy_rule_version, symbol,
-                    side, signal_ids, trigger_ids, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    side, signal_ids, trigger_ids, created_at,
+                    lane, trigger_set_id, trigger_set_version
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     intent.intent_id,
@@ -58,6 +63,9 @@ class TraceStore:
                     json.dumps(intent.reason_signal_ids),
                     json.dumps(intent.reason_trigger_ids),
                     intent.created_at,
+                    intent.lane,
+                    intent.trigger_set_id,
+                    intent.trigger_set_version,
                 ),
             )
 
@@ -68,8 +76,9 @@ class TraceStore:
                 INSERT OR REPLACE INTO risk_decisions (
                     risk_decision_id, intent_id, approved, checked_rule_ids,
                     blocking_rule_ids, approved_notional, approved_quantity,
-                    rejection_reason, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    rejection_reason, created_at, lane, trigger_set_id,
+                    trigger_set_version
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     decision.risk_decision_id,
@@ -81,6 +90,9 @@ class TraceStore:
                     None if decision.approved_quantity is None else str(decision.approved_quantity),
                     decision.rejection_reason,
                     decision.created_at,
+                    decision.lane,
+                    decision.trigger_set_id,
+                    decision.trigger_set_version,
                 ),
             )
 
@@ -122,10 +134,16 @@ class TraceStore:
                     window TEXT NOT NULL,
                     input_snapshot TEXT NOT NULL,
                     condition_result INTEGER NOT NULL,
-                    signal_type TEXT NOT NULL
+                    signal_type TEXT NOT NULL,
+                    lane TEXT,
+                    trigger_set_id TEXT,
+                    trigger_set_version TEXT
                 )
                 """
             )
+            _add_column_if_missing(conn, "trigger_evaluations", "lane", "TEXT")
+            _add_column_if_missing(conn, "trigger_evaluations", "trigger_set_id", "TEXT")
+            _add_column_if_missing(conn, "trigger_evaluations", "trigger_set_version", "TEXT")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS strategy_decisions (
@@ -136,10 +154,16 @@ class TraceStore:
                     side TEXT NOT NULL,
                     signal_ids TEXT NOT NULL,
                     trigger_ids TEXT NOT NULL,
-                    created_at TEXT
+                    created_at TEXT,
+                    lane TEXT,
+                    trigger_set_id TEXT,
+                    trigger_set_version TEXT
                 )
                 """
             )
+            _add_column_if_missing(conn, "strategy_decisions", "lane", "TEXT")
+            _add_column_if_missing(conn, "strategy_decisions", "trigger_set_id", "TEXT")
+            _add_column_if_missing(conn, "strategy_decisions", "trigger_set_version", "TEXT")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS risk_decisions (
@@ -151,12 +175,24 @@ class TraceStore:
                     approved_notional TEXT,
                     approved_quantity TEXT,
                     rejection_reason TEXT,
-                    created_at TEXT
+                    created_at TEXT,
+                    lane TEXT,
+                    trigger_set_id TEXT,
+                    trigger_set_version TEXT
                 )
                 """
             )
+            _add_column_if_missing(conn, "risk_decisions", "lane", "TEXT")
+            _add_column_if_missing(conn, "risk_decisions", "trigger_set_id", "TEXT")
+            _add_column_if_missing(conn, "risk_decisions", "trigger_set_version", "TEXT")
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path)
         conn.row_factory = sqlite3.Row
         return conn
+
+
+def _add_column_if_missing(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+    columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in columns:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")

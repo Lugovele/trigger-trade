@@ -559,18 +559,22 @@ def load_env_file(path: Path) -> dict[str, str]:
     return values
 
 
-def build_runtime_from_env(env: dict[str, str]) -> PaperTradingRuntime:
+def build_runtime_from_env(env: dict[str, str]):
+    from triggertrade.persistence import TriggerSetStore
+    from triggertrade.services.dual_lane_runtime import DualLaneRuntime
+
     runtime_env = dict(env)
     runtime_env["TRIGGERTRADE_EXECUTION_VENUE"] = ExecutionVenue.LOCAL_PAPER.value
     config = load_config(runtime_env)
     db_path = Path(config.paper_runtime.db_path)
     market_client = BybitDemoClient(config=config.bybit)
-    return PaperTradingRuntime(
+    return DualLaneRuntime(
         config=config,
         market_client=market_client,
         execution_store=ExecutionStore(db_path),
         trace_store=TraceStore(db_path),
         runtime_store=RuntimeStore(db_path),
+        trigger_set_store=TriggerSetStore(db_path),
     )
 
 

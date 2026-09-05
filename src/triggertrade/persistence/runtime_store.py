@@ -32,6 +32,37 @@ class CandleLifecycle:
     error: str | None = None
 
 
+@dataclass(frozen=True)
+class LaneRuntimeCheckpoint:
+    lane: str
+    symbol: str
+    timeframe: str
+    trigger_set_id: str
+    trigger_set_version: str
+    last_processed_candle_id: str
+    last_processed_candle_open_time: str
+    last_processed_at: str
+    runtime_version: str
+
+
+@dataclass(frozen=True)
+class LaneCandleLifecycle:
+    lane: str
+    symbol: str
+    timeframe: str
+    candle_id: str
+    candle_open_time: str
+    trigger_set_id: str
+    trigger_set_version: str
+    status: str
+    signal_id: str | None = None
+    intent_id: str | None = None
+    risk_decision_id: str | None = None
+    execution_intent_id: str | None = None
+    processed_at: str | None = None
+    error: str | None = None
+
+
 class RuntimeStore:
     def __init__(self, path: str | Path = "runtime/triggertrade_paper.sqlite3") -> None:
         self.path = Path(path)
@@ -109,6 +140,127 @@ class RuntimeStore:
             ).fetchone()
         return int(row[0])
 
+    def lane_checkpoint(self, checkpoint: LaneRuntimeCheckpoint) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO runtime_lane_state (
+                    lane, symbol, timeframe, trigger_set_id, trigger_set_version,
+                    last_processed_candle_id, last_processed_candle_open_time,
+                    last_processed_at, runtime_version
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    checkpoint.lane,
+                    checkpoint.symbol,
+                    checkpoint.timeframe,
+                    checkpoint.trigger_set_id,
+                    checkpoint.trigger_set_version,
+                    checkpoint.last_processed_candle_id,
+                    checkpoint.last_processed_candle_open_time,
+                    checkpoint.last_processed_at,
+                    checkpoint.runtime_version,
+                ),
+            )
+
+    def get_lane_checkpoint(
+        self,
+        *,
+        lane: str,
+        symbol: str,
+        timeframe: str,
+        trigger_set_id: str,
+        trigger_set_version: str,
+    ) -> LaneRuntimeCheckpoint | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT lane, symbol, timeframe, trigger_set_id, trigger_set_version,
+                       last_processed_candle_id, last_processed_candle_open_time,
+                       last_processed_at, runtime_version
+                FROM runtime_lane_state
+                WHERE lane = ? AND symbol = ? AND timeframe = ?
+                  AND trigger_set_id = ? AND trigger_set_version = ?
+                """,
+                (lane, symbol, timeframe, trigger_set_id, trigger_set_version),
+            ).fetchone()
+        return None if row is None else _row_to_lane_checkpoint(row)
+
+    def save_lane_lifecycle(self, lifecycle: LaneCandleLifecycle) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO runtime_lane_lifecycles (
+                    lane, symbol, timeframe, candle_id, candle_open_time,
+                    trigger_set_id, trigger_set_version, status, signal_id,
+                    intent_id, risk_decision_id, execution_intent_id,
+                    processed_at, error
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    lifecycle.lane,
+                    lifecycle.symbol,
+                    lifecycle.timeframe,
+                    lifecycle.candle_id,
+                    lifecycle.candle_open_time,
+                    lifecycle.trigger_set_id,
+                    lifecycle.trigger_set_version,
+                    lifecycle.status,
+                    lifecycle.signal_id,
+                    lifecycle.intent_id,
+                    lifecycle.risk_decision_id,
+                    lifecycle.execution_intent_id,
+                    lifecycle.processed_at,
+                    lifecycle.error,
+                ),
+            )
+
+    def get_lane_lifecycle(
+        self,
+        *,
+        lane: str,
+        symbol: str,
+        timeframe: str,
+        candle_id: str,
+        trigger_set_id: str,
+        trigger_set_version: str,
+    ) -> LaneCandleLifecycle | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT lane, symbol, timeframe, candle_id, candle_open_time,
+                       trigger_set_id, trigger_set_version, status, signal_id,
+                       intent_id, risk_decision_id, execution_intent_id,
+                       processed_at, error
+                FROM runtime_lane_lifecycles
+                WHERE lane = ? AND symbol = ? AND timeframe = ? AND candle_id = ?
+                  AND trigger_set_id = ? AND trigger_set_version = ?
+                """,
+                (lane, symbol, timeframe, candle_id, trigger_set_id, trigger_set_version),
+            ).fetchone()
+        return None if row is None else _row_to_lane_lifecycle(row)
+
+    def lane_processed_count(
+        self,
+        *,
+        lane: str,
+        symbol: str,
+        timeframe: str,
+        candle_id: str,
+        trigger_set_id: str,
+        trigger_set_version: str,
+    ) -> int:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) FROM runtime_lane_lifecycles
+                WHERE lane = ? AND symbol = ? AND timeframe = ? AND candle_id = ?
+                  AND trigger_set_id = ? AND trigger_set_version = ?
+                """,
+                (lane, symbol, timeframe, candle_id, trigger_set_id, trigger_set_version),
+            ).fetchone()
+        return int(row[0])
+
     def _init_schema(self) -> None:
         with self._connect() as conn:
             conn.execute(
@@ -141,6 +293,43 @@ class RuntimeStore:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS runtime_lane_state (
+                    lane TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    timeframe TEXT NOT NULL,
+                    trigger_set_id TEXT NOT NULL,
+                    trigger_set_version TEXT NOT NULL,
+                    last_processed_candle_id TEXT NOT NULL,
+                    last_processed_candle_open_time TEXT NOT NULL,
+                    last_processed_at TEXT NOT NULL,
+                    runtime_version TEXT NOT NULL,
+                    PRIMARY KEY (lane, symbol, timeframe, trigger_set_id, trigger_set_version)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS runtime_lane_lifecycles (
+                    lane TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    timeframe TEXT NOT NULL,
+                    candle_id TEXT NOT NULL,
+                    candle_open_time TEXT NOT NULL,
+                    trigger_set_id TEXT NOT NULL,
+                    trigger_set_version TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    signal_id TEXT,
+                    intent_id TEXT,
+                    risk_decision_id TEXT,
+                    execution_intent_id TEXT,
+                    processed_at TEXT,
+                    error TEXT,
+                    PRIMARY KEY (lane, symbol, timeframe, candle_id, trigger_set_id, trigger_set_version)
+                )
+                """
+            )
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path)
@@ -169,6 +358,39 @@ def _row_to_lifecycle(row: sqlite3.Row) -> CandleLifecycle:
         symbol=row["symbol"],
         timeframe=row["timeframe"],
         candle_open_time=row["candle_open_time"],
+        status=row["status"],
+        signal_id=row["signal_id"],
+        intent_id=row["intent_id"],
+        risk_decision_id=row["risk_decision_id"],
+        execution_intent_id=row["execution_intent_id"],
+        processed_at=row["processed_at"],
+        error=row["error"],
+    )
+
+
+def _row_to_lane_checkpoint(row: sqlite3.Row) -> LaneRuntimeCheckpoint:
+    return LaneRuntimeCheckpoint(
+        lane=row["lane"],
+        symbol=row["symbol"],
+        timeframe=row["timeframe"],
+        trigger_set_id=row["trigger_set_id"],
+        trigger_set_version=row["trigger_set_version"],
+        last_processed_candle_id=row["last_processed_candle_id"],
+        last_processed_candle_open_time=row["last_processed_candle_open_time"],
+        last_processed_at=row["last_processed_at"],
+        runtime_version=row["runtime_version"],
+    )
+
+
+def _row_to_lane_lifecycle(row: sqlite3.Row) -> LaneCandleLifecycle:
+    return LaneCandleLifecycle(
+        lane=row["lane"],
+        symbol=row["symbol"],
+        timeframe=row["timeframe"],
+        candle_id=row["candle_id"],
+        candle_open_time=row["candle_open_time"],
+        trigger_set_id=row["trigger_set_id"],
+        trigger_set_version=row["trigger_set_version"],
         status=row["status"],
         signal_id=row["signal_id"],
         intent_id=row["intent_id"],
