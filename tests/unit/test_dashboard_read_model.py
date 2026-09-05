@@ -1,4 +1,4 @@
-from decimal import Decimal
+﻿from decimal import Decimal
 import sqlite3
 
 from triggertrade.dashboard.read_model import DashboardReadModel
@@ -471,3 +471,88 @@ def test_set_performance_uses_supported_counts_only(tmp_path):
     assert rows[0].set_id == "triggertrade-core"
     assert rows[0].candles_processed == 1
     assert "P&L" in rows[0].unavailable_metrics
+
+def test_futures_closed_trades_are_source_separated_and_trade_detail_is_read_only(tmp_path):
+    from triggertrade.persistence.futures_accounting_store import FuturesAccountingStore
+
+    db = _empty_db(tmp_path)
+    FuturesAccountingStore(db)
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            """
+            INSERT INTO futures_closed_trades (
+                trade_id, symbol, direction, quantity, leverage, entry_vwap, exit_vwap,
+                gross_pnl, entry_fee, exit_fee, other_fees, funding, net_pnl,
+                opened_at, closed_at, duration_seconds, accounting_version,
+                settlement_asset, contract_size, trigger_set_id, trigger_set_version,
+                regime_label, entry_slippage_cost, exit_slippage_cost,
+                evidence_source, simulation_model_version
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "trade-active-1", "BTCUSDT", "LONG", "0.010", "1", "95000", "95100",
+                "1.0", "0.02", "0.02", "0", "0", "0.96",
+                "2026-09-05T12:00:00+00:00", "2026-09-05T12:10:00+00:00", 600,
+                "futures-accounting-v1", "USDT", "1", "triggertrade-futures-core", "v1",
+                "DOWNTREND", None, None, "exchange", None,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO futures_closed_trades (
+                trade_id, symbol, direction, quantity, leverage, entry_vwap, exit_vwap,
+                gross_pnl, entry_fee, exit_fee, other_fees, funding, net_pnl,
+                opened_at, closed_at, duration_seconds, accounting_version,
+                settlement_asset, contract_size, trigger_set_id, trigger_set_version,
+                regime_label, entry_slippage_cost, exit_slippage_cost,
+                evidence_source, simulation_model_version
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "trade-test-1", "BTCUSDT", "SHORT", "0.010", "1", "95000", "95000",
+                "0", "0.02", "0.02", "0", "0", "-0.04",
+                "2026-09-05T12:00:00+00:00", "2026-09-05T12:01:00+00:00", 60,
+                "futures-accounting-v1", "USDT", "1", "triggertrade-futures-candidate", "v2-test",
+                "SIDEWAYS", "0", "0", "test_simulation", "test-sim-v1",
+            ),
+        )
+        for index in range(25):
+            conn.execute(
+                """
+                INSERT INTO futures_closed_trades (
+                    trade_id, symbol, direction, quantity, leverage, entry_vwap, exit_vwap,
+                    gross_pnl, entry_fee, exit_fee, other_fees, funding, net_pnl,
+                    opened_at, closed_at, duration_seconds, accounting_version,
+                    settlement_asset, contract_size, trigger_set_id, trigger_set_version,
+                    regime_label, entry_slippage_cost, exit_slippage_cost,
+                    evidence_source, simulation_model_version
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    f"trade-test-newer-{index}", "BTCUSDT", "SHORT", "0.010", "1", "95000", "95000",
+                    "0", "0.02", "0.02", "0", "0", "-0.04",
+                    "2026-09-05T12:00:00+00:00", f"2026-09-05T13:{index:02d}:00+00:00", 60,
+                    "futures-accounting-v1", "USDT", "1", "triggertrade-futures-candidate", "v2-test",
+                    "SIDEWAYS", "0", "0", "test_simulation", "test-sim-v1",
+                ),
+            )
+
+    model = DashboardReadModel(db)
+
+    assert [row.trade_id for row in model.list_closed_trades_by_source("exchange", limit=1)] == ["trade-active-1"]
+    assert model.list_closed_trades_by_source("test_simulation", limit=1)[0].trade_id.startswith("trade-test-newer-")
+    detail = model.get_futures_trade_detail("trade-test-1")
+    assert detail is not None
+    assert detail["evidence_source"] == "test_simulation"
+    assert detail["trigger_set"] == "triggertrade-futures-candidate@v2-test"
+
+
+def test_current_futures_position_is_honest_when_no_authoritative_snapshot_exists(tmp_path):
+    db = _empty_db(tmp_path)
+    position = DashboardReadModel(db).get_current_futures_position()
+
+    assert position.state == "Not available"
+    assert position.direction == "Not available"
+    assert position.take_profit == "Not configured"
+    assert position.stop_loss == "Not configured"
+    assert "no authoritative" in position.source

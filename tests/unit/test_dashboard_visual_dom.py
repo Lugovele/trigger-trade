@@ -30,10 +30,15 @@ def test_dashboard_renders_four_kpi_cards_and_reference_tables(tmp_path):
     live_section = html.split('id="liveOverview"', 1)[1].split('id="testOverview"', 1)[0]
     test_section = html.split('id="testOverview"', 1)[1].split('id="rules"', 1)[0]
 
-    assert live_section.count('class="card"') == 4
-    assert test_section.count('class="card"') == 4
-    assert "<th>ID</th><th>Date</th><th>Asset</th><th>Side</th>" in html
-    assert "<th>Asset</th><th>Qty</th><th>Avg entry</th>" in html
+    assert live_section.count("class='card'") >= 9
+    assert test_section.count("class='card'") >= 9
+    assert "<th>Trade ID</th><th>Date</th><th>Asset</th><th>Direction</th>" in html
+    assert "<th>Asset</th><th>Direction</th><th>Qty</th>" in html
+    assert "Linear Perpetual" in html
+    assert "Take Profit" in html
+    assert "Stop Loss" in html
+    assert "Futures Accounting Evidence" in html
+    assert "Evidence source" in html or ">Source<" in html
 
 
 def test_dashboard_mobile_drawer_modal_and_badges_are_present(tmp_path):

@@ -1,4 +1,4 @@
-"""Local read-only TriggerTrade v6 dashboard."""
+﻿"""Local read-only TriggerTrade v6 dashboard."""
 
 from __future__ import annotations
 
@@ -57,6 +57,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_html(render_not_found(parsed.path), HTTPStatus.NOT_FOUND)
             else:
                 self._send_html(render_rule_detail(detail))
+            return
+        if parsed.path.startswith("/trades/"):
+            trade_id = unquote(parsed.path.removeprefix("/trades/"))
+            detail = self.server.read_model.get_futures_trade_detail(trade_id)
+            if detail is None:
+                self._send_html(render_not_found(parsed.path), HTTPStatus.NOT_FOUND)
+            else:
+                self._send_html(render_trade_detail(detail))
             return
         if parsed.path.startswith("/recommendations/"):
             recommendation_id = unquote(parsed.path.removeprefix("/recommendations/"))
@@ -122,8 +130,6 @@ def render_dashboard(read_model: DashboardReadModel, selected_set: str = "", ini
     test = read_model.get_test_overview()
     trigger_sets = read_model.list_trigger_sets()
     rules = read_model.list_rules()
-    live_trades = read_model.list_lane_trades("ACTIVE")
-    test_trades = read_model.list_lane_trades("TEST")
     futures_trades = getattr(read_model, "list_recent_futures_trades", lambda: ())()
     logs = read_model.list_logs()
     health = read_model.get_api_health()
@@ -133,7 +139,10 @@ def render_dashboard(read_model: DashboardReadModel, selected_set: str = "", ini
     performance = getattr(read_model, "list_set_performance", lambda: ())()
     test_evidence = getattr(read_model, "list_test_set_evidence", lambda: ())()
     futures_closed_trades = getattr(read_model, "list_futures_closed_trades", lambda: ())()
+    live_closed_trades = getattr(read_model, "list_closed_trades_by_source", lambda source: ())("exchange")
+    test_closed_trades = getattr(read_model, "list_closed_trades_by_source", lambda source: ())("test_simulation")
     futures_equity = getattr(read_model, "get_latest_futures_equity", lambda: None)()
+    futures_position = getattr(read_model, "get_current_futures_position", lambda: None)()
     baseline_comparisons = getattr(read_model, "list_baseline_comparisons", lambda: ())()
     current_regime = getattr(read_model, "get_current_market_regime", lambda: None)()
     regime_analytics = getattr(read_model, "list_regime_analytics", lambda: ())()
@@ -157,8 +166,8 @@ def render_dashboard(read_model: DashboardReadModel, selected_set: str = "", ini
   <div class="content container">
     <section class="page {_active_page(initial_page, 'overview')}" id="overview">
       <div style="display:flex;justify-content:flex-end;margin-bottom:8px"><div class="env-switch" id="envSwitch"{_env_switch_style(initial_page)}><button id="liveBtn" class="active live" onclick="setEnv('live')">LIVE</button><button id="testBtn" onclick="setEnv('test')">TEST</button></div></div>
-      {_overview_section("liveOverview", live, live_trades, live_trace, True, current_regime)}
-      {_overview_section("testOverview", test, test_trades, test_trace, False, current_regime)}
+      {_overview_section("liveOverview", live, futures_trades, live_closed_trades, live_trace, True, current_regime, futures_equity, futures_position, operator_state)}
+      {_overview_section("testOverview", test, (), test_closed_trades, test_trace, False, current_regime, None, None, operator_state)}
     </section>
     <section class="page {_active_page(initial_page, 'rules')}" id="rules">{_trigger_sets_panel(trigger_sets)}{_rules_panel(rules)}</section>
     <section class="page {_active_page(initial_page, 'analytics')}" id="analytics">{_test_evidence_panel(test_evidence)}{_regime_analytics_panel(regime_analytics)}{_futures_accounting_panel(futures_equity, futures_closed_trades)}{_futures_panel(futures_trades)}{_performance_panel(performance)}{_baseline_comparison_panel(baseline_comparisons)}{_recommendations_panel(recommendations)}</section>
@@ -233,12 +242,93 @@ def _active_tab(current: str, expected: str) -> str:
 def _env_switch_style(current: str) -> str:
     return "" if current == "overview" else " style=\"display:none\""
 
-def _overview_section(element_id, overview, trades, trace, is_live: bool, current_regime=None) -> str:
+def _overview_section(element_id, overview, open_orders, closed_trades, trace, is_live: bool, current_regime=None, equity=None, position=None, operator_state=None) -> str:
     style = "" if is_live else ' style="display:none"'
     lane = "LIVE" if is_live else "TEST"
-    return f"""<div id="{element_id}"{style}><div class="cards"><div class="card"><div class="label">Runtime lane</div><div class="value">{lane}</div><div class="sub">paper-safe</div></div><div class="card"><div class="label">Rule set</div><div class="value">{_h(overview.rule_set)}</div><div class="sub">{overview.rules_count} rules</div></div><div class="card"><div class="label">Last candle</div><div class="value">{_h(_short(overview.latest_candle))}</div></div><div class="card"><div class="label">Last execution</div><div class="value">{_h(overview.last_execution)}</div><div class="sub">{overview.trades_count} paper records</div></div></div>{_market_regime_panel(current_regime)}{_trades_panel(trades, is_live)}{_positions_panel(is_live)}{_trace_panel(trace, is_live)}</div>"""
+    lane_sub = "ACTIVE Bybit Demo Linear Perpetual" if is_live else "Local Futures Simulation"
+    rule_label = "ACTIVE Set" if is_live else "Testing Set"
+    regime_value = "unavailable" if current_regime is None else current_regime.state
+    operator_value = "UNKNOWN" if operator_state is None else operator_state.state.replace("TRADING_", "")
+    return (
+        f"<div id=\"{element_id}\"{style}>"
+        f"<div class=\"context-strip\"><span class=\"badge {'live' if is_live else 'test'}\">{lane}</span>"
+        f"<span>Bybit Demo</span><span>Linear Perpetual</span><span>BTCUSDT</span><span>1m</span>"
+        f"<span>{_h(rule_label)}: {_h(overview.rule_set)}</span><span>Regime: {_h(regime_value)}</span></div>"
+        f"<div class=\"cards kpi-scroll\">{_account_cards(equity, closed_trades, open_orders, is_live, operator_value)}</div>"
+        f"{_lane_summary_panel(overview, lane_sub, operator_value, current_regime)}"
+        f"{_market_regime_panel(current_regime)}"
+        f"{_positions_panel(position, is_live)}"
+        f"{_closed_trades_panel(closed_trades, is_live)}"
+        f"{_open_futures_orders_panel(open_orders) if is_live else ''}"
+        f"{_trace_panel(trace, is_live)}"
+        "</div>"
+    )
 
 
+def _account_cards(equity, closed_trades, open_orders, is_live: bool, operator_value: str) -> str:
+    if equity is None:
+        values = {
+            "Balance": "unavailable",
+            "Equity": "unavailable",
+            "Available margin": "unavailable",
+            "Open exposure": "unavailable",
+            "Realized P&L": "unavailable",
+            "Unrealized P&L": "unavailable",
+            "Fees": _sum_closed_fees(closed_trades),
+            "Funding": _sum_closed_field(closed_trades, "funding"),
+            "Max drawdown": "unavailable",
+        }
+        source = "No authoritative equity snapshot" if is_live else "TEST simulation evidence only"
+    else:
+        values = {
+            "Balance": equity.wallet_balance,
+            "Equity": equity.equity,
+            "Available margin": equity.available_margin,
+            "Open exposure": equity.used_margin,
+            "Realized P&L": equity.realized_pnl,
+            "Unrealized P&L": equity.unrealized_pnl,
+            "Fees": _sum_closed_fees(closed_trades),
+            "Funding": _sum_closed_field(closed_trades, "funding"),
+            "Max drawdown": equity.max_drawdown,
+        }
+        source = f"{equity.source} | Accounting v1"
+    cards = [
+        f"<div class='card'><div class='label'>{_h(label)}</div><div class='value'>{_h(value)}</div><div class='sub'>{_h(source if label in {'Balance','Equity'} else ('ACTIVE executions blocked' if operator_value == 'PAUSED' and is_live else 'backend fact or unavailable'))}</div></div>"
+        for label, value in values.items()
+    ]
+    return "".join(cards)
+
+
+def _sum_closed_field(rows, field: str) -> str:
+    if not rows:
+        return "unavailable"
+    try:
+        from decimal import Decimal
+
+        return str(sum((Decimal(str(getattr(row, field))) for row in rows), Decimal("0")))
+    except Exception:
+        return "unavailable"
+
+
+def _sum_closed_fees(rows) -> str:
+    if not rows:
+        return "unavailable"
+    return "accounting fact"
+
+
+def _lane_summary_panel(overview, lane_sub: str, operator_value: str, current_regime) -> str:
+    regime = "unavailable" if current_regime is None else current_regime.state
+    return (
+        "<div class='panel'><div class='panel-head'><div><div class='panel-title'>Runtime Summary</div>"
+        f"<div class='panel-meta'>{_h(lane_sub)} | read-only dashboard</div></div>{_status_badge(operator_value)}</div>"
+        "<div class='activity'>"
+        f"{_trace_row('Rule set', overview.rule_set, str(overview.rules_count) + ' rules')}"
+        f"{_trace_row('Last candle', overview.latest_candle, 'completed candle checkpoint')}"
+        f"{_trace_row('Last signal', overview.latest_signal, 'NO_SIGNAL is normal')}"
+        f"{_trace_row('Last execution', overview.last_execution, str(overview.trades_count) + ' visible records')}"
+        f"{_trace_row('Market regime', regime, 'CTX-REGIME@0.1.0')}"
+        "</div></div>"
+    )
 def _market_regime_panel(current_regime) -> str:
     if current_regime is None:
         return "<div class='panel'><div class='panel-head'><div><div class='panel-title'>Market regime</div><div class='panel-meta'>CTX-REGIME@0.1.0 context, read-only</div></div><span class='badge gray'>unavailable</span></div></div>"
@@ -277,24 +367,38 @@ def _operator_controls(state, token: str = "") -> str:
     )
 
 
-def _trades_panel(trades, is_live: bool) -> str:
-    rows = "".join(
-        f"<tr><td class='mono'>{_h(_short(row.execution_id))}</td><td class='mono'>{_h(_compact(row.time))}</td><td>{_h(row.symbol)}</td><td><span class='badge blue'>{_h(row.side)}</span></td><td>{_h(row.requested_price)}</td><td>-</td><td>-</td><td>{_h(row.quantity)}</td><td>{_h(_short(row.intent_id))}</td><td>{_h(row.status)}</td></tr>"
-        for row in trades
-    ) or "<tr><td colspan='10' class='muted'>No paper trades recorded for this lane.</td></tr>"
+def _closed_trades_panel(rows, is_live: bool) -> str:
+    lane = "LIVE" if is_live else "TEST"
+    source_label = "ACTIVE Demo futures trades" if is_live else "TEST simulated futures trades"
+    empty = "No completed Demo futures trades yet." if is_live else "No TEST simulated trades yet."
+    body = "".join(
+        f"<tr><td><a class='linkbtn mono' href='/trades/{_h(row.trade_id)}'>{_h(_short(row.trade_id))}</a></td><td class='mono'>{_h(_compact(row.closed_at))}</td><td>{_h(row.symbol)}</td><td><span class='badge blue'>{_h(row.direction)}</span></td><td>{_h(row.entry_vwap)}</td><td>{_h(row.exit_vwap)}</td><td>{_h(row.quantity)}</td><td>{_h(row.leverage)}x</td><td>{_h(str(row.duration_seconds))}s</td><td>{_h(row.gross_pnl)}</td><td>{_h(row.fees)}</td><td>{_h(row.funding)}</td><td>{_h(row.entry_slippage)} / {_h(row.exit_slippage)}</td><td>{_h(row.net_pnl)}</td><td>{_h(row.trigger_set)}</td><td>{_h(row.regime)}</td><td>{_h(row.accounting_version)}</td></tr>"
+        for row in rows
+    ) or f"<tr><td colspan='17' class='muted'>{empty} Performance metrics will appear after backend accounting records closed trades.</td></tr>"
     mobile = "".join(
-        f"<div class='mcard'><div class='mhead'><div><div class='mtitle'>{_h(row.symbol)}</div><div class='msub mono'>{_h(_compact(row.time))}</div></div><span class='badge {'live' if is_live else 'test'}'>{'LIVE' if is_live else 'TEST'}</span></div><div class='mgrid'><div><div class='fl'>Entry</div><div class='fv'>{_h(row.requested_price)}</div></div><div><div class='fl'>Amount</div><div class='fv'>{_h(row.quantity)}</div></div><div><div class='fl'>Status</div><div class='fv'>{_h(row.status)}</div></div><div><div class='fl'>Set</div><div class='fv'>{_h(_short(row.intent_id))}</div></div></div></div>"
-        for row in trades
-    ) or "<div class='mcard'><div class='mtitle'>No paper trades recorded</div><div class='msub'>NO_SIGNAL and rejected risk cycles are normal.</div></div>"
-    return f"<div class='panel'><div class='panel-head'><div class='panel-title'>Trades</div><div class='panel-actions'><button class='button' onclick=\"openFullList('trades')\">View all</button></div></div><div class='table-wrap desktop-table'><table><thead><tr><th>ID</th><th>Date</th><th>Asset</th><th>Side</th><th>Entry</th><th>TP</th><th>SL</th><th>Amount</th><th>Version</th><th>Status</th></tr></thead><tbody>{rows}</tbody></table></div><div class='mobile-list'>{mobile}</div></div>"
+        f"<div class='mcard'><div class='mhead'><div><div class='mtitle'>{_h(row.symbol)} {_h(row.direction)}</div><div class='msub mono'>{_h(_compact(row.closed_at))}</div></div><span class='badge {'live' if is_live else 'test'}'>{lane}</span></div><div class='mgrid'><div><div class='fl'>Entry</div><div class='fv'>{_h(row.entry_vwap)}</div></div><div><div class='fl'>Exit</div><div class='fv'>{_h(row.exit_vwap)}</div></div><div><div class='fl'>Net P&L</div><div class='fv'>{_h(row.net_pnl)}</div></div><div><div class='fl'>Source</div><div class='fv'>{_h(row.evidence_source)}</div></div></div></div>"
+        for row in rows
+    ) or f"<div class='mcard'><div class='mtitle'>{empty}</div><div class='msub'>{source_label}; no fake financial rows are rendered.</div></div>"
+    return f"<div class='panel'><div class='panel-head'><div><div class='panel-title'>{lane} Trades</div><div class='panel-meta'>{source_label}; accounting-backed only.</div></div><div class='panel-actions'><button class='button' onclick=\"openFullList('trades')\">View all</button></div></div><div class='table-wrap desktop-table'><table><thead><tr><th>Trade ID</th><th>Date</th><th>Asset</th><th>Direction</th><th>Entry</th><th>Exit</th><th>Size</th><th>Lev</th><th>Duration</th><th>Gross P&amp;L</th><th>Fees</th><th>Funding</th><th>Slippage</th><th>Net P&amp;L</th><th>Set</th><th>Regime</th><th>Status</th></tr></thead><tbody>{body}</tbody></table></div><div class='mobile-list'>{mobile}</div></div>"
 
 
-def _positions_panel(is_live: bool) -> str:
-    lane = "live" if is_live else "test"
-    label = "LIVE" if is_live else "TEST"
-    return f"<div class='panel'><div class='panel-head'><div class='panel-title'>Positions</div><div class='panel-actions'><button class='button' onclick=\"openFullList('positions')\">View all</button></div></div><div class='table-wrap desktop-table'><table><thead><tr><th>Asset</th><th>Qty</th><th>Avg entry</th><th>Current</th><th>TP</th><th>SL</th><th>Market value</th><th>Unrealized P&amp;L</th><th>Version</th></tr></thead><tbody><tr><td colspan='9' class='muted'>Position and P&amp;L accounting are deferred until backend semantics exist.</td></tr></tbody></table></div><div class='mobile-list'><div class='mcard'><div class='mhead'><div><div class='mtitle'>Positions deferred</div><div class='msub'>No fake portfolio or P&amp;L is rendered.</div></div><span class='badge {lane}'>{label}</span></div></div></div></div>"
+def _open_futures_orders_panel(rows) -> str:
+    body = "".join(
+        f"<tr><td class='mono'>{_h(_short(row.execution_id))}</td><td class='mono'>{_h(_compact(row.time))}</td><td>{_h(row.symbol)}</td><td>{_h(row.category)}</td><td><span class='badge blue'>{_h(row.action)}</span></td><td>{_h(row.exchange_side)}</td><td>{_h(row.quantity)}</td><td>{_h(row.requested_price)}</td><td>{_h(row.leverage)}x</td><td>{_h(row.expected_net_edge)}</td><td>{_h(row.status)}</td></tr>"
+        for row in rows
+    ) or "<tr><td colspan='11' class='muted'>No active Bybit Demo futures execution records yet.</td></tr>"
+    return f"<div class='panel'><div class='panel-head'><div><div class='panel-title'>ACTIVE Futures Execution</div><div class='panel-meta'>Bybit Demo linear perpetual order lifecycle records; read-only.</div></div></div><div class='table-wrap analytics-compact'><table><thead><tr><th>Order</th><th>Updated</th><th>Symbol</th><th>Category</th><th>Action</th><th>Exchange side</th><th>Qty</th><th>Limit</th><th>Lev</th><th>Expected net edge</th><th>Status</th></tr></thead><tbody>{body}</tbody></table></div></div>"
 
 
+def _positions_panel(position, is_live: bool) -> str:
+    lane = "LIVE" if is_live else "TEST"
+    if position is None:
+        position = type("Position", (), {"state":"Not available","symbol":"BTCUSDT","direction":"Not available","quantity":"-","entry":"-","mark":"-","leverage":"-","liquidation":"Not available","take_profit":"Not configured","stop_loss":"Not configured","notional":"-","unrealized_pnl":"unavailable","trigger_set":"-","regime":"unavailable","opened_at":"-","source":"no authoritative backend position snapshot"})()
+    body = (
+        f"<tr><td>{_h(position.symbol)}</td><td><span class='badge gray'>{_h(position.direction)}</span></td><td>{_h(position.quantity)}</td><td>{_h(position.entry)}</td><td>{_h(position.mark)}</td><td>{_h(position.leverage)}</td><td>{_h(position.liquidation)}</td><td>{_h(position.take_profit)}</td><td>{_h(position.stop_loss)}</td><td>{_h(position.notional)}</td><td>{_h(position.unrealized_pnl)}</td><td>{_h(position.trigger_set)}</td><td>{_h(position.regime)}</td><td>{_h(position.opened_at)}</td></tr>"
+    )
+    mobile = f"<div class='mcard'><div class='mhead'><div><div class='mtitle'>{_h(position.symbol)} position</div><div class='msub'>{_h(position.source)}</div></div><span class='badge {'live' if is_live else 'test'}'>{lane}</span></div><div class='mgrid'><div><div class='fl'>Direction</div><div class='fv'>{_h(position.direction)}</div></div><div><div class='fl'>Leverage</div><div class='fv'>{_h(position.leverage)}</div></div><div><div class='fl'>Entry / Mark</div><div class='fv'>{_h(position.entry)} / {_h(position.mark)}</div></div><div><div class='fl'>TP / SL</div><div class='fv'>{_h(position.take_profit)} / {_h(position.stop_loss)}</div></div></div></div>"
+    return f"<div class='panel'><div class='panel-head'><div><div class='panel-title'>Current Futures Position</div><div class='panel-meta'>{_h(position.source)}; dashboard does not infer positions from intents.</div></div>{_status_badge(position.state)}</div><div class='table-wrap desktop-table'><table><thead><tr><th>Asset</th><th>Direction</th><th>Qty</th><th>Entry</th><th>Mark</th><th>Leverage</th><th>Liquidation</th><th>Take Profit</th><th>Stop Loss</th><th>Notional</th><th>Unrealized P&amp;L</th><th>Trigger Set</th><th>Regime</th><th>Opened</th></tr></thead><tbody>{body}</tbody></table></div><div class='mobile-list'>{mobile}</div></div>"
 def _trace_panel(trace, is_live: bool) -> str:
     label = "LIVE" if is_live else "TEST"
     badge = "live" if is_live else "test"
@@ -378,6 +482,26 @@ def render_rule_detail(detail) -> str:
 """,
     )
 
+
+def render_trade_detail(detail: dict) -> str:
+    fills = detail.get("fills") or ()
+    fill_rows = "".join(
+        f"<tr><td class='mono'>{_h(_short(row.get('event_id')))}</td><td>{_h(row.get('action'))}</td><td>{_h(row.get('quantity'))}</td><td>{_h(row.get('price'))}</td><td>{_h(row.get('fee'))} {_h(row.get('fee_asset'))}</td><td>{_h(_compact(row.get('occurred_at')))}</td><td>{_h(row.get('source'))}</td></tr>"
+        for row in fills
+    ) or "<tr><td colspan='7' class='muted'>No fills recorded for this trade.</td></tr>"
+    return _page(
+        f"Trade {_short(detail.get('trade_id'))}",
+        f"""
+<div class="app"><main class="main"><div class="toolbar"><div class="container toolbar-inner"><a class="brand-top" href="/">TriggerTrade</a><div class="utility-actions"><a class="utility-btn" href="/">Overview</a><a class="utility-btn" href="/analytics">Analytics</a></div></div></div>
+<div class="tabsbar"><div class="container tabsbar-inner"><div class="tabs"><a class="tabbtn active" href="/trades/{_h(detail.get('trade_id'))}">Trade Detail</a><a class="tabbtn" href="/">Dashboard</a></div></div></div>
+<div class="content container">
+  <section class="panel"><div class="panel-head"><div><div class="panel-title">{_h(detail.get('symbol'))} {_h(detail.get('direction'))}</div><div class="panel-meta mono">{_h(detail.get('trade_id'))}</div></div>{_status_badge(detail.get('evidence_source') or 'unknown')}</div><div class="section"><div class="set-detail">{_kv('Opened', _compact(detail.get('opened_at')))}{_kv('Closed', _compact(detail.get('closed_at')))}{_kv('Duration', str(detail.get('duration_seconds')) + 's')}{_kv('Quantity', detail.get('quantity'))}{_kv('Leverage', str(detail.get('leverage')) + 'x')}{_kv('Trigger Set', detail.get('trigger_set'))}{_kv('Regime', detail.get('regime_label') or 'unavailable')}{_kv('Simulation model', detail.get('simulation_model_version') or '-')}</div></div></section>
+  <section class="panel"><div class="panel-head"><div><div class="panel-title">Accounting</div><div class="panel-meta">Backend accounting facts only; no frontend P&amp;L calculations.</div></div></div><div class="section"><div class="set-detail">{_kv('Entry VWAP', detail.get('entry_vwap'))}{_kv('Exit VWAP', detail.get('exit_vwap'))}{_kv('Gross P&L', detail.get('gross_pnl'))}{_kv('Fees', detail.get('fees'))}{_kv('Funding', detail.get('funding'))}{_kv('Net P&L', detail.get('net_pnl'))}{_kv('Entry slippage', detail.get('entry_slippage_cost') or 'unavailable')}{_kv('Exit slippage', detail.get('exit_slippage_cost') or 'unavailable')}{_kv('Accounting version', detail.get('accounting_version'))}</div></div></section>
+  <section class="panel"><div class="panel-head"><div><div class="panel-title">Execution Fills</div><div class="panel-meta">Immutable execution facts feeding accounting.</div></div></div><div class="table-wrap"><table><thead><tr><th>Fill</th><th>Action</th><th>Qty</th><th>Price</th><th>Fee</th><th>Time</th><th>Source</th></tr></thead><tbody>{fill_rows}</tbody></table></div></section>
+  <section class="panel"><div class="panel-head"><div><div class="panel-title">Decision Context</div><div class="panel-meta">Traceable persisted attribution; unavailable fields are not inferred.</div></div></div><div class="activity">{_trace_row('Lane / source', detail.get('evidence_source'), 'ACTIVE exchange or TEST simulation')}{_trace_row('Trigger Set', detail.get('trigger_set'), 'exact set version')}{_trace_row('Market Regime', detail.get('regime_label') or 'unavailable', 'CTX-REGIME@0.1.0 when captured')}{_trace_row('Why opened', 'persisted strategy/risk trace', 'open reason available in lifecycle trace when recorded')}{_trace_row('Why closed', 'unavailable', 'close strategy is not implemented in this UI task')}</div></section>
+</div></main></div>
+""",
+    )
 
 def render_recommendation_detail(detail) -> str:
     rec = detail.recommendation
@@ -471,10 +595,10 @@ def _futures_accounting_panel(equity, rows) -> str:
             "</div>"
         )
     body = "".join(
-        f"<tr><td class='mono'>{_h(_short(row.trade_id))}</td><td>{_h(_compact(row.closed_at))}</td><td>{_h(row.symbol)}</td><td>{_h(row.direction)}</td><td>{_h(row.quantity)}</td><td>{_h(row.leverage)}x</td><td>{_h(row.entry_vwap)}</td><td>{_h(row.exit_vwap)}</td><td>{_h(row.gross_pnl)}</td><td>{_h(row.fees)}</td><td>{_h(row.funding)}</td><td>{_h(row.net_pnl)}</td><td>{_h(str(row.duration_seconds))}s</td><td>{_h(row.trigger_set)}</td><td>{_h(row.regime)}</td></tr>"
+        f"<tr><td class='mono'>{_h(_short(row.trade_id))}</td><td>{_h(_compact(row.closed_at))}</td><td>{_h(row.evidence_source)}</td><td>{_h(row.simulation_model_version)}</td><td>{_h(row.symbol)}</td><td>{_h(row.direction)}</td><td>{_h(row.quantity)}</td><td>{_h(row.leverage)}x</td><td>{_h(row.entry_vwap)}</td><td>{_h(row.exit_vwap)}</td><td>{_h(row.gross_pnl)}</td><td>{_h(row.fees)}</td><td>{_h(row.funding)}</td><td>{_h(row.net_pnl)}</td><td>{_h(str(row.duration_seconds))}s</td><td>{_h(row.trigger_set)}</td><td>{_h(row.regime)}</td></tr>"
         for row in rows
-    ) or "<tr><td colspan='15' class='muted'>No accounting-backed closed futures trades recorded yet.</td></tr>"
-    return f"<div class='panel'><div class='panel-head'><div><div class='panel-title'>Futures Accounting</div><div class='panel-meta'>Backend-computed P&amp;L, fees, funding, equity and drawdown; no frontend financial calculations.</div></div></div>{equity_body}<div class='table-wrap analytics-compact'><table><thead><tr><th>Trade</th><th>Closed</th><th>Symbol</th><th>Dir</th><th>Qty</th><th>Lev</th><th>Entry VWAP</th><th>Exit VWAP</th><th>Gross</th><th>Fees</th><th>Funding</th><th>Net</th><th>Duration</th><th>Set</th><th>Regime</th></tr></thead><tbody>{body}</tbody></table></div></div>"
+    ) or "<tr><td colspan='17' class='muted'>No accounting-backed closed futures trades recorded yet.</td></tr>"
+    return f"<div class='panel'><div class='panel-head'><div><div class='panel-title'>Futures Accounting Evidence</div><div class='panel-meta'>Backend-computed P&amp;L, fees, funding, equity and drawdown; exchange and TEST simulation facts are labeled by evidence source.</div></div></div>{equity_body}<div class='table-wrap analytics-compact'><table><thead><tr><th>Trade</th><th>Closed</th><th>Source</th><th>Model</th><th>Symbol</th><th>Dir</th><th>Qty</th><th>Lev</th><th>Entry VWAP</th><th>Exit VWAP</th><th>Gross</th><th>Fees</th><th>Funding</th><th>Net</th><th>Duration</th><th>Set</th><th>Regime</th></tr></thead><tbody>{body}</tbody></table></div></div>"
 
 
 def _definition_panel(title: str, value) -> str:
@@ -557,7 +681,7 @@ def _page(title: str, body: str) -> str:
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{_h(title)}</title>
 <style>
-:root{{--bg:#f6f7f9;--panel:#fff;--text:#18181b;--muted:#71717a;--line:#e4e4e7;--line2:#d4d4d8;--green:#15803d;--greenbg:#f0fdf4;--blue:#1d4ed8;--bluebg:#eff6ff;--amber:#a16207;--amberbg:#fffbeb;--red:#b91c1c;--redbg:#fef2f2;--page-max:1440px;--page-pad:22px}}*{{box-sizing:border-box}}body{{margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--bg);color:var(--text)}}button,input,select{{font:inherit}}.app{{min-height:100vh}}.main{{min-width:0}}.container{{width:100%;max-width:var(--page-max);margin:0 auto;padding-inline:var(--page-pad)}}.toolbar{{height:58px;background:#fff;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:20}}.toolbar-inner{{height:58px;display:flex;align-items:center;justify-content:space-between}}a{{color:inherit}}.brand-top{{font-weight:780;font-size:15px;letter-spacing:-.01em}}.utility-actions{{display:flex;align-items:center;gap:8px}}.utility-actions form{{margin:0}}.utility-btn{{border:1px solid var(--line2);background:#fff;border-radius:8px;padding:6px 9px;font-size:11px;font-weight:700;color:#3f3f46;cursor:pointer}}.stop-btn{{background:var(--redbg);border-color:#fecaca;color:var(--red)}}.resume-btn{{background:#18181b;border-color:#18181b;color:#fff}}.env-switch{{display:inline-flex;align-items:center;gap:4px;background:#f7f7f8;border:1px solid #ececef;border-radius:999px;padding:2px}}.env-switch button{{border:0;background:transparent;padding:5px 10px;border-radius:999px;font-size:10px;font-weight:700;color:#8a8a91;cursor:pointer;letter-spacing:.02em}}.env-switch button.active.live,.env-switch button.active.test{{background:#fff;color:#27272a;box-shadow:0 1px 2px rgba(24,24,27,.07)}}.tabsbar{{background:#fff;border-bottom:1px solid var(--line)}}.tabs{{display:flex;gap:22px;height:40px;align-items:flex-end}}.tabbtn{{border:0;background:transparent;padding:0 0 9px;color:#71717a;font-size:12px;font-weight:700;cursor:pointer;border-bottom:2px solid transparent}}.tabbtn.active{{color:#18181b;border-bottom-color:#18181b}}.content{{padding-top:10px;padding-bottom:18px}}.page{{display:none}}.page.active{{display:block}}.cards{{display:flex;gap:7px;margin-bottom:9px;overflow-x:auto;flex-wrap:nowrap;scrollbar-width:none}}.cards::-webkit-scrollbar{{display:none}}.card{{background:#fff;border:1px solid var(--line);border-radius:9px;padding:9px 11px;min-height:0;flex:1 1 0;min-width:0}}.label{{font-size:9px;color:var(--muted);margin-bottom:3px}}.value{{font-size:16px;font-weight:750;line-height:1.15;overflow-wrap:anywhere}}.sub{{font-size:9px;color:var(--muted);margin-top:2px}}.positive{{color:var(--green)}}.panel{{background:#fff;border:1px solid var(--line);border-radius:11px;overflow:hidden;margin-bottom:11px}}.panel-head{{padding:12px 14px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:12px}}.panel-title{{font-size:13px;font-weight:700}}.panel-meta{{font-size:10px;color:var(--muted);margin-top:2px}}.table-wrap{{overflow:auto}}table{{width:100%;border-collapse:collapse;font-size:12px}}th{{padding:9px 11px;background:#fafafa;border-bottom:1px solid var(--line);text-align:left;font-size:10px;color:#71717a;text-transform:uppercase;letter-spacing:.03em;white-space:nowrap}}td{{padding:11px;border-bottom:1px solid #f0f0f1;white-space:nowrap;vertical-align:top}}tbody tr:last-child td{{border-bottom:0}}.evidence-detail{{display:table-row;background:#fcfcfd}}.mono{{font-family:"SFMono-Regular",Consolas,monospace;font-size:11px}}.muted{{color:var(--muted)}}.badge{{display:inline-flex;padding:4px 7px;border-radius:999px;font-size:10px;font-weight:750;border:1px solid transparent}}.badge.live{{background:#18181b;color:#fff}}.badge.test{{background:#fff;color:#52525b;border-color:#d4d4d8}}.badge.green{{background:var(--greenbg);color:var(--green);border-color:#dcfce7}}.badge.blue{{background:var(--bluebg);color:var(--blue);border-color:#dbeafe}}.badge.amber{{background:var(--amberbg);color:var(--amber);border-color:#fef3c7}}.badge.gray{{background:#f4f4f5;color:#52525b;border-color:#e4e4e7}}.filters{{display:flex;gap:8px;align-items:center;flex-wrap:wrap}}.search,select{{border:1px solid var(--line2);background:#fff;border-radius:8px;padding:8px 10px;font-size:12px;outline:none}}.search{{min-width:220px}}.button{{border:1px solid var(--line2);background:#fff;padding:8px 10px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer}}.button.dark{{background:#18181b;color:#fff;border-color:#18181b}}.button:disabled{{opacity:.45;cursor:not-allowed}}.panel-actions{{display:flex;gap:7px;align-items:center}}.linkbtn{{border:0;background:transparent;padding:0;color:#18181b;text-decoration:underline;text-decoration-color:#a1a1aa;text-underline-offset:3px;font:inherit;font-weight:700;cursor:pointer}}.set-detail{{display:grid;grid-template-columns:1fr 1fr;gap:10px 16px;margin-bottom:12px}}.set-rules{{display:flex;flex-direction:column;gap:8px}}.set-rule{{display:flex;justify-content:space-between;gap:10px;padding:9px 10px;border:1px solid var(--line);border-radius:8px;background:#fafafa;font-size:11px}}.activity{{padding:3px 14px 8px}}.activity-row{{display:grid;grid-template-columns:110px 1fr auto;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid #f0f0f1;font-size:12px}}.activity-row:last-child{{border-bottom:0}}.mobile-list{{display:none;gap:9px}}.mcard{{background:#fff;border:1px solid var(--line);border-radius:11px;padding:13px}}.mhead{{display:flex;justify-content:space-between;gap:10px;margin-bottom:10px}}.mtitle{{font-size:13px;font-weight:750}}.msub{{font-size:10px;color:var(--muted);margin-top:2px}}.mgrid{{display:grid;grid-template-columns:1fr 1fr;gap:8px 12px}}.fl{{font-size:9px;color:var(--muted);margin-bottom:2px}}.fv{{font-size:12px;font-weight:650;overflow-wrap:anywhere}}.drawer-bg{{display:none;position:fixed;inset:0;background:rgba(24,24,27,.18);z-index:50}}.drawer-bg.open{{display:block}}.drawer{{position:absolute;right:0;top:0;bottom:0;width:min(440px,95vw);background:#fff;padding:22px;overflow:auto}}.drawer-head{{display:flex;justify-content:space-between;gap:12px;margin-bottom:18px}}.drawer h2{{font-size:19px;margin:3px 0 7px}}.iconbtn{{width:32px;height:32px;border:1px solid var(--line);background:#fff;border-radius:8px;cursor:pointer}}.section{{padding:16px 0;border-top:1px solid var(--line)}}.section-title{{font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin-bottom:10px}}.modal-bg{{display:none;position:fixed;inset:0;background:rgba(24,24,27,.22);z-index:60;padding:28px}}.modal-bg.open{{display:flex;align-items:flex-start;justify-content:center}}.modal{{width:min(1180px,100%);max-height:calc(100vh - 56px);overflow:auto;background:#fff;border-radius:12px;border:1px solid var(--line);box-shadow:0 20px 50px rgba(24,24,27,.14)}}.modal-head{{padding:14px 16px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:12px;position:sticky;top:0;background:#fff;z-index:2}}.modal-title{{font-size:14px;font-weight:750}}.modal-body{{padding:14px 16px}}.filter-grid{{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:14px}}.filter-field label{{display:block;font-size:10px;color:var(--muted);margin-bottom:4px}}.filter-field input,.filter-field select{{width:100%;border:1px solid var(--line2);border-radius:8px;padding:8px 9px;font-size:12px;background:#fff}}.modal-actions{{display:flex;gap:8px;justify-content:flex-end;margin-top:10px}}@media(max-width:900px){{.cards{{grid-template-columns:repeat(2,1fr)}}}}@media(max-width:760px){{:root{{--page-pad:12px}}body{{background:#fff}}.app{{display:block}}.main{{padding-bottom:0}}.toolbar{{height:auto;min-height:54px}}.toolbar-inner{{min-height:54px;height:auto;padding-block:8px}}.brand-top{{font-size:14px}}.utility-actions{{gap:5px;flex-wrap:wrap;justify-content:flex-end}}.utility-btn{{padding:5px 7px;font-size:10px}}.tabsbar{{}}.tabs{{height:38px;gap:18px}}.tabbtn{{font-size:11px;padding-bottom:8px}}.content{{padding-top:8px;padding-bottom:12px}}.cards{{display:flex;gap:6px;overflow-x:auto;flex-wrap:nowrap;padding-bottom:2px;scrollbar-width:none}}.card{{flex:0 0 132px;min-width:132px;padding:8px 9px}}.value{{font-size:15px}}.desktop-table{{display:none}}.mobile-list{{display:grid}}.panel{{margin-bottom:11px}}.panel-head{{padding:10px 11px}}.activity{{padding:0 11px 6px}}.activity-row{{grid-template-columns:70px 1fr;font-size:11px}}.activity-row>:last-child{{display:none}}.filters{{width:100%}}.search{{width:100%;min-width:0}}.panel-actions{{gap:5px}}.panel-actions .button{{padding:6px 8px;font-size:10px}}.modal-bg{{padding:0}}.modal{{width:100%;height:100%;max-height:none;border-radius:0}}.filter-grid{{grid-template-columns:1fr 1fr}}.drawer{{width:100%;padding:16px}}.set-detail{{grid-template-columns:1fr 1fr}}.set-rule{{display:block}}.set-rule span{{display:block}}.set-rule span+span{{margin-top:4px;color:var(--muted)}}}}
+:root{{--bg:#f6f7f9;--panel:#fff;--text:#18181b;--muted:#71717a;--line:#e4e4e7;--line2:#d4d4d8;--green:#15803d;--greenbg:#f0fdf4;--blue:#1d4ed8;--bluebg:#eff6ff;--amber:#a16207;--amberbg:#fffbeb;--red:#b91c1c;--redbg:#fef2f2;--page-max:1440px;--page-pad:22px}}*{{box-sizing:border-box}}body{{margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--bg);color:var(--text)}}button,input,select{{font:inherit}}.app{{min-height:100vh}}.main{{min-width:0}}.container{{width:100%;max-width:var(--page-max);margin:0 auto;padding-inline:var(--page-pad)}}.toolbar{{height:58px;background:#fff;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:20}}.toolbar-inner{{height:58px;display:flex;align-items:center;justify-content:space-between}}a{{color:inherit}}.brand-top{{font-weight:780;font-size:15px;letter-spacing:-.01em}}.utility-actions{{display:flex;align-items:center;gap:8px}}.utility-actions form{{margin:0}}.utility-btn{{border:1px solid var(--line2);background:#fff;border-radius:8px;padding:6px 9px;font-size:11px;font-weight:700;color:#3f3f46;cursor:pointer}}.stop-btn{{background:var(--redbg);border-color:#fecaca;color:var(--red)}}.resume-btn{{background:#18181b;border-color:#18181b;color:#fff}}.env-switch{{display:inline-flex;align-items:center;gap:4px;background:#f7f7f8;border:1px solid #ececef;border-radius:999px;padding:2px}}.env-switch button{{border:0;background:transparent;padding:5px 10px;border-radius:999px;font-size:10px;font-weight:700;color:#8a8a91;cursor:pointer;letter-spacing:.02em}}.env-switch button.active.live,.env-switch button.active.test{{background:#fff;color:#27272a;box-shadow:0 1px 2px rgba(24,24,27,.07)}}.tabsbar{{background:#fff;border-bottom:1px solid var(--line)}}.tabs{{display:flex;gap:22px;height:40px;align-items:flex-end}}.tabbtn{{border:0;background:transparent;padding:0 0 9px;color:#71717a;font-size:12px;font-weight:700;cursor:pointer;border-bottom:2px solid transparent}}.tabbtn.active{{color:#18181b;border-bottom-color:#18181b}}.content{{padding-top:10px;padding-bottom:18px}}.page{{display:none}}.page.active{{display:block}}.context-strip{{display:flex;gap:7px;align-items:center;flex-wrap:wrap;margin-bottom:8px;font-size:11px;color:#52525b}}.context-strip span:not(.badge){{border:1px solid var(--line);background:#fff;border-radius:8px;padding:5px 8px}}.cards{{display:flex;gap:7px;margin-bottom:9px;overflow-x:auto;flex-wrap:nowrap;scrollbar-width:none}}.cards::-webkit-scrollbar{{display:none}}.card{{background:#fff;border:1px solid var(--line);border-radius:9px;padding:9px 11px;min-height:0;flex:1 0 142px;min-width:142px}}.label{{font-size:9px;color:var(--muted);margin-bottom:3px}}.value{{font-size:16px;font-weight:750;line-height:1.15;overflow-wrap:anywhere}}.sub{{font-size:9px;color:var(--muted);margin-top:2px}}.positive{{color:var(--green)}}.panel{{background:#fff;border:1px solid var(--line);border-radius:11px;overflow:hidden;margin-bottom:11px}}.panel-head{{padding:12px 14px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:12px}}.panel-title{{font-size:13px;font-weight:700}}.panel-meta{{font-size:10px;color:var(--muted);margin-top:2px}}.table-wrap{{overflow:auto}}table{{width:100%;border-collapse:collapse;font-size:12px}}th{{padding:9px 11px;background:#fafafa;border-bottom:1px solid var(--line);text-align:left;font-size:10px;color:#71717a;text-transform:uppercase;letter-spacing:.03em;white-space:nowrap}}td{{padding:11px;border-bottom:1px solid #f0f0f1;white-space:nowrap;vertical-align:top}}tbody tr:last-child td{{border-bottom:0}}.evidence-detail{{display:table-row;background:#fcfcfd}}.mono{{font-family:"SFMono-Regular",Consolas,monospace;font-size:11px}}.muted{{color:var(--muted)}}.badge{{display:inline-flex;padding:4px 7px;border-radius:999px;font-size:10px;font-weight:750;border:1px solid transparent}}.badge.live{{background:#18181b;color:#fff}}.badge.test{{background:#fff;color:#52525b;border-color:#d4d4d8}}.badge.green{{background:var(--greenbg);color:var(--green);border-color:#dcfce7}}.badge.blue{{background:var(--bluebg);color:var(--blue);border-color:#dbeafe}}.badge.amber{{background:var(--amberbg);color:var(--amber);border-color:#fef3c7}}.badge.gray{{background:#f4f4f5;color:#52525b;border-color:#e4e4e7}}.filters{{display:flex;gap:8px;align-items:center;flex-wrap:wrap}}.search,select{{border:1px solid var(--line2);background:#fff;border-radius:8px;padding:8px 10px;font-size:12px;outline:none}}.search{{min-width:220px}}.button{{border:1px solid var(--line2);background:#fff;padding:8px 10px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer}}.button.dark{{background:#18181b;color:#fff;border-color:#18181b}}.button:disabled{{opacity:.45;cursor:not-allowed}}.panel-actions{{display:flex;gap:7px;align-items:center}}.linkbtn{{border:0;background:transparent;padding:0;color:#18181b;text-decoration:underline;text-decoration-color:#a1a1aa;text-underline-offset:3px;font:inherit;font-weight:700;cursor:pointer}}.set-detail{{display:grid;grid-template-columns:1fr 1fr;gap:10px 16px;margin-bottom:12px}}.set-rules{{display:flex;flex-direction:column;gap:8px}}.set-rule{{display:flex;justify-content:space-between;gap:10px;padding:9px 10px;border:1px solid var(--line);border-radius:8px;background:#fafafa;font-size:11px}}.activity{{padding:3px 14px 8px}}.activity-row{{display:grid;grid-template-columns:110px 1fr auto;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid #f0f0f1;font-size:12px}}.activity-row:last-child{{border-bottom:0}}.mobile-list{{display:none;gap:9px}}.mcard{{background:#fff;border:1px solid var(--line);border-radius:11px;padding:13px}}.mhead{{display:flex;justify-content:space-between;gap:10px;margin-bottom:10px}}.mtitle{{font-size:13px;font-weight:750}}.msub{{font-size:10px;color:var(--muted);margin-top:2px}}.mgrid{{display:grid;grid-template-columns:1fr 1fr;gap:8px 12px}}.fl{{font-size:9px;color:var(--muted);margin-bottom:2px}}.fv{{font-size:12px;font-weight:650;overflow-wrap:anywhere}}.drawer-bg{{display:none;position:fixed;inset:0;background:rgba(24,24,27,.18);z-index:50}}.drawer-bg.open{{display:block}}.drawer{{position:absolute;right:0;top:0;bottom:0;width:min(440px,95vw);background:#fff;padding:22px;overflow:auto}}.drawer-head{{display:flex;justify-content:space-between;gap:12px;margin-bottom:18px}}.drawer h2{{font-size:19px;margin:3px 0 7px}}.iconbtn{{width:32px;height:32px;border:1px solid var(--line);background:#fff;border-radius:8px;cursor:pointer}}.section{{padding:16px 0;border-top:1px solid var(--line)}}.section-title{{font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin-bottom:10px}}.modal-bg{{display:none;position:fixed;inset:0;background:rgba(24,24,27,.22);z-index:60;padding:28px}}.modal-bg.open{{display:flex;align-items:flex-start;justify-content:center}}.modal{{width:min(1180px,100%);max-height:calc(100vh - 56px);overflow:auto;background:#fff;border-radius:12px;border:1px solid var(--line);box-shadow:0 20px 50px rgba(24,24,27,.14)}}.modal-head{{padding:14px 16px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:12px;position:sticky;top:0;background:#fff;z-index:2}}.modal-title{{font-size:14px;font-weight:750}}.modal-body{{padding:14px 16px}}.filter-grid{{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:14px}}.filter-field label{{display:block;font-size:10px;color:var(--muted);margin-bottom:4px}}.filter-field input,.filter-field select{{width:100%;border:1px solid var(--line2);border-radius:8px;padding:8px 9px;font-size:12px;background:#fff}}.modal-actions{{display:flex;gap:8px;justify-content:flex-end;margin-top:10px}}@media(max-width:900px){{.cards{{grid-template-columns:repeat(2,1fr)}}}}@media(max-width:760px){{:root{{--page-pad:12px}}body{{background:#fff}}.app{{display:block}}.main{{padding-bottom:0}}.toolbar{{height:auto;min-height:54px}}.toolbar-inner{{min-height:54px;height:auto;padding-block:8px}}.brand-top{{font-size:14px}}.utility-actions{{gap:5px;flex-wrap:wrap;justify-content:flex-end}}.utility-btn{{padding:5px 7px;font-size:10px}}.tabsbar{{}}.tabs{{height:38px;gap:18px}}.tabbtn{{font-size:11px;padding-bottom:8px}}.content{{padding-top:8px;padding-bottom:12px}}.cards{{display:flex;gap:6px;overflow-x:auto;flex-wrap:nowrap;padding-bottom:2px;scrollbar-width:none}}.card{{flex:0 0 132px;min-width:132px;padding:8px 9px}}.value{{font-size:15px}}.desktop-table{{display:none}}.mobile-list{{display:grid}}.panel{{margin-bottom:11px}}.panel-head{{padding:10px 11px}}.activity{{padding:0 11px 6px}}.activity-row{{grid-template-columns:70px 1fr;font-size:11px}}.activity-row>:last-child{{display:none}}.filters{{width:100%}}.search{{width:100%;min-width:0}}.panel-actions{{gap:5px}}.panel-actions .button{{padding:6px 8px;font-size:10px}}.modal-bg{{padding:0}}.modal{{width:100%;height:100%;max-height:none;border-radius:0}}.filter-grid{{grid-template-columns:1fr 1fr}}.drawer{{width:100%;padding:16px}}.set-detail{{grid-template-columns:1fr 1fr}}.set-rule{{display:block}}.set-rule span{{display:block}}.set-rule span+span{{margin-top:4px;color:var(--muted)}}}}
 .evidence-detail td{{white-space:normal}}.evidence-detail .set-detail{{min-width:0}}.analytics-compact table{{table-layout:fixed}}.analytics-compact th,.analytics-compact td{{padding-inline:7px;white-space:normal;overflow-wrap:anywhere;line-height:1.25}}.analytics-compact th{{font-size:9px}}.analytics-compact td{{font-size:11px}}@media(max-width:760px){{.table-wrap table{{min-width:720px}}.evidence-detail .set-detail{{grid-template-columns:1fr 1fr}}}}@media(max-width:480px){{.toolbar-inner{{flex-wrap:wrap;align-content:center;gap:6px}}.utility-actions{{width:100%;justify-content:flex-start}}.table-wrap table{{min-width:680px}}.evidence-detail .set-detail{{grid-template-columns:1fr}}}}
 @media(max-width:620px){{.toolbar{{height:auto;min-height:88px}}.toolbar-inner{{display:grid;grid-template-columns:1fr;height:auto;min-height:88px;align-content:center;gap:7px;padding-block:8px}}.brand-top{{min-width:0}}.utility-actions{{width:100%;max-width:100%;justify-content:flex-start;overflow-x:auto;scrollbar-width:none}}.utility-actions::-webkit-scrollbar{{display:none}}}}
 </style>

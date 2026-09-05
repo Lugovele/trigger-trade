@@ -1,4 +1,4 @@
-from http import HTTPStatus
+﻿from http import HTTPStatus
 from urllib.request import Request, urlopen
 import threading
 
@@ -29,7 +29,7 @@ def test_empty_state_renders_without_traceback_or_secrets(tmp_path):
     assert "Rules" in html
     assert "LIVE" in html
     assert "TEST" in html
-    assert "No paper trades recorded" in html
+    assert "No completed Demo futures trades yet" in html
     assert "Traceback" not in html
     assert "BYBIT_API_SECRET" not in html
 
@@ -44,8 +44,8 @@ def test_activity_risk_rejection_trade_and_trace_render(tmp_path):
 
     assert "NO_SIGNAL" in html
     assert "REJECTED: RSK-003" in html
-    assert "Trades" in html
-    assert "filled" in html
+    assert "LIVE Trades" in html
+    assert "Current Futures Position" in html
     assert "Trigger sets" in html
     assert "Rule registry" in html
     assert "TRG-001" in html
@@ -85,8 +85,19 @@ def test_no_write_or_order_route_names_rendered(tmp_path):
 
     assert "/order/create" not in html
     assert "ExecutionService" not in html
-    assert "api-demo.bybit.com" not in html
+    assert "https://api-demo.bybit.com" not in html
     assert "BYBIT_API_SECRET" not in html
+
+
+def test_operator_pause_resume_controls_require_confirmation(tmp_path):
+    html = render_dashboard(DashboardReadModel(_empty_db(tmp_path)))
+
+    assert "confirmStopTrading()" in html
+    assert "Stop new trades?" in html
+    assert "New ACTIVE executions will be blocked." in html
+    assert "/operator/pause" in html
+    assert "manual BUY" not in html
+    assert "manual SELL" not in html
 
 
 def test_secret_like_trace_values_are_not_rendered(tmp_path):

@@ -1,4 +1,4 @@
-# TriggerTrade Development Infrastructure
+﻿# TriggerTrade Development Infrastructure
 
 TriggerTrade is a small personal automated crypto trading bot for a limited watchlist of coins.
 
@@ -38,6 +38,8 @@ The dashboard and continuous paper runtime resolve the same SQLite path from `.e
 On startup they call the shared canonical registry bootstrap before opening runtime/read services. Configured Rule Versions, Trigger Sets, and Recommendations are visible even before runtime evidence exists.
 
 The dashboard is intentionally read-only for trading logic after startup initialization. It does not evaluate triggers, create strategy decisions, approve risk, call execution services, place/cancel orders, or expose API credentials. The startup bootstrap stores only canonical registry metadata, not fake candles, trades, fills, P&L, or performance evidence. Futures P&L shown in the dashboard must come from the backend accounting store; alerts remain deferred.
+
+The dashboard product surface is futures-first: LIVE means the ACTIVE Bybit Demo linear-perpetual lane, not mainnet trading, and TEST means local deterministic futures simulation. It shows account/equity, position, trade, fee, funding, regime, readiness, and recommendation fields only when the backend has persisted authoritative facts. Take-profit, stop-loss, liquidation, margin, or P&L fields that do not yet have backend support are rendered as Not configured, Not available, or unavailable instead of being calculated in the frontend.
 ## Trigger Sets and Lanes
 
 The runtime now bootstraps versioned trigger sets and evaluates the current ACTIVE set alongside TESTING sets over the same completed candle. ACTIVE remains the only lane connected to paper execution. TEST lanes are persisted for comparison and dashboard visibility only; they do not submit Bybit orders or change trading configuration.

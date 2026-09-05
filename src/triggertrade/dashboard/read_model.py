@@ -1,4 +1,4 @@
-"""Read-only dashboard query model over TriggerTrade SQLite persistence."""
+﻿"""Read-only dashboard query model over TriggerTrade SQLite persistence."""
 
 from __future__ import annotations
 
@@ -192,6 +192,7 @@ class FuturesTradeRow:
 @dataclass(frozen=True)
 class FuturesClosedTradeRow:
     trade_id: str
+    opened_at: str
     closed_at: str
     symbol: str
     direction: str
@@ -206,6 +207,31 @@ class FuturesClosedTradeRow:
     duration_seconds: int
     trigger_set: str
     regime: str
+    accounting_version: str
+    evidence_source: str
+    simulation_model_version: str
+    entry_slippage: str
+    exit_slippage: str
+
+
+@dataclass(frozen=True)
+class FuturesPositionView:
+    state: str
+    symbol: str
+    direction: str
+    quantity: str
+    entry: str
+    mark: str
+    leverage: str
+    liquidation: str
+    take_profit: str
+    stop_loss: str
+    notional: str
+    unrealized_pnl: str
+    trigger_set: str
+    regime: str
+    opened_at: str
+    source: str
 
 
 @dataclass(frozen=True)
@@ -1067,7 +1093,10 @@ class DashboardReadModel:
             with self._connect() as conn:
                 rows = conn.execute(
                     """
-                    SELECT *
+                    SELECT intent_id, risk_decision_id, client_order_id, symbol,
+                           category, position_action, exchange_side, requested_qty,
+                           requested_price, leverage, status, expected_net_edge,
+                           updated_at
                     FROM futures_execution_orders
                     ORDER BY updated_at DESC
                     LIMIT ?
@@ -1102,7 +1131,12 @@ class DashboardReadModel:
             with self._connect() as conn:
                 rows = conn.execute(
                     """
-                    SELECT *
+                    SELECT trade_id, opened_at, closed_at, symbol, direction, quantity,
+                           leverage, entry_vwap, exit_vwap, gross_pnl, entry_fee,
+                           exit_fee, other_fees, funding, net_pnl, duration_seconds,
+                           accounting_version, trigger_set_id, trigger_set_version,
+                           regime_label, entry_slippage_cost, exit_slippage_cost,
+                           evidence_source, simulation_model_version
                     FROM futures_closed_trades
                     ORDER BY closed_at DESC
                     LIMIT ?
@@ -1114,6 +1148,7 @@ class DashboardReadModel:
         return tuple(
             FuturesClosedTradeRow(
                 trade_id=row["trade_id"],
+                opened_at=row["opened_at"],
                 closed_at=row["closed_at"],
                 symbol=row["symbol"],
                 direction=row["direction"],
@@ -1128,10 +1163,108 @@ class DashboardReadModel:
                 duration_seconds=int(row["duration_seconds"]),
                 trigger_set=_compact_set(row["trigger_set_id"], row["trigger_set_version"]),
                 regime=row["regime_label"] or "unavailable",
+                accounting_version=row["accounting_version"],
+                evidence_source=row["evidence_source"],
+                simulation_model_version=row["simulation_model_version"] or "-",
+                entry_slippage=row["entry_slippage_cost"] or "unavailable",
+                exit_slippage=row["exit_slippage_cost"] or "unavailable",
             )
             for row in rows
         )
 
+    def list_closed_trades_by_source(self, source: str, limit: int = 20) -> tuple[FuturesClosedTradeRow, ...]:
+        if not self.db_path.exists():
+            return ()
+        try:
+            with self._connect() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT trade_id, opened_at, closed_at, symbol, direction, quantity,
+                           leverage, entry_vwap, exit_vwap, gross_pnl, entry_fee,
+                           exit_fee, other_fees, funding, net_pnl, duration_seconds,
+                           accounting_version, trigger_set_id, trigger_set_version,
+                           regime_label, entry_slippage_cost, exit_slippage_cost,
+                           evidence_source, simulation_model_version
+                    FROM futures_closed_trades
+                    WHERE evidence_source = ?
+                    ORDER BY closed_at DESC
+                    LIMIT ?
+                    """,
+                    (source, limit),
+                ).fetchall()
+        except sqlite3.Error:
+            return ()
+        return tuple(
+            FuturesClosedTradeRow(
+                trade_id=row["trade_id"],
+                opened_at=row["opened_at"],
+                closed_at=row["closed_at"],
+                symbol=row["symbol"],
+                direction=row["direction"],
+                quantity=row["quantity"],
+                leverage=row["leverage"],
+                entry_vwap=row["entry_vwap"],
+                exit_vwap=row["exit_vwap"],
+                gross_pnl=row["gross_pnl"],
+                fees=str(row["entry_fee"]) + " + " + str(row["exit_fee"]) + " + " + str(row["other_fees"]),
+                funding=row["funding"],
+                net_pnl=row["net_pnl"],
+                duration_seconds=int(row["duration_seconds"]),
+                trigger_set=_compact_set(row["trigger_set_id"], row["trigger_set_version"]),
+                regime=row["regime_label"] or "unavailable",
+                accounting_version=row["accounting_version"],
+                evidence_source=row["evidence_source"],
+                simulation_model_version=row["simulation_model_version"] or "-",
+                entry_slippage=row["entry_slippage_cost"] or "unavailable",
+                exit_slippage=row["exit_slippage_cost"] or "unavailable",
+            )
+            for row in rows
+        )
+
+    def get_current_futures_position(self) -> FuturesPositionView:
+        if not self.db_path.exists():
+            return _unavailable_position("runtime DB not present")
+        return _unavailable_position("no authoritative futures position snapshot recorded")
+
+    def get_futures_trade_detail(self, trade_id: str) -> dict[str, Any] | None:
+        safe_trade_id = str(trade_id)[:160]
+        if not self.db_path.exists():
+            return None
+        try:
+            with self._connect() as conn:
+                trade = _fetch_optional(
+                    conn,
+                    """
+                    SELECT trade_id, opened_at, closed_at, symbol, direction, quantity,
+                           leverage, entry_vwap, exit_vwap, gross_pnl, entry_fee,
+                           exit_fee, other_fees, funding, net_pnl, duration_seconds,
+                           accounting_version, trigger_set_id, trigger_set_version,
+                           regime_label, entry_slippage_cost, exit_slippage_cost,
+                           evidence_source, simulation_model_version
+                    FROM futures_closed_trades
+                    WHERE trade_id = ?
+                    """,
+                    (safe_trade_id,),
+                )
+                if trade is None:
+                    return None
+                fills = conn.execute(
+                    """
+                    SELECT event_id, execution_id, action, quantity, price, fee,
+                           fee_asset, occurred_at, requested_price, source
+                    FROM futures_accounting_fills
+                    WHERE trade_id = ?
+                    ORDER BY occurred_at, event_id
+                    """,
+                    (safe_trade_id,),
+                ).fetchall()
+        except sqlite3.Error:
+            return None
+        value = _safe_dict(dict(trade))
+        value["trigger_set"] = _compact_set(value.get("trigger_set_id"), value.get("trigger_set_version"))
+        value["fees"] = f"{value.get('entry_fee')} + {value.get('exit_fee')} + {value.get('other_fees')}"
+        value["fills"] = tuple(_safe_dict(dict(row)) for row in fills)
+        return value
     def get_latest_futures_equity(self) -> FuturesEquityRow | None:
         if not self.db_path.exists():
             return None
@@ -1569,6 +1702,25 @@ def _activity_row(row: sqlite3.Row) -> ActivityRow:
     )
 
 
+def _unavailable_position(reason: str) -> FuturesPositionView:
+    return FuturesPositionView(
+        state="Not available",
+        symbol="BTCUSDT",
+        direction="Not available",
+        quantity="-",
+        entry="-",
+        mark="-",
+        leverage="-",
+        liquidation="Not available",
+        take_profit="Not configured",
+        stop_loss="Not configured",
+        notional="-",
+        unrealized_pnl="unavailable",
+        trigger_set="-",
+        regime="unavailable",
+        opened_at="-",
+        source=reason,
+    )
 def _trade_row(row: sqlite3.Row) -> PaperTradeRow:
     return PaperTradeRow(
         time=row["fill_time"] or row["updated_at"],
