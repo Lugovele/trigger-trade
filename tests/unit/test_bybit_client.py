@@ -63,6 +63,7 @@ def test_authenticated_wallet_request_signing_headers():
 def test_wallet_balance_is_the_only_private_surface_on_client():
     public_or_safe = {
         "instrument_metadata",
+        "linear_historical_candles",
         "linear_instrument_metadata",
         "linear_recent_candles",
         "linear_position_list",

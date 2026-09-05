@@ -135,6 +135,26 @@ class BybitDemoClient:
             },
         )
 
+    def linear_historical_candles(
+        self,
+        symbol: str = "BTCUSDT",
+        interval: str = "1",
+        start_ms: int | None = None,
+        end_ms: int | None = None,
+        limit: int = 200,
+    ) -> BybitResponse:
+        query = {
+            "category": "linear",
+            "symbol": _linear_symbol(symbol),
+            "interval": interval,
+            "limit": str(limit),
+        }
+        if start_ms is not None:
+            query["start"] = str(start_ms)
+        if end_ms is not None:
+            query["end"] = str(end_ms)
+        return self._public_get("/v5/market/kline", query)
+
     def wallet_balance(self, account_type: str = "UNIFIED") -> BybitResponse:
         if self._credentials is None:
             raise BybitApiError("Bybit credentials are required for private connectivity")

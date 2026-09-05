@@ -181,3 +181,15 @@ factor, net P&L, fees, funding, direction and regime diagnostic breakdowns,
 sample warnings, and overlapping ACTIVE/TEST comparison. `CTX-REGIME@0.1.0`
 is now in scope as observed-state context only, not as a trading trigger.
 Real-money execution remains out of scope.
+
+## Historical Replay MVP Scope
+
+In scope: a narrow internal replay engine for Bybit Demo public BTCUSDT linear
+perpetual 1m candles, exact Trigger Set Version replay, source-aware
+`BACKTEST` evidence, no-lookahead simulation, deterministic accounting-backed
+performance, immutable run records, and read-only dashboard visibility.
+
+Out of scope: a generalized backtesting platform, optimization, parameter
+search, synthetic performance fabrication, automatic promotion, private/order
+API calls during replay, multi-symbol historical research, and any new trading
+semantics beyond the already approved rule versions.

@@ -303,6 +303,19 @@ closed-trade periods. Missing overlap, missing sample, or unavailable accounting
 facts must be shown as unavailable, not filled with defaults. Performance
 analytics do not auto-promote, mutate rules, or claim statistical significance.
 
+## Historical Replay Rule Use
+
+Historical replay must execute exact immutable Trigger Set and Rule Versions.
+It is evidence collection, not a new alpha rule and not a parameter optimizer.
+Replay may compare ACTIVE and TESTING sets only over the same historical period,
+source, simulator, accounting and cost model. A replay result can support human
+review, but it cannot promote a set, mutate thresholds, create a new rule
+version, or imply that a single trigger is independently profitable.
+
+Replay decisions obey no-lookahead semantics: the strategy decision at candle
+`t` may use only completed data available through `t`, and simulated execution
+may fill no earlier than candle `t+1`.
+
 ## TRG-002 Robust Volume Confirmation
 
 Canonical rule id: `TRG-002`. Logical/display name: `TRG-VOLUME` / `Robust Volume Confirmation`. Initial version: `0.1.0`. Status: `TESTING` candidate only.

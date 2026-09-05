@@ -66,6 +66,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
             else:
                 self._send_html(render_trade_detail(detail))
             return
+        if parsed.path.startswith("/backtests/"):
+            run_id = unquote(parsed.path.removeprefix("/backtests/"))
+            detail = self.server.read_model.get_backtest_detail(run_id)
+            if detail is None:
+                self._send_html(render_not_found(parsed.path), HTTPStatus.NOT_FOUND)
+            else:
+                self._send_html(render_backtest_detail(detail))
+            return
         if parsed.path.startswith("/recommendations/"):
             recommendation_id = unquote(parsed.path.removeprefix("/recommendations/"))
             detail = self.server.read_model.get_recommendation(recommendation_id)
@@ -146,6 +154,7 @@ def render_dashboard(read_model: DashboardReadModel, selected_set: str = "", ini
     baseline_comparisons = getattr(read_model, "list_baseline_comparisons", lambda: ())()
     current_regime = getattr(read_model, "get_current_market_regime", lambda: None)()
     regime_analytics = getattr(read_model, "list_regime_analytics", lambda: ())()
+    backtest_runs = getattr(read_model, "list_backtest_runs", lambda: ())()
     live_trace = read_model.get_latest_lane_trace("ACTIVE")
     test_trace = read_model.get_latest_lane_trace("TEST")
     return _page(
@@ -170,7 +179,7 @@ def render_dashboard(read_model: DashboardReadModel, selected_set: str = "", ini
       {_overview_section("testOverview", test, (), test_closed_trades, test_trace, False, current_regime, None, None, operator_state)}
     </section>
     <section class="page {_active_page(initial_page, 'rules')}" id="rules">{_trigger_sets_panel(trigger_sets)}{_rules_panel(rules)}</section>
-    <section class="page {_active_page(initial_page, 'analytics')}" id="analytics">{_test_evidence_panel(test_evidence)}{_regime_analytics_panel(regime_analytics)}{_futures_accounting_panel(futures_equity, futures_closed_trades)}{_futures_panel(futures_trades)}{_performance_panel(performance)}{_baseline_comparison_panel(baseline_comparisons)}{_recommendations_panel(recommendations)}</section>
+    <section class="page {_active_page(initial_page, 'analytics')}" id="analytics">{_historical_tests_panel(backtest_runs)}{_test_evidence_panel(test_evidence)}{_regime_analytics_panel(regime_analytics)}{_futures_accounting_panel(futures_equity, futures_closed_trades)}{_futures_panel(futures_trades)}{_performance_panel(performance)}{_baseline_comparison_panel(baseline_comparisons)}{_recommendations_panel(recommendations)}</section>
     <section class="page {_active_page(initial_page, 'logs')}" id="logs"><div class="panel"><div class="activity">{_logs(logs)}</div></div></section>
     <section class="page {_active_page(initial_page, 'settings')}" id="settings">{_health_panel(health)}<div class="panel"><div class="panel-head"><div class="panel-title">Connection events</div></div><div class="activity">{_logs(logs[:5])}</div></div></section>
   </div>
@@ -524,6 +533,31 @@ def render_recommendation_detail(detail) -> str:
 </div></main></div>
 """,
     )
+
+
+def render_backtest_detail(detail: dict) -> str:
+    run = detail.get("run") or {}
+    result = detail.get("result") or {}
+    rules = ", ".join("@".join(item) for item in run.get("rule_versions", ()))
+    return _page(
+        f"Backtest {_short(detail.get('run_id'))}",
+        f"""
+<div class="app"><main class="main"><div class="toolbar"><div class="container toolbar-inner"><a class="brand-top" href="/">TriggerTrade</a><div class="utility-actions"><a class="utility-btn" href="/analytics">Analytics</a></div></div></div>
+<div class="tabsbar"><div class="container tabsbar-inner"><div class="tabs"><a class="tabbtn active" href="/backtests/{_h(detail.get('run_id'))}">Backtest Detail</a><a class="tabbtn" href="/analytics">Historical Tests</a></div></div></div>
+<div class="content container">
+  <section class="panel"><div class="panel-head"><div><div class="panel-title">Historical Replay Detail</div><div class="panel-meta">Read-only BACKTEST evidence; no private/order API calls and no auto-promotion.</div></div>{_status_badge(str(detail.get('status', 'UNKNOWN')))}</div><div class="section"><div class="set-detail">{_kv('Run', detail.get('run_id'))}{_kv('Set', str(run.get('trigger_set_id', '-')) + '@' + str(run.get('trigger_set_version', '-')))}{_kv('Period', str(run.get('period_start', '-')) + ' -> ' + str(run.get('period_end', '-')))}{_kv('Warmup', str(run.get('warmup_start', '-')) + ' -> ' + str(run.get('evaluation_start', '-')))}{_kv('Rules', rules)}{_kv('Strategy', run.get('strategy_version'))}{_kv('Regime', run.get('regime_version'))}{_kv('Risk', run.get('risk_profile_version'))}{_kv('Simulator', run.get('simulation_model_version'))}{_kv('Cost model', run.get('cost_model_version'))}{_kv('Funding model', run.get('funding_model_version'))}{_kv('Accounting', run.get('accounting_version'))}{_kv('Data source', run.get('data_source_version'))}{_kv('Cache hash', run.get('data_cache_hash'))}{_kv('No-lookahead', 'decision after candle t; earliest fill on candle t+1')}</div></div></section>
+  <section class="panel"><div class="panel-head"><div><div class="panel-title">Result Summary</div><div class="panel-meta">Backend replay/accounting/performance facts only.</div></div></div><div class="section"><div class="set-detail">{_kv('Candles processed', result.get('candles_processed'))}{_kv('Signals', result.get('signals'))}{_kv('Intents', result.get('intents'))}{_kv('Closed trades', result.get('closed_trades'))}{_kv('Net P&L', result.get('net_pnl'))}{_kv('Expectancy', result.get('expectancy'))}{_kv('Profit factor', result.get('profit_factor'))}{_kv('Fees', result.get('fees'))}{_kv('Funding', result.get('funding'))}{_kv('LONG / SHORT', str(result.get('long_trades', 0)) + ' / ' + str(result.get('short_trades', 0)))}{_kv('Technical failures', result.get('technical_failures'))}</div></div></section>
+</div></main></div>
+""",
+    )
+
+
+def _historical_tests_panel(rows) -> str:
+    body = "".join(
+        f"<tr><td><a class='linkbtn mono' href='/backtests/{_h(row.run_id)}'>{_h(_short(row.run_id))}</a></td><td>{_h(row.trigger_set)}</td><td>{_h(row.period)}</td><td>{_status_badge(row.stage)}</td><td>{_h(row.simulation_model)}</td><td>{_status_badge(row.status)}</td><td>{_h(row.closed_trades)}</td><td>{_h(row.net_pnl)}</td><td>{_h(row.expectancy)}</td><td>{_h(row.profit_factor)}</td><td>{_h(row.max_drawdown)}</td><td>{_h(_compact(row.created_at))}</td></tr>"
+        for row in rows
+    ) or "<tr><td colspan='12' class='muted'>No historical BACKTEST runs recorded yet.</td></tr>"
+    return f"<div class='panel'><div class='panel-head'><div><div class='panel-title'>Historical Tests</div><div class='panel-meta'>Exact Trigger Set replay evidence; BACKTEST is separate from forward TEST and Demo execution.</div></div></div><div class='table-wrap analytics-compact'><table><thead><tr><th>Backtest Run</th><th>Set</th><th>Period</th><th>Stage</th><th>Simulation</th><th>Status</th><th>Trades</th><th>Net P&amp;L</th><th>Expectancy</th><th>PF</th><th>Max DD</th><th>Created</th></tr></thead><tbody>{body}</tbody></table></div></div>"
 
 
 def _performance_panel(rows) -> str:

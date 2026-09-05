@@ -250,6 +250,22 @@ class FuturesEquityRow:
 
 
 @dataclass(frozen=True)
+class BacktestRunRow:
+    run_id: str
+    status: str
+    created_at: str
+    trigger_set: str
+    period: str
+    stage: str
+    simulation_model: str
+    closed_trades: str
+    net_pnl: str
+    expectancy: str
+    profit_factor: str
+    max_drawdown: str
+
+
+@dataclass(frozen=True)
 class BaselineComparisonRow:
     candidate_set: str
     baseline_set: str
@@ -1037,9 +1053,10 @@ class DashboardReadModel:
             return None
         try:
             with self._connect() as conn:
+                non_backtest = _non_backtest_clause(conn)
                 row = _fetch_optional(
                     conn,
-                    "SELECT COUNT(*) AS count FROM futures_closed_trades WHERE trigger_set_id = ? AND trigger_set_version = ?",
+                    f"SELECT COUNT(*) AS count FROM futures_closed_trades WHERE trigger_set_id = ? AND trigger_set_version = ? {non_backtest}",
                     (set_id, version),
                 )
         except sqlite3.Error:
@@ -1129,8 +1146,9 @@ class DashboardReadModel:
             return ()
         try:
             with self._connect() as conn:
+                non_backtest = _non_backtest_clause(conn, prefix="WHERE")
                 rows = conn.execute(
-                    """
+                    f"""
                     SELECT trade_id, opened_at, closed_at, symbol, direction, quantity,
                            leverage, entry_vwap, exit_vwap, gross_pnl, entry_fee,
                            exit_fee, other_fees, funding, net_pnl, duration_seconds,
@@ -1138,6 +1156,7 @@ class DashboardReadModel:
                            regime_label, entry_slippage_cost, exit_slippage_cost,
                            evidence_source, simulation_model_version
                     FROM futures_closed_trades
+                    {non_backtest}
                     ORDER BY closed_at DESC
                     LIMIT ?
                     """,
@@ -1265,6 +1284,76 @@ class DashboardReadModel:
         value["fees"] = f"{value.get('entry_fee')} + {value.get('exit_fee')} + {value.get('other_fees')}"
         value["fills"] = tuple(_safe_dict(dict(row)) for row in fills)
         return value
+
+    def list_backtest_runs(self, limit: int = 20) -> tuple[BacktestRunRow, ...]:
+        if not self.db_path.exists():
+            return ()
+        try:
+            with self._connect() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT r.backtest_run_id, r.status, r.created_at, r.trigger_set_id,
+                           r.trigger_set_version, r.period_start, r.period_end,
+                           r.payload, b.payload AS result_payload
+                    FROM backtest_runs r
+                    LEFT JOIN backtest_results b ON b.backtest_run_id = r.backtest_run_id
+                    ORDER BY r.created_at DESC, r.backtest_run_id
+                    LIMIT ?
+                    """,
+                    (limit,),
+                ).fetchall()
+        except sqlite3.Error:
+            return ()
+        output = []
+        for row in rows:
+            payload = _json_dict(row["payload"])
+            result = _json_dict(row["result_payload"])
+            output.append(
+                BacktestRunRow(
+                    run_id=row["backtest_run_id"],
+                    status=row["status"],
+                    created_at=row["created_at"],
+                    trigger_set=_compact_set(row["trigger_set_id"], row["trigger_set_version"]),
+                    period=f"{row['period_start']} -> {row['period_end']}",
+                    stage="BACKTEST",
+                    simulation_model=str(payload.get("simulation_model_version") or "-"),
+                    closed_trades=str(result.get("closed_trades", "-")),
+                    net_pnl=str(result.get("net_pnl", "unavailable")),
+                    expectancy=str(result.get("expectancy", "unavailable")),
+                    profit_factor=str(result.get("profit_factor", "unavailable")),
+                    max_drawdown=str(result.get("max_drawdown", "unavailable")),
+                )
+            )
+        return tuple(output)
+
+    def get_backtest_detail(self, run_id: str) -> dict[str, Any] | None:
+        safe_run_id = str(run_id)[:160]
+        if not self.db_path.exists():
+            return None
+        try:
+            with self._connect() as conn:
+                row = _fetch_optional(
+                    conn,
+                    """
+                    SELECT r.backtest_run_id, r.status, r.created_at, r.payload,
+                           b.payload AS result_payload
+                    FROM backtest_runs r
+                    LEFT JOIN backtest_results b ON b.backtest_run_id = r.backtest_run_id
+                    WHERE r.backtest_run_id = ?
+                    """,
+                    (safe_run_id,),
+                )
+        except sqlite3.Error:
+            return None
+        if row is None:
+            return None
+        return {
+            "run_id": row["backtest_run_id"],
+            "status": row["status"],
+            "created_at": row["created_at"],
+            "run": _safe_dict(_json_dict(row["payload"])),
+            "result": _safe_dict(_json_dict(row["result_payload"])),
+        }
     def get_latest_futures_equity(self) -> FuturesEquityRow | None:
         if not self.db_path.exists():
             return None
@@ -1380,13 +1469,15 @@ class DashboardReadModel:
             signal_counts = {}
         try:
             with self._connect() as conn:
+                non_backtest = _non_backtest_clause(conn, prefix="WHERE")
                 trade_rows = conn.execute(
-                    """
+                    f"""
                     SELECT COALESCE(regime_label, 'unavailable') AS regime,
                            COUNT(*) AS closed_trades,
                            SUM(CASE WHEN direction = 'LONG' THEN 1 ELSE 0 END) AS long_trades,
                            SUM(CASE WHEN direction = 'SHORT' THEN 1 ELSE 0 END) AS short_trades
                     FROM futures_closed_trades
+                    {non_backtest}
                     GROUP BY COALESCE(regime_label, 'unavailable')
                     """
                 ).fetchall()
@@ -1739,6 +1830,7 @@ def _trade_row(row: sqlite3.Row) -> PaperTradeRow:
 def _accounting_trade_facts(conn: sqlite3.Connection, set_id: str, version: str) -> tuple[TradePerformanceFact, ...]:
     try:
         source_expr = "evidence_source" if _has_column(conn, "futures_closed_trades", "evidence_source") else "'exchange'"
+        non_backtest = _non_backtest_clause(conn)
         rows = conn.execute(
             f"""
             SELECT trade_id, trigger_set_id, trigger_set_version, symbol, direction,
@@ -1747,6 +1839,7 @@ def _accounting_trade_facts(conn: sqlite3.Connection, set_id: str, version: str)
                    COALESCE({source_expr}, 'exchange') AS evidence_source
             FROM futures_closed_trades
             WHERE trigger_set_id = ? AND trigger_set_version = ?
+              {non_backtest}
             ORDER BY closed_at, trade_id
             """,
             (set_id, version),
@@ -1778,6 +1871,7 @@ def _accounting_trade_facts(conn: sqlite3.Connection, set_id: str, version: str)
 def _accounting_trade_facts_by_regime(conn: sqlite3.Connection, regime: str) -> tuple[TradePerformanceFact, ...]:
     try:
         source_expr = "evidence_source" if _has_column(conn, "futures_closed_trades", "evidence_source") else "'exchange'"
+        non_backtest = _non_backtest_clause(conn)
         rows = conn.execute(
             f"""
             SELECT trade_id, trigger_set_id, trigger_set_version, symbol, direction,
@@ -1786,6 +1880,7 @@ def _accounting_trade_facts_by_regime(conn: sqlite3.Connection, regime: str) -> 
                    COALESCE({source_expr}, 'exchange') AS evidence_source
             FROM futures_closed_trades
             WHERE COALESCE(regime_label, 'unavailable') = ?
+              {non_backtest}
             ORDER BY closed_at, trade_id
             """,
             (regime,),
@@ -1812,6 +1907,12 @@ def _accounting_trade_facts_by_regime(conn: sqlite3.Connection, regime: str) -> 
         )
         for row in rows
     )
+
+
+def _non_backtest_clause(conn: sqlite3.Connection, *, prefix: str = "AND") -> str:
+    if not _has_column(conn, "futures_closed_trades", "evidence_source"):
+        return ""
+    return f"{prefix} COALESCE(evidence_source, 'exchange') != 'BACKTEST'"
 
 
 def _has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
@@ -1985,6 +2086,11 @@ def _json_value(raw: str) -> Any:
         return json.loads(raw)
     except (TypeError, json.JSONDecodeError):
         return raw
+
+
+def _json_dict(raw: Any) -> dict[str, Any]:
+    value = _json_value(raw)
+    return value if isinstance(value, dict) else {}
 
 
 def _json_list(raw: Any) -> list[str]:

@@ -164,3 +164,19 @@ approved: Spot execution history stays readable, dashboard projections stay
 read-only, and no live/mainnet call may be introduced. Real Demo futures smoke
 tests are opt-in and must stop if a safe PostOnly limit scenario cannot be
 derived.
+
+## Historical Replay Changes
+
+Historical replay changes require architecture review because they touch
+persistence, evidence sources, analytics, and runtime parity. Trading-rules
+review is required only when replay work changes trigger, strategy, risk,
+regime, cost, or accounting semantics; replaying already approved versions does
+not by itself create a new trading rule.
+
+A backtest run must pin the Trigger Set version, all Rule Versions, regime
+version, strategy version, risk policy version, simulator version, accounting
+version, cost model, data source, period, timeframe, warmup, parameters and
+historical data hash. Reviewers should verify no-lookahead behavior, immutable
+completed runs, idempotent reruns, source-aware `BACKTEST` evidence, no private
+or order API calls, no optimizer, no auto-promotion, and no dashboard-created
+historical evidence.

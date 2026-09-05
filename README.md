@@ -153,3 +153,19 @@ Analytics keeps exchange accounting facts and TEST simulation facts
 source-aware. Like-for-like baseline comparison is unavailable when evidence
 sources differ; the dashboard must label that honestly instead of treating
 simulated TEST results as equivalent to exchange fills.
+
+## Historical Replay
+
+`python -m triggertrade.backtest` runs the internal historical replay engine
+when `RUN_TRIGGERTRADE_BACKTEST_SMOKE=1` is set. It downloads Bybit Demo public
+`category=linear` BTCUSDT completed 1m candles into the ignored
+`runtime/history/` cache and replays exact Trigger Set and Rule Version
+definitions through the existing regime, trigger, strategy, futures risk,
+accounting and performance contracts.
+
+Historical replay is recorded with evidence source `BACKTEST`. It is separate
+from exchange execution and from continuous TEST-lane simulation. It does not
+load private credentials, submit orders, optimize parameters, auto-promote
+sets, or fabricate missing evidence. Decisions at candle `t` may only use data
+available through that completed candle; simulated fills occur no earlier than
+the next completed candle under the pinned simulator version.

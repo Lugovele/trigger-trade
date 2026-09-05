@@ -325,3 +325,38 @@ winner/loser averages use signed net trade outcomes.
 Max drawdown is used only where accounting-backed drawdown is available for
 the relevant scope. The dashboard renders these backend values without
 financial arithmetic.
+
+## Historical Replay
+
+Historical replay is an internal evidence path for Trigger Set Versions, not a
+general-purpose backtesting platform. It consumes Bybit Demo public historical
+`category=linear` BTCUSDT completed 1m candles, validates ordering, duplicates,
+gaps, completion state and source metadata, then replays the existing runtime
+pipeline:
+
+```text
+historical completed candle
+        -> CTX-REGIME@0.1.0
+        -> pinned Trigger Set / Rule Versions
+        -> existing strategy contract
+        -> futures risk
+        -> historical futures simulator
+        -> futures-accounting-v1
+        -> performance analytics
+        -> BacktestRun evidence
+```
+
+Backtest evidence uses source `BACKTEST` and must not be merged silently with
+exchange fills or continuous TEST-lane simulation. A run records exact set,
+rule, regime, strategy, risk, simulator, accounting, cost, data-source,
+timeframe, period, warmup, cache hash and parameter versions. Completed run
+facts are immutable; rerunning the same exact inputs must be idempotent, while
+semantic mismatch for the same identity fails closed.
+
+No-lookahead is mandatory. A decision at candle `t` may use only candles
+completed at or before `t`; simulated fills can occur no earlier than the next
+completed candle. Funding support in replay v1 is explicit: the simulator
+blocks entries whose modeled holding interval crosses a funding timestamp until
+historical funding attribution is implemented. Dashboard analytics may display
+historical runs and comparisons, but remains read-only and must not synthesize
+runtime evidence, mutate rules, promote sets or call execution.
