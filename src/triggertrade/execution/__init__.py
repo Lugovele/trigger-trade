@@ -11,12 +11,29 @@ from .contracts import (
 __all__ = [
     "ExecutionError",
     "ExecutionService",
+    "CostEstimate",
+    "FundingEstimate",
+    "FuturesExecutionConfig",
+    "FuturesExecutionService",
+    "FuturesRiskDecision",
+    "FuturesRiskManager",
+    "FuturesTradeIntent",
+    "MarginMode",
+    "NetEdgeEstimate",
     "PaperExecutionAdapter",
+    "PositionAction",
+    "PositionMode",
+    "PositionState",
     "OrderStatus",
     "OrderType",
     "RiskDecision",
     "Side",
     "TradeIntent",
+    "estimate_costs",
+    "estimate_net_edge",
+    "futures_client_order_id",
+    "futures_exchange_side",
+    "next_position_state",
 ]
 
 
@@ -29,4 +46,27 @@ def __getattr__(name: str):
         from .paper import PaperExecutionAdapter
 
         return PaperExecutionAdapter
+    futures_names = {
+        "CostEstimate",
+        "FundingEstimate",
+        "FuturesExecutionConfig",
+        "FuturesExecutionService",
+        "FuturesRiskDecision",
+        "FuturesRiskManager",
+        "FuturesTradeIntent",
+        "MarginMode",
+        "NetEdgeEstimate",
+        "PositionAction",
+        "PositionMode",
+        "PositionState",
+        "estimate_costs",
+        "estimate_net_edge",
+        "futures_client_order_id",
+        "futures_exchange_side",
+        "next_position_state",
+    }
+    if name in futures_names:
+        from . import futures
+
+        return getattr(futures, name)
     raise AttributeError(name)

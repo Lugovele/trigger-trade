@@ -151,3 +151,16 @@ not be rendered as zero evidence.
 STOP TRADING changes must be persisted and audited. Paused state must survive
 restart, block only new ACTIVE submissions at the execution boundary, and leave
 TEST lane evidence, analytics, market data, and reconciliation available.
+
+## Perpetual Futures Changes
+
+Perpetual futures lifecycle units require architecture and trading-rules review
+before implementation. Reviews must confirm the exact product category,
+position state machine, leverage defaults, margin/cost/funding contracts,
+net-edge behavior, and Demo-only safety.
+
+Futures implementation must remain additive until migration is explicitly
+approved: Spot execution history stays readable, dashboard projections stay
+read-only, and no live/mainnet call may be introduced. Real Demo futures smoke
+tests are opt-in and must stop if a safe PostOnly limit scenario cannot be
+derived.

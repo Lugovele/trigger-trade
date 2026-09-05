@@ -104,3 +104,33 @@ Only the execution adapter should differ materially.
 A TEST lane may evaluate candidate trigger sets against the same completed market data as ACTIVE, but it must remain isolated from exchange order placement. TEST records can include simulated analysis outcomes and persisted audit evidence; they cannot call Bybit private/order endpoints, transfer funds, change leverage, or affect ACTIVE paper/live state.
 
 Execution idempotency must include lane and trigger-set identity so a TEST decision cannot collide with or replay an ACTIVE execution lifecycle.
+
+## Perpetual Futures Safety
+
+Futures execution is separated from the existing Spot execution path. The first
+supported contract product is Bybit Demo `BTCUSDT` USDT perpetual with
+`category="linear"` and Demo REST base URL `https://api-demo.bybit.com`.
+
+Before any futures order submission the execution boundary must validate:
+
+- approved futures risk decision;
+- `TRADING_MODE=paper` and live trading disabled;
+- Demo endpoint only;
+- `category="linear"` only;
+- position transition validity;
+- configured leverage, default `1x`;
+- available margin;
+- margin mode and position mode validity;
+- precision, tick, step, minimum quantity, and minimum notional;
+- duplicate intent/client order id;
+- net-edge evidence;
+- operator pause for new ACTIVE entries.
+
+Order lifecycle keeps the same safety shape as Spot: reserve before submit,
+stable client order id, no blind retry after timeout, `UNKNOWN` for ambiguous
+state, explicit reconciliation, and cancellation/recovery allowed while trading
+is paused.
+
+No futures bootstrap or dashboard path may call transfer, withdrawal,
+cancel-all, close-all, leverage escalation, or mainnet endpoints. Emergency
+close semantics remain out of scope.

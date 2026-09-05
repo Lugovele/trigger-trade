@@ -158,6 +158,23 @@ class TestSetEvidenceRow:
 
 
 @dataclass(frozen=True)
+class FuturesTradeRow:
+    time: str
+    symbol: str
+    category: str
+    action: str
+    exchange_side: str
+    quantity: str
+    requested_price: str
+    leverage: str
+    status: str
+    expected_net_edge: str
+    intent_id: str
+    risk_decision_id: str
+    execution_id: str
+
+
+@dataclass(frozen=True)
 class OperatorStateView:
     state: str
     changed_at: str
@@ -839,6 +856,41 @@ class DashboardReadModel:
                 )
             )
         return tuple(rows)
+
+    def list_recent_futures_trades(self, limit: int = 20) -> tuple[FuturesTradeRow, ...]:
+        if not self.db_path.exists():
+            return ()
+        try:
+            with self._connect() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT *
+                    FROM futures_execution_orders
+                    ORDER BY updated_at DESC
+                    LIMIT ?
+                    """,
+                    (limit,),
+                ).fetchall()
+        except sqlite3.Error:
+            return ()
+        return tuple(
+            FuturesTradeRow(
+                time=row["updated_at"],
+                symbol=row["symbol"],
+                category=row["category"],
+                action=row["position_action"],
+                exchange_side=row["exchange_side"],
+                quantity=row["requested_qty"],
+                requested_price=row["requested_price"],
+                leverage=row["leverage"],
+                status=row["status"],
+                expected_net_edge=row["expected_net_edge"] or "unsupported",
+                intent_id=row["intent_id"],
+                risk_decision_id=row["risk_decision_id"],
+                execution_id=row["client_order_id"],
+            )
+            for row in rows
+        )
 
     def get_operator_trading_state(self) -> OperatorStateView:
         if not self.db_path.exists():

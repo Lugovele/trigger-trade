@@ -72,3 +72,21 @@ The local dashboard includes a persistent `STOP TRADING` control. When paused,
 new ACTIVE executions fail closed at the execution boundary, while TEST lane
 collection, analytics, market-data processing, and reconciliation continue.
 Pause state survives restart and requires an explicit Resume action.
+
+## Perpetual Futures Direction
+
+TriggerTrade is moving from the initial Spot-oriented prototype toward an
+automated event-driven intraday perpetual futures bot. The first futures
+contract target is Bybit Demo `BTCUSDT` USDT perpetual using V5
+`category=linear`.
+
+The futures model is additive. Existing Spot/paper records remain readable,
+while new futures contracts use explicit position actions: `OPEN_LONG`,
+`CLOSE_LONG`, `OPEN_SHORT`, and `CLOSE_SHORT`. The default configured leverage
+is `1x`; leverage is treated as a risk parameter, not a profit lever.
+
+Futures risk includes Decimal-based margin, leverage, cost, funding, duplicate,
+operator-pause, and net-edge gates. If expected move or cost evidence is
+missing, the futures net-edge gate fails closed. Dashboard futures rows are
+read-only projections from persistence; P&L/performance accounting remains
+deferred until backend accounting semantics exist.

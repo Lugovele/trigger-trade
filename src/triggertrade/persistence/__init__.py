@@ -1,6 +1,7 @@
 """Persistence boundary for audit trail and recovery state."""
 
 from .execution_store import ExecutionFill, ExecutionRecord, ExecutionStore
+from .futures_execution_store import FuturesExecutionRecord, FuturesExecutionStore
 from .operator_state_store import OperatorStateStore, OperatorTradingState, TradingState
 from .runtime_store import (
     CandleLifecycle,
@@ -28,6 +29,8 @@ __all__ = [
     "ExecutionFill",
     "ExecutionRecord",
     "ExecutionStore",
+    "FuturesExecutionRecord",
+    "FuturesExecutionStore",
     "OperatorStateStore",
     "OperatorTradingState",
     "RuntimeCheckpoint",

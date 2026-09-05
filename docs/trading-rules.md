@@ -192,6 +192,41 @@ Intraday governance thresholds, such as the initial 7-day / 100-signal /
 trigger, strategy, or risk alpha semantics and must not be treated as proof of
 profitability or automatic promotion criteria.
 
+## Perpetual Futures Domain Rules
+
+The futures architecture uses explicit position actions instead of ambiguous
+BUY/SELL domain intent:
+
+```text
+OPEN_LONG
+CLOSE_LONG
+OPEN_SHORT
+CLOSE_SHORT
+```
+
+Allowed position states are `FLAT`, `LONG`, and `SHORT`. Direct flips are not
+valid trading rules in this version; they must be represented as close then
+open in a future reviewed lifecycle.
+
+Default leverage is `1x`. Leverage is a risk parameter, not a source of
+profitability, and the system must not auto-increase it. No artificial
+`max trades per day = N` cap is introduced here; frequency is constrained by
+signal quality, net edge, risk, duplicate protection, churn/cooldown, and
+execution constraints.
+
+Futures net-edge eligibility is deterministic and fee-aware:
+
+```text
+expected gross price move - entry fee - exit fee - spread - slippage - funding
+```
+
+The result must meet the configured minimum net edge. If expected move or cost
+inputs are unavailable, futures risk fails closed rather than guessing.
+
+Market regime labels are reserved as versioned context values:
+`STRONG_DOWNTREND`, `DOWNTREND`, `SIDEWAYS`, `UPTREND`,
+`STRONG_UPTREND`. This document does not define the final formula.
+
 ## TRG-002 Robust Volume Confirmation
 
 Canonical rule id: `TRG-002`. Logical/display name: `TRG-VOLUME` / `Robust Volume Confirmation`. Initial version: `0.1.0`. Status: `TESTING` candidate only.

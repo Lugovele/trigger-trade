@@ -194,3 +194,59 @@ dashboard may request confirmed `TRADING_PAUSED` / `TRADING_ENABLED` changes,
 but new ACTIVE execution is blocked in the execution service before submission.
 TEST lane evidence collection, analytics, market-data processing, and
 reconciliation of existing orders remain allowed while paused.
+
+## Perpetual Futures Architecture
+
+The next product direction is an automated event-driven intraday perpetual
+futures bot. Perpetual futures are introduced for LONG/SHORT symmetry,
+intraday execution, fee-aware testing, and directional flexibility. They are
+not introduced as a high-leverage premise; the default leverage target is `1x`
+unless explicit reviewed configuration says otherwise.
+
+Futures domain intent is position-oriented, not exchange-side-oriented:
+`OPEN_LONG`, `CLOSE_LONG`, `OPEN_SHORT`, and `CLOSE_SHORT`. Adapter-level
+Bybit `Buy` / `Sell` mapping is contained inside execution. The position state
+machine is explicit:
+
+```text
+FLAT -> LONG
+LONG -> FLAT
+FLAT -> SHORT
+SHORT -> FLAT
+```
+
+Direct `LONG -> SHORT` or `SHORT -> LONG` transitions fail closed. Any future
+flip support must decompose into audited close plus new entry.
+
+Bybit Demo USDT perpetuals use V5 `category="linear"` for `BTCUSDT`
+`LinearPerpetual` contracts. Futures execution remains demo-only:
+`https://api-demo.bybit.com`, no mainnet, no inverse/options, no transfer,
+withdrawal, or generic private endpoint escape hatch. Spot execution history
+remains backward-readable, but the new futures execution audit path is stored
+separately.
+
+Market regime is a first-class versioned context contract with labels
+`STRONG_DOWNTREND`, `DOWNTREND`, `SIDEWAYS`, `UPTREND`, and
+`STRONG_UPTREND`. This unit records the capability boundary only; no final
+regime formula is asserted. Unsupported regime data is explicit and must not be
+silently treated as `SIDEWAYS`.
+
+Futures risk requires position-state validity, maximum position/exposure,
+configured leverage, available margin, margin/position mode validity,
+liquidation-buffer capability, duplicate intent checks, churn/cooldown hooks,
+operator pause, session/daily loss capability hooks, and a deterministic
+net-edge gate. Expected net edge is:
+
+```text
+expected gross price move
+- entry fee
+- exit fee
+- spread
+- estimated slippage
+- relevant funding
+= expected net edge
+```
+
+If expected gross move or required cost/funding inputs are unsupported, trade
+eligibility fails closed. Dashboard views may display backend-provided futures
+fields, but they do not calculate P&L, net edge, risk, or place orders.

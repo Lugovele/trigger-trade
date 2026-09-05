@@ -81,10 +81,22 @@ class BybitDemoClient:
             {"category": "spot", "symbol": _spot_symbol(symbol)},
         )
 
+    def linear_instrument_metadata(self, symbol: str = "BTCUSDT") -> BybitResponse:
+        return self._public_get(
+            "/v5/market/instruments-info",
+            {"category": "linear", "symbol": _linear_symbol(symbol)},
+        )
+
     def ticker(self, symbol: str = "BTCUSDT") -> BybitResponse:
         return self._public_get(
             "/v5/market/tickers",
             {"category": "spot", "symbol": _spot_symbol(symbol)},
+        )
+
+    def linear_ticker(self, symbol: str = "BTCUSDT") -> BybitResponse:
+        return self._public_get(
+            "/v5/market/tickers",
+            {"category": "linear", "symbol": _linear_symbol(symbol)},
         )
 
     def recent_candles(
@@ -98,6 +110,22 @@ class BybitDemoClient:
             {
                 "category": "spot",
                 "symbol": _spot_symbol(symbol),
+                "interval": interval,
+                "limit": str(limit),
+            },
+        )
+
+    def linear_recent_candles(
+        self,
+        symbol: str = "BTCUSDT",
+        interval: str = "1",
+        limit: int = 3,
+    ) -> BybitResponse:
+        return self._public_get(
+            "/v5/market/kline",
+            {
+                "category": "linear",
+                "symbol": _linear_symbol(symbol),
                 "interval": interval,
                 "limit": str(limit),
             },
@@ -136,6 +164,30 @@ class BybitDemoClient:
         }
         return self._private_post(self._ORDER_CREATE_PATH, body)
 
+    def _create_linear_limit_order(
+        self,
+        *,
+        symbol: str,
+        side: str,
+        qty: str,
+        price: str,
+        order_link_id: str,
+        reduce_only: bool = False,
+    ) -> BybitResponse:
+        _validate_order_link_id(order_link_id)
+        body = {
+            "category": "linear",
+            "symbol": _linear_symbol(symbol),
+            "side": side,
+            "orderType": "Limit",
+            "qty": qty,
+            "price": price,
+            "timeInForce": "PostOnly",
+            "reduceOnly": reduce_only,
+            "orderLinkId": order_link_id,
+        }
+        return self._private_post(self._ORDER_CREATE_PATH, body)
+
     def _get_spot_order_realtime(self, symbol: str, order_link_id: str) -> BybitResponse:
         _validate_order_link_id(order_link_id)
         return self._private_get(
@@ -145,6 +197,17 @@ class BybitDemoClient:
                 "symbol": _spot_symbol(symbol),
                 "orderLinkId": order_link_id,
                 "orderFilter": "Order",
+            },
+        )
+
+    def _get_linear_order_realtime(self, symbol: str, order_link_id: str) -> BybitResponse:
+        _validate_order_link_id(order_link_id)
+        return self._private_get(
+            self._ORDER_REALTIME_PATH,
+            {
+                "category": "linear",
+                "symbol": _linear_symbol(symbol),
+                "orderLinkId": order_link_id,
             },
         )
 
@@ -160,6 +223,17 @@ class BybitDemoClient:
             },
         )
 
+    def _get_linear_order_history(self, symbol: str, order_link_id: str) -> BybitResponse:
+        _validate_order_link_id(order_link_id)
+        return self._private_get(
+            self._ORDER_HISTORY_PATH,
+            {
+                "category": "linear",
+                "symbol": _linear_symbol(symbol),
+                "orderLinkId": order_link_id,
+            },
+        )
+
     def _cancel_spot_order(self, *, symbol: str, order_link_id: str) -> BybitResponse:
         _validate_order_link_id(order_link_id)
         return self._private_post(
@@ -169,6 +243,17 @@ class BybitDemoClient:
                 "symbol": _spot_symbol(symbol),
                 "orderLinkId": order_link_id,
                 "orderFilter": "Order",
+            },
+        )
+
+    def _cancel_linear_order(self, *, symbol: str, order_link_id: str) -> BybitResponse:
+        _validate_order_link_id(order_link_id)
+        return self._private_post(
+            self._ORDER_CANCEL_PATH,
+            {
+                "category": "linear",
+                "symbol": _linear_symbol(symbol),
+                "orderLinkId": order_link_id,
             },
         )
 
@@ -309,6 +394,13 @@ def _spot_symbol(symbol: str) -> str:
     normalized = symbol.strip().upper()
     if normalized != "BTCUSDT":
         raise BybitApiError("this integration slice supports only spot BTCUSDT")
+    return normalized
+
+
+def _linear_symbol(symbol: str) -> str:
+    normalized = symbol.strip().upper()
+    if normalized != "BTCUSDT":
+        raise BybitApiError("this integration slice supports only linear BTCUSDT perpetual")
     return normalized
 
 

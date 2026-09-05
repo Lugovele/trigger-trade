@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
 
+from .futures import ContractCategory, FuturesInstrumentMetadata
+
 
 @dataclass(frozen=True)
 class BybitInstrument:
@@ -78,12 +80,36 @@ def parse_spot_candles(result: dict[str, Any]) -> tuple[BybitCandle, ...]:
     )
 
 
+def parse_linear_instrument(result: dict[str, Any], symbol: str = "BTCUSDT") -> FuturesInstrumentMetadata:
+    item = _single_symbol_item(result, symbol)
+    lot_filter = item.get("lotSizeFilter") or {}
+    price_filter = item.get("priceFilter") or {}
+    leverage_filter = item.get("leverageFilter") or {}
+    return FuturesInstrumentMetadata(
+        symbol=item["symbol"],
+        category=ContractCategory.LINEAR,
+        contract_type=item.get("contractType") or "LinearPerpetual",
+        settlement_asset=item.get("settleCoin") or item.get("quoteCoin") or "USDT",
+        quantity_step=Decimal(lot_filter["qtyStep"]),
+        price_tick=Decimal(price_filter["tickSize"]),
+        minimum_order_quantity=Decimal(lot_filter["minOrderQty"]),
+        minimum_notional=Decimal(lot_filter.get("minNotionalValue") or "0"),
+        max_leverage=Decimal(leverage_filter["maxLeverage"]),
+        min_leverage=Decimal(leverage_filter.get("minLeverage") or "1"),
+        leverage_step=Decimal(leverage_filter.get("leverageStep") or "0.01"),
+    )
+
+
+def parse_linear_ticker(result: dict[str, Any], symbol: str = "BTCUSDT") -> BybitTicker:
+    return parse_spot_ticker(result, symbol)
+
+
 def _single_symbol_item(result: dict[str, Any], symbol: str) -> dict[str, Any]:
     expected = symbol.upper()
     for item in result.get("list") or []:
         if item.get("symbol") == expected:
             return item
-    raise ValueError(f"Bybit response did not include expected spot symbol {expected}")
+    raise ValueError(f"Bybit response did not include expected symbol {expected}")
 
 
 def _optional_decimal(raw: str | None) -> Decimal | None:

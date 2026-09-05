@@ -132,7 +132,8 @@ Do not add during MVP unless separately approved:
 - ML/LLM trading;
 - autonomous strategy generation;
 - complex portfolio optimization;
-- options/futures;
+- options and any derivatives beyond the approved Bybit Demo linear perpetual
+  futures slice;
 - generalized plugin framework;
 - generalized backtesting platform.
 
@@ -157,6 +158,16 @@ In MVP scope: immutable rule version history, exact Trigger Set membership, read
 Intraday governance is in MVP scope as review readiness, not auto-promotion.
 The dashboard may show TEST set readiness, missing evidence, recommendation
 actions, and a persistent local STOP TRADING control. It must not add new
-trigger semantics, execution product models, P&L accounting, or futures support.
+trigger semantics, P&L accounting, or futures support beyond the approved
+Bybit Demo linear perpetual contracts.
 
 Out of scope: automatic promotion, automatic parameter optimization, LLM trading recommendations, backtesting platform, P&L/portfolio accounting, new SELL logic, and any direct execution from analytics or dashboard.
+
+## Perpetual Futures MVP Direction
+
+The approved futures direction is limited to Bybit Demo `BTCUSDT` USDT
+perpetuals using V5 `category=linear`. It adds contracts for `FLAT`, `LONG`,
+and `SHORT` position state, explicit `OPEN_*` / `CLOSE_*` actions, 1x default
+leverage, margin/leverage checks, cost/funding representation, and net-edge
+gating. Full performance accounting and real-money execution remain out of
+scope.

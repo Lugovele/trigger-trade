@@ -124,6 +124,7 @@ def render_dashboard(read_model: DashboardReadModel, selected_set: str = "", ini
     rules = read_model.list_rules()
     live_trades = read_model.list_lane_trades("ACTIVE")
     test_trades = read_model.list_lane_trades("TEST")
+    futures_trades = getattr(read_model, "list_recent_futures_trades", lambda: ())()
     logs = read_model.list_logs()
     health = read_model.get_api_health()
     operator_state = getattr(read_model, "get_operator_trading_state", lambda: None)()
@@ -155,7 +156,7 @@ def render_dashboard(read_model: DashboardReadModel, selected_set: str = "", ini
       {_overview_section("testOverview", test, test_trades, test_trace, False)}
     </section>
     <section class="page {_active_page(initial_page, 'rules')}" id="rules">{_trigger_sets_panel(trigger_sets)}{_rules_panel(rules)}</section>
-    <section class="page {_active_page(initial_page, 'analytics')}" id="analytics">{_test_evidence_panel(test_evidence)}{_performance_panel(performance)}{_recommendations_panel(recommendations)}</section>
+    <section class="page {_active_page(initial_page, 'analytics')}" id="analytics">{_test_evidence_panel(test_evidence)}{_futures_panel(futures_trades)}{_performance_panel(performance)}{_recommendations_panel(recommendations)}</section>
     <section class="page {_active_page(initial_page, 'logs')}" id="logs"><div class="panel"><div class="activity">{_logs(logs)}</div></div></section>
     <section class="page {_active_page(initial_page, 'settings')}" id="settings">{_health_panel(health)}<div class="panel"><div class="panel-head"><div class="panel-title">Connection events</div></div><div class="activity">{_logs(logs[:5])}</div></div></section>
   </div>
@@ -400,6 +401,14 @@ def _test_evidence_panel(rows) -> str:
         for row in rows
     ) or "<tr><td colspan='8' class='muted'>No TESTING Trigger Set evidence recorded yet.</td></tr>"
     return f"<div class='panel'><div class='panel-head'><div><div class='panel-title'>TEST SET EVIDENCE</div><div class='panel-meta'>Intraday governance readiness is separate from Trigger Set lifecycle status; no automatic promotion.</div></div></div><div class='table-wrap'><table><thead><tr><th>Set</th><th>Status</th><th>Age</th><th>Signals</th><th>Closed trades</th><th>Regime coverage</th><th>Readiness</th><th>Recommendation</th></tr></thead><tbody>{body}</tbody></table></div></div>"
+
+
+def _futures_panel(rows) -> str:
+    body = "".join(
+        f"<tr><td class='mono'>{_h(_compact(row.time))}</td><td>{_h(row.symbol)}</td><td>{_h(row.category)}</td><td>{_h(row.action)}</td><td>{_h(row.exchange_side)}</td><td>{_h(row.quantity)}</td><td>{_h(row.requested_price)}</td><td>{_h(row.leverage)}x</td><td>{_h(row.expected_net_edge)}</td><td>{_h(row.status)}</td><td class='mono'>{_h(_short(row.execution_id))}</td></tr>"
+        for row in rows
+    ) or "<tr><td colspan='11' class='muted'>No futures execution records yet. Dashboard does not fabricate positions, P&amp;L, fees, or funding.</td></tr>"
+    return f"<div class='panel'><div class='panel-head'><div><div class='panel-title'>Futures readiness</div><div class='panel-meta'>Read-only persisted Bybit Demo linear perpetual records; no dashboard order controls.</div></div></div><div class='table-wrap'><table><thead><tr><th>Time</th><th>Symbol</th><th>Category</th><th>Action</th><th>Side</th><th>Qty</th><th>Limit</th><th>Lev</th><th>Net edge</th><th>Status</th><th>Order</th></tr></thead><tbody>{body}</tbody></table></div></div>"
 
 
 def _definition_panel(title: str, value) -> str:
