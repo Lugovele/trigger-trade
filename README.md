@@ -103,3 +103,20 @@ are scored by Trigger Set Version. The dashboard can show closed trades, win
 rate, expectancy, profit factor, fees, funding, baseline comparison and sample
 warnings when samples exist. Empty samples and zero denominators stay
 unavailable; analytics does not auto-promote sets or mutate rules.
+
+Market regime context is provided by `CTX-REGIME@0.1.0`. It classifies the
+latest 30 completed 1m BTCUSDT linear-perpetual candles into
+`STRONG_DOWNTREND`, `DOWNTREND`, `SIDEWAYS`, `UPTREND`,
+`STRONG_UPTREND`, or explicit `UNKNOWN` / `INSUFFICIENT_DATA` states. The
+runtime persists regime diagnostics and links them into strategy provenance,
+but regime context never executes trades by itself.
+
+Run the public-data regime smoke manually with:
+
+```powershell
+$env:RUN_TRIGGERTRADE_REGIME_SMOKE="1"
+python -m triggertrade.services.regime_smoke
+```
+
+The smoke uses Bybit Demo public linear candles only; it does not load private
+credentials or call order endpoints.

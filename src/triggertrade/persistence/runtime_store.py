@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import json
 import sqlite3
+
+from triggertrade.market_data import MarketRegimeContext, MarketRegimeLabel, RegimeCapability
 
 
 @dataclass(frozen=True)
@@ -30,6 +33,8 @@ class CandleLifecycle:
     execution_intent_id: str | None = None
     processed_at: str | None = None
     error: str | None = None
+    regime_context_id: str | None = None
+    regime_state: str | None = None
 
 
 @dataclass(frozen=True)
@@ -61,6 +66,8 @@ class LaneCandleLifecycle:
     execution_intent_id: str | None = None
     processed_at: str | None = None
     error: str | None = None
+    regime_context_id: str | None = None
+    regime_state: str | None = None
 
 
 class RuntimeStore:
@@ -106,8 +113,8 @@ class RuntimeStore:
                 INSERT OR REPLACE INTO runtime_candle_lifecycles (
                     candle_id, symbol, timeframe, candle_open_time, status,
                     signal_id, intent_id, risk_decision_id, execution_intent_id,
-                    processed_at, error
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    processed_at, error, regime_context_id, regime_state
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     lifecycle.candle_id,
@@ -121,6 +128,8 @@ class RuntimeStore:
                     lifecycle.execution_intent_id,
                     lifecycle.processed_at,
                     lifecycle.error,
+                    lifecycle.regime_context_id,
+                    lifecycle.regime_state,
                 ),
             )
 
@@ -194,8 +203,8 @@ class RuntimeStore:
                     lane, symbol, timeframe, candle_id, candle_open_time,
                     trigger_set_id, trigger_set_version, status, signal_id,
                     intent_id, risk_decision_id, execution_intent_id,
-                    processed_at, error
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    processed_at, error, regime_context_id, regime_state
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     lifecycle.lane,
@@ -212,6 +221,8 @@ class RuntimeStore:
                     lifecycle.execution_intent_id,
                     lifecycle.processed_at,
                     lifecycle.error,
+                    lifecycle.regime_context_id,
+                    lifecycle.regime_state,
                 ),
             )
 
@@ -231,7 +242,7 @@ class RuntimeStore:
                 SELECT lane, symbol, timeframe, candle_id, candle_open_time,
                        trigger_set_id, trigger_set_version, status, signal_id,
                        intent_id, risk_decision_id, execution_intent_id,
-                       processed_at, error
+                       processed_at, error, regime_context_id, regime_state
                 FROM runtime_lane_lifecycles
                 WHERE lane = ? AND symbol = ? AND timeframe = ? AND candle_id = ?
                   AND trigger_set_id = ? AND trigger_set_version = ?
@@ -260,6 +271,75 @@ class RuntimeStore:
                 (lane, symbol, timeframe, candle_id, trigger_set_id, trigger_set_version),
             ).fetchone()
         return int(row[0])
+
+    def save_market_regime(self, context: MarketRegimeContext) -> None:
+        label = None if context.label is None else context.label.value
+        with self._connect() as conn:
+            existing = conn.execute(
+                """
+                SELECT context_id, capability, label, input_snapshot, normalized_features, thresholds, reason
+                FROM market_regime_evaluations
+                WHERE symbol = ? AND timeframe = ? AND observed_at = ?
+                  AND rule_id = ? AND version = ?
+                """,
+                (context.symbol, context.timeframe, context.observed_at, context.rule_id, context.version),
+            ).fetchone()
+            payload = (
+                context.context_id,
+                context.capability.value,
+                label,
+                json.dumps(context.input_snapshot or {}, sort_keys=True),
+                json.dumps(context.normalized_features or {}, sort_keys=True),
+                json.dumps(context.thresholds or {}, sort_keys=True),
+                context.reason,
+            )
+            if existing is not None and tuple(existing) != payload:
+                raise RuntimeStoreError("market regime evaluation is immutable for its business key")
+            conn.execute(
+                """
+                INSERT INTO market_regime_evaluations (
+                    context_id, symbol, timeframe, observed_at, rule_id, version,
+                    capability, label, input_snapshot, normalized_features,
+                    thresholds, reason
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(symbol, timeframe, observed_at, rule_id, version) DO NOTHING
+                """,
+                (
+                    context.context_id,
+                    context.symbol,
+                    context.timeframe,
+                    context.observed_at,
+                    context.rule_id,
+                    context.version,
+                    payload[1],
+                    label,
+                    payload[3],
+                    payload[4],
+                    payload[5],
+                    context.reason,
+                ),
+            )
+
+    def get_market_regime(self, context_id: str) -> MarketRegimeContext | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM market_regime_evaluations WHERE context_id = ?",
+                (context_id,),
+            ).fetchone()
+        return None if row is None else _row_to_market_regime(row)
+
+    def latest_market_regime(self, symbol: str, timeframe: str) -> MarketRegimeContext | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM market_regime_evaluations
+                WHERE symbol = ? AND timeframe = ?
+                ORDER BY observed_at DESC
+                LIMIT 1
+                """,
+                (symbol.upper(), timeframe),
+            ).fetchone()
+        return None if row is None else _row_to_market_regime(row)
 
     def _init_schema(self) -> None:
         with self._connect() as conn:
@@ -293,6 +373,8 @@ class RuntimeStore:
                 )
                 """
             )
+            _add_column_if_missing(conn, "runtime_candle_lifecycles", "regime_context_id", "TEXT")
+            _add_column_if_missing(conn, "runtime_candle_lifecycles", "regime_state", "TEXT")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS runtime_lane_state (
@@ -326,7 +408,30 @@ class RuntimeStore:
                     execution_intent_id TEXT,
                     processed_at TEXT,
                     error TEXT,
+                    regime_context_id TEXT,
+                    regime_state TEXT,
                     PRIMARY KEY (lane, symbol, timeframe, candle_id, trigger_set_id, trigger_set_version)
+                )
+                """
+            )
+            _add_column_if_missing(conn, "runtime_lane_lifecycles", "regime_context_id", "TEXT")
+            _add_column_if_missing(conn, "runtime_lane_lifecycles", "regime_state", "TEXT")
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS market_regime_evaluations (
+                    context_id TEXT PRIMARY KEY,
+                    symbol TEXT NOT NULL,
+                    timeframe TEXT NOT NULL,
+                    observed_at TEXT NOT NULL,
+                    rule_id TEXT NOT NULL,
+                    version TEXT NOT NULL,
+                    capability TEXT NOT NULL,
+                    label TEXT,
+                    input_snapshot TEXT NOT NULL,
+                    normalized_features TEXT NOT NULL,
+                    thresholds TEXT NOT NULL,
+                    reason TEXT,
+                    UNIQUE (symbol, timeframe, observed_at, rule_id, version)
                 )
                 """
             )
@@ -365,6 +470,8 @@ def _row_to_lifecycle(row: sqlite3.Row) -> CandleLifecycle:
         execution_intent_id=row["execution_intent_id"],
         processed_at=row["processed_at"],
         error=row["error"],
+        regime_context_id=_optional(row, "regime_context_id"),
+        regime_state=_optional(row, "regime_state"),
     )
 
 
@@ -398,4 +505,34 @@ def _row_to_lane_lifecycle(row: sqlite3.Row) -> LaneCandleLifecycle:
         execution_intent_id=row["execution_intent_id"],
         processed_at=row["processed_at"],
         error=row["error"],
+        regime_context_id=_optional(row, "regime_context_id"),
+        regime_state=_optional(row, "regime_state"),
     )
+
+
+def _row_to_market_regime(row: sqlite3.Row) -> MarketRegimeContext:
+    label = row["label"]
+    return MarketRegimeContext(
+        context_id=row["context_id"],
+        symbol=row["symbol"],
+        timeframe=row["timeframe"],
+        observed_at=row["observed_at"],
+        capability=RegimeCapability(row["capability"]),
+        rule_id=row["rule_id"],
+        version=row["version"],
+        label=None if label is None else MarketRegimeLabel(label),
+        input_snapshot=json.loads(row["input_snapshot"]),
+        normalized_features=json.loads(row["normalized_features"]),
+        thresholds=json.loads(row["thresholds"]),
+        reason=row["reason"],
+    )
+
+
+def _add_column_if_missing(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+    columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in columns:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
+def _optional(row: sqlite3.Row, key: str):
+    return row[key] if key in row.keys() else None

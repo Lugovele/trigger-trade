@@ -17,6 +17,8 @@ class MarketRegimeLabel(StrEnum):
     SIDEWAYS = "SIDEWAYS"
     UPTREND = "UPTREND"
     STRONG_UPTREND = "STRONG_UPTREND"
+    UNKNOWN = "UNKNOWN"
+    INSUFFICIENT_DATA = "INSUFFICIENT_DATA"
 
 
 class RegimeCapability(StrEnum):
@@ -61,10 +63,14 @@ class FuturesAccountState:
 @dataclass(frozen=True)
 class MarketRegimeContext:
     context_id: str
-    version: str
     symbol: str
     timeframe: str
     observed_at: str
     capability: RegimeCapability
+    rule_id: str = "CTX-REGIME"
+    version: str = "0.1.0"
     label: MarketRegimeLabel | None = None
-    reason: str = "regime formula not implemented in this lifecycle unit"
+    input_snapshot: dict[str, str] | None = None
+    normalized_features: dict[str, str] | None = None
+    thresholds: dict[str, str] | None = None
+    reason: str | None = None

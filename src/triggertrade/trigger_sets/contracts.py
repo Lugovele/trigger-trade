@@ -30,6 +30,7 @@ class RuleType(StrEnum):
     TRIGGER = "trigger"
     STRATEGY = "strategy"
     RISK = "risk"
+    CONTEXT = "context"
 
 
 @dataclass(frozen=True)

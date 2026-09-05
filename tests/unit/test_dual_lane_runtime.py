@@ -2,6 +2,8 @@ from datetime import UTC, datetime, timedelta
 
 from triggertrade.config import ExecutionVenue, load_config
 from triggertrade.execution import PaperExecutionAdapter
+from triggertrade.dashboard.read_model import DashboardReadModel
+from triggertrade.dashboard.__main__ import render_dashboard
 from triggertrade.persistence import (
     ExecutionStore,
     LaneCandleLifecycle,
@@ -301,6 +303,65 @@ def test_testing_candidate_evaluates_trg_002_and_records_confirmed_set(tmp_path)
     assert row["condition_result"] == 1
     import json
     assert json.loads(row["input_snapshot"])["relative_volume"] == "2"
+
+
+def test_market_regime_is_persisted_and_linked_to_lane_trace(tmp_path):
+    path = tmp_path / "dual.sqlite3"
+    result = _runtime(
+        tmp_path,
+        path=path,
+        market_client=VolumeConfirmedMarketClient(),
+        clock=lambda: datetime(2026, 9, 5, 13, 1, 30, tzinfo=UTC),
+    ).process_once()
+    store = RuntimeStore(path)
+    active = store.get_lane_lifecycle(
+        lane="ACTIVE",
+        symbol="BTCUSDT",
+        timeframe="1m",
+        candle_id=result.candle_id,
+        trigger_set_id="triggertrade-core",
+        trigger_set_version="v1",
+    )
+    regime = store.get_market_regime(active.regime_context_id)
+    trace = DashboardReadModel(path).get_lane_trace(
+        lane="ACTIVE",
+        symbol="BTCUSDT",
+        timeframe="1m",
+        candle_id=result.candle_id,
+        trigger_set_id="triggertrade-core",
+        trigger_set_version="v1",
+    )
+
+    assert active.regime_state == "SIDEWAYS"
+    assert regime.rule_id == "CTX-REGIME"
+    assert regime.version == "0.1.0"
+    assert trace.regime["label"] == "SIDEWAYS"
+    assert trace.trade_intent["regime_state"] == "SIDEWAYS"
+
+
+def test_dashboard_regime_coverage_and_analytics_are_backend_backed(tmp_path):
+    path = tmp_path / "dual.sqlite3"
+    _runtime(
+        tmp_path,
+        path=path,
+        market_client=VolumeConfirmedMarketClient(),
+        clock=lambda: datetime(2026, 9, 5, 13, 1, 30, tzinfo=UTC),
+    ).process_once()
+    model = DashboardReadModel(path)
+
+    current = model.get_current_market_regime()
+    evidence = model.list_test_set_evidence()[0]
+    rows = model.list_regime_analytics()
+
+    assert current.state == "SIDEWAYS"
+    assert current.rule == "CTX-REGIME@0.1.0"
+    assert evidence.regime_coverage == "1 regimes: SIDEWAYS"
+    assert any(row.regime == "SIDEWAYS" and row.signals >= 1 for row in rows)
+    html = render_dashboard(model, initial_page="analytics")
+    overview_html = render_dashboard(model, initial_page="overview")
+    assert "By Regime" in html
+    assert "Market regime" in overview_html
+    assert "SIDEWAYS" in overview_html
 
 
 def _volume_candle(open_time: datetime, close: str, volume: str) -> list[str]:

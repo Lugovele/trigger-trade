@@ -223,9 +223,37 @@ expected gross price move - entry fee - exit fee - spread - slippage - funding
 The result must meet the configured minimum net edge. If expected move or cost
 inputs are unavailable, futures risk fails closed rather than guessing.
 
-Market regime labels are reserved as versioned context values:
-`STRONG_DOWNTREND`, `DOWNTREND`, `SIDEWAYS`, `UPTREND`,
-`STRONG_UPTREND`. This document does not define the final formula.
+Market regime is context, not a trigger or execution signal.
+`CTX-REGIME@0.1.0` classifies observed intraday state for BTCUSDT linear
+perpetuals from the last 30 completed 1m closes. Current incomplete candles
+are excluded.
+
+Features:
+
+- `window_return_pct = (latest_close - oldest_close) / oldest_close * 100`.
+- `avg_abs_step_return_pct = mean(abs(adjacent close-to-close return pct))`.
+- `normalized_trend = window_return_pct / avg_abs_step_return_pct`; zero when
+  all steps are zero.
+- `directional_persistence = (up_steps - down_steps) / 29`; flat steps count in
+  the denominator and contribute zero.
+
+Inclusive boundaries:
+
+- `STRONG_UPTREND`: return >= `0.50`, normalized trend >= `5`, persistence >=
+  `0.65`.
+- `UPTREND`: return >= `0.15`, normalized trend >= `2`, persistence >= `0.35`.
+- `STRONG_DOWNTREND`: return <= `-0.50`, normalized trend <= `-5`,
+  persistence <= `-0.65`.
+- `DOWNTREND`: return <= `-0.15`, normalized trend <= `-2`, persistence <=
+  `-0.35`.
+- `SIDEWAYS`: all other valid completed-candle windows.
+- `INSUFFICIENT_DATA`: fewer than 30 completed candles or a non-positive close.
+- `UNKNOWN`: unsupported timeframe, incomplete current candle, malformed or
+  non-contiguous candle window.
+
+These are initial deterministic context thresholds, not validated profitable
+market regime boundaries and not a predictive edge claim. Formula or threshold
+changes require a new immutable context version.
 
 ## Futures Accounting Conventions
 

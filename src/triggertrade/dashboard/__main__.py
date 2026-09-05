@@ -135,6 +135,8 @@ def render_dashboard(read_model: DashboardReadModel, selected_set: str = "", ini
     futures_closed_trades = getattr(read_model, "list_futures_closed_trades", lambda: ())()
     futures_equity = getattr(read_model, "get_latest_futures_equity", lambda: None)()
     baseline_comparisons = getattr(read_model, "list_baseline_comparisons", lambda: ())()
+    current_regime = getattr(read_model, "get_current_market_regime", lambda: None)()
+    regime_analytics = getattr(read_model, "list_regime_analytics", lambda: ())()
     live_trace = read_model.get_latest_lane_trace("ACTIVE")
     test_trace = read_model.get_latest_lane_trace("TEST")
     return _page(
@@ -155,11 +157,11 @@ def render_dashboard(read_model: DashboardReadModel, selected_set: str = "", ini
   <div class="content container">
     <section class="page {_active_page(initial_page, 'overview')}" id="overview">
       <div style="display:flex;justify-content:flex-end;margin-bottom:8px"><div class="env-switch" id="envSwitch"{_env_switch_style(initial_page)}><button id="liveBtn" class="active live" onclick="setEnv('live')">LIVE</button><button id="testBtn" onclick="setEnv('test')">TEST</button></div></div>
-      {_overview_section("liveOverview", live, live_trades, live_trace, True)}
-      {_overview_section("testOverview", test, test_trades, test_trace, False)}
+      {_overview_section("liveOverview", live, live_trades, live_trace, True, current_regime)}
+      {_overview_section("testOverview", test, test_trades, test_trace, False, current_regime)}
     </section>
     <section class="page {_active_page(initial_page, 'rules')}" id="rules">{_trigger_sets_panel(trigger_sets)}{_rules_panel(rules)}</section>
-    <section class="page {_active_page(initial_page, 'analytics')}" id="analytics">{_test_evidence_panel(test_evidence)}{_futures_accounting_panel(futures_equity, futures_closed_trades)}{_futures_panel(futures_trades)}{_performance_panel(performance)}{_baseline_comparison_panel(baseline_comparisons)}{_recommendations_panel(recommendations)}</section>
+    <section class="page {_active_page(initial_page, 'analytics')}" id="analytics">{_test_evidence_panel(test_evidence)}{_regime_analytics_panel(regime_analytics)}{_futures_accounting_panel(futures_equity, futures_closed_trades)}{_futures_panel(futures_trades)}{_performance_panel(performance)}{_baseline_comparison_panel(baseline_comparisons)}{_recommendations_panel(recommendations)}</section>
     <section class="page {_active_page(initial_page, 'logs')}" id="logs"><div class="panel"><div class="activity">{_logs(logs)}</div></div></section>
     <section class="page {_active_page(initial_page, 'settings')}" id="settings">{_health_panel(health)}<div class="panel"><div class="panel-head"><div class="panel-title">Connection events</div></div><div class="activity">{_logs(logs[:5])}</div></div></section>
   </div>
@@ -231,10 +233,27 @@ def _active_tab(current: str, expected: str) -> str:
 def _env_switch_style(current: str) -> str:
     return "" if current == "overview" else " style=\"display:none\""
 
-def _overview_section(element_id, overview, trades, trace, is_live: bool) -> str:
+def _overview_section(element_id, overview, trades, trace, is_live: bool, current_regime=None) -> str:
     style = "" if is_live else ' style="display:none"'
     lane = "LIVE" if is_live else "TEST"
-    return f"""<div id="{element_id}"{style}><div class="cards"><div class="card"><div class="label">Runtime lane</div><div class="value">{lane}</div><div class="sub">paper-safe</div></div><div class="card"><div class="label">Rule set</div><div class="value">{_h(overview.rule_set)}</div><div class="sub">{overview.rules_count} rules</div></div><div class="card"><div class="label">Last candle</div><div class="value">{_h(_short(overview.latest_candle))}</div></div><div class="card"><div class="label">Last execution</div><div class="value">{_h(overview.last_execution)}</div><div class="sub">{overview.trades_count} paper records</div></div></div>{_trades_panel(trades, is_live)}{_positions_panel(is_live)}{_trace_panel(trace, is_live)}</div>"""
+    return f"""<div id="{element_id}"{style}><div class="cards"><div class="card"><div class="label">Runtime lane</div><div class="value">{lane}</div><div class="sub">paper-safe</div></div><div class="card"><div class="label">Rule set</div><div class="value">{_h(overview.rule_set)}</div><div class="sub">{overview.rules_count} rules</div></div><div class="card"><div class="label">Last candle</div><div class="value">{_h(_short(overview.latest_candle))}</div></div><div class="card"><div class="label">Last execution</div><div class="value">{_h(overview.last_execution)}</div><div class="sub">{overview.trades_count} paper records</div></div></div>{_market_regime_panel(current_regime)}{_trades_panel(trades, is_live)}{_positions_panel(is_live)}{_trace_panel(trace, is_live)}</div>"""
+
+
+def _market_regime_panel(current_regime) -> str:
+    if current_regime is None:
+        return "<div class='panel'><div class='panel-head'><div><div class='panel-title'>Market regime</div><div class='panel-meta'>CTX-REGIME@0.1.0 context, read-only</div></div><span class='badge gray'>unavailable</span></div></div>"
+    return (
+        "<div class='panel'><div class='panel-head'><div>"
+        "<div class='panel-title'>Market regime</div>"
+        f"<div class='panel-meta'>{_h(current_regime.rule)} | {_h(current_regime.symbol)} {_h(current_regime.timeframe)} | {_h(current_regime.observed_at)}</div>"
+        "</div>"
+        f"{_status_badge(current_regime.state)}</div>"
+        "<div class='activity'>"
+        f"{_trace_row('window_return_pct', current_regime.window_return_pct, current_regime.reason)}"
+        f"{_trace_row('normalized_trend', current_regime.normalized_trend, 'volatility-normalized')}"
+        f"{_trace_row('directional_persistence', current_regime.directional_persistence, 'flat steps counted')}"
+        "</div></div>"
+    )
 
 
 def _operator_controls(state, token: str = "") -> str:
@@ -287,9 +306,11 @@ def _trace_panel(trace, is_live: bool) -> str:
         strategy = trace.strategy or {}
         risk = trace.risk or {}
         execution = trace.execution or {}
+        regime = trace.regime or {}
         body = "".join(
             [
                 _trace_row("Market", lifecycle.get("candle_id", trace.candle_id), lifecycle.get("candle_open_time", "-")),
+                _trace_row("Regime", regime.get("rule_id", "none"), regime.get("label", lifecycle.get("regime_state", "none"))),
                 _trace_row("Trigger", trigger.get("trigger_rule_id", "none"), trigger.get("signal_type", lifecycle.get("status", "-"))),
                 _trace_row("Signal", (trace.signal or {}).get("signal_id", "none") if trace.signal else "none", trigger.get("condition_result", "-")),
                 _trace_row("Strategy", strategy.get("strategy_rule_id", "not evaluated"), strategy.get("intent_id", "none")),
@@ -396,6 +417,14 @@ def _baseline_comparison_panel(rows) -> str:
         for row in rows
     ) or "<tr><td colspan='10' class='muted'>No overlapping ACTIVE vs TESTING accounting comparison available yet.</td></tr>"
     return f"<div class='panel'><div class='panel-head'><div><div class='panel-title'>Baseline Comparison</div><div class='panel-meta'>TESTING sets compared with ACTIVE only over overlapping closed-trade periods.</div></div></div><div class='table-wrap analytics-compact'><table><thead><tr><th>Candidate</th><th>Baseline</th><th>Status</th><th>Overlap</th><th>Trades C/B</th><th>Net P&amp;L C/B</th><th>Expectancy C/B</th><th>Fees C/B</th><th>Direction mix C/B</th><th>Reason</th></tr></thead><tbody>{body}</tbody></table></div></div>"
+
+
+def _regime_analytics_panel(rows) -> str:
+    body = "".join(
+        f"<tr><td>{_status_badge(row.regime)}</td><td>{row.signals}</td><td>{row.closed_trades}</td><td>{_h(row.net_pnl)}</td><td>{_h(row.expectancy)}</td><td>{_h(row.fees_gross_profit_pct)}</td><td>{row.long_trades}</td><td>{row.short_trades}</td></tr>"
+        for row in rows
+    ) or "<tr><td colspan='8' class='muted'>No accounting-backed or runtime signal regime evidence recorded yet.</td></tr>"
+    return f"<div class='panel'><div class='panel-head'><div><div class='panel-title'>By Regime</div><div class='panel-meta'>Backend regime context diagnostics; no frontend classification or financial calculations.</div></div></div><div class='table-wrap analytics-compact'><table><thead><tr><th>Regime</th><th>Signals</th><th>Closed trades</th><th>Net P&amp;L</th><th>Expectancy</th><th>Fees/Gross Profit</th><th>LONG</th><th>SHORT</th></tr></thead><tbody>{body}</tbody></table></div></div>"
 
 
 def _recommendations_panel(rows) -> str:

@@ -12,6 +12,13 @@ from .bybit import (
 )
 from .futures import ContractCategory, FuturesAccountState, FuturesInstrumentMetadata, MarketRegimeContext, MarketRegimeLabel, RegimeCapability
 from .models import MarketObservation
+from .regime import (
+    REGIME_RULE_ID,
+    REGIME_VERSION,
+    RegimeEvaluationWindow,
+    evaluate_market_regime,
+    regime_business_key,
+)
 
 __all__ = [
     "BybitCandle",
@@ -23,10 +30,15 @@ __all__ = [
     "MarketRegimeContext",
     "MarketRegimeLabel",
     "MarketObservation",
+    "REGIME_RULE_ID",
+    "REGIME_VERSION",
     "RegimeCapability",
+    "RegimeEvaluationWindow",
+    "evaluate_market_regime",
     "parse_linear_instrument",
     "parse_linear_ticker",
     "parse_spot_candles",
     "parse_spot_instrument",
     "parse_spot_ticker",
+    "regime_business_key",
 ]

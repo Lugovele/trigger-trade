@@ -316,6 +316,9 @@ class FakeMarketClient:
         current_open = _candle(self.start + timedelta(minutes=2), self.closes[1])
         return FakeResponse({"list": [current_open, latest, older]})
 
+    def linear_recent_candles(self, symbol, interval, limit):
+        return self.recent_candles(symbol, interval, limit)
+
 
 def _candle(open_time: datetime, close: str) -> list[str]:
     return [

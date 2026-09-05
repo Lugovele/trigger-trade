@@ -51,8 +51,10 @@ class TraceStore:
                 INSERT OR REPLACE INTO strategy_decisions (
                     intent_id, strategy_rule_id, strategy_rule_version, symbol,
                     side, signal_ids, trigger_ids, created_at,
-                    lane, trigger_set_id, trigger_set_version
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    lane, trigger_set_id, trigger_set_version,
+                    regime_context_id, regime_rule_id, regime_rule_version,
+                    regime_state
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     intent.intent_id,
@@ -66,6 +68,10 @@ class TraceStore:
                     intent.lane,
                     intent.trigger_set_id,
                     intent.trigger_set_version,
+                    intent.regime_context_id,
+                    intent.regime_rule_id,
+                    intent.regime_rule_version,
+                    intent.regime_state,
                 ),
             )
 
@@ -157,13 +163,21 @@ class TraceStore:
                     created_at TEXT,
                     lane TEXT,
                     trigger_set_id TEXT,
-                    trigger_set_version TEXT
+                    trigger_set_version TEXT,
+                    regime_context_id TEXT,
+                    regime_rule_id TEXT,
+                    regime_rule_version TEXT,
+                    regime_state TEXT
                 )
                 """
             )
             _add_column_if_missing(conn, "strategy_decisions", "lane", "TEXT")
             _add_column_if_missing(conn, "strategy_decisions", "trigger_set_id", "TEXT")
             _add_column_if_missing(conn, "strategy_decisions", "trigger_set_version", "TEXT")
+            _add_column_if_missing(conn, "strategy_decisions", "regime_context_id", "TEXT")
+            _add_column_if_missing(conn, "strategy_decisions", "regime_rule_id", "TEXT")
+            _add_column_if_missing(conn, "strategy_decisions", "regime_rule_version", "TEXT")
+            _add_column_if_missing(conn, "strategy_decisions", "regime_state", "TEXT")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS risk_decisions (

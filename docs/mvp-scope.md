@@ -177,5 +177,7 @@ unrealized mark-price P&L, equity snapshots, drawdown, duration, Trigger Set
 attribution, and regime attribution where available. Full performance
 analytics aggregation remains limited to deterministic Trigger Set Version
 metrics over accounting facts: closed trades, win rate, expectancy, profit
-factor, net P&L, fees, funding, direction breakdowns, sample warnings, and
-overlapping ACTIVE/TEST comparison. Real-money execution remains out of scope.
+factor, net P&L, fees, funding, direction and regime diagnostic breakdowns,
+sample warnings, and overlapping ACTIVE/TEST comparison. `CTX-REGIME@0.1.0`
+is now in scope as observed-state context only, not as a trading trigger.
+Real-money execution remains out of scope.

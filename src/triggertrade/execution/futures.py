@@ -93,6 +93,10 @@ class FuturesTradeIntent:
     lane: str | None = None
     trigger_set_id: str | None = None
     trigger_set_version: str | None = None
+    regime_context_id: str | None = None
+    regime_rule_id: str | None = None
+    regime_rule_version: str | None = None
+    regime_state: str | None = None
 
 
 @dataclass(frozen=True)

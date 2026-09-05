@@ -2,7 +2,8 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from triggertrade.config import RiskRulesConfig, StrategyRuleConfig
-from triggertrade.market_data import BybitInstrument, MarketObservation
+from triggertrade.market_data import BybitInstrument, MarketObservation, MarketRegimeContext, MarketRegimeLabel, RegimeCapability
+from triggertrade.strategies import RegimeStrategyContext, StrategyContextInterpretation
 from triggertrade.strategies import BuyCandidateStrategy
 from triggertrade.triggers import Signal, SignalType
 
@@ -63,6 +64,32 @@ def test_same_input_produces_same_logical_decision():
     assert first.intent_id == second.intent_id
     assert first.quantity == second.quantity
     assert first.price == second.price
+
+
+def test_strategy_records_regime_context_without_changing_buy_candidate_semantics():
+    regime = MarketRegimeContext(
+        context_id="regime-unit",
+        symbol="BTCUSDT",
+        timeframe="1m",
+        observed_at="2026-09-05T00:00:00+00:00",
+        capability=RegimeCapability.AVAILABLE,
+        label=MarketRegimeLabel.DOWNTREND,
+    )
+    context = RegimeStrategyContext(regime=regime, interpretation=StrategyContextInterpretation.REVERSAL_CANDIDATE)
+
+    intent = _strategy().decide(
+        signal=_signal(SignalType.BUY_CANDIDATE),
+        observation=_observation(),
+        instrument=_instrument(),
+        regime_context=context.regime,
+    )
+
+    assert intent is not None
+    assert intent.side == "Buy"
+    assert intent.regime_context_id == "regime-unit"
+    assert intent.regime_rule_id == "CTX-REGIME"
+    assert intent.regime_rule_version == "0.1.0"
+    assert intent.regime_state == "DOWNTREND"
 
 
 def _strategy():

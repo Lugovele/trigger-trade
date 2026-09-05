@@ -544,6 +544,33 @@ def current_rule_definitions(*, created_at: str) -> tuple[RuleDefinition, ...]:
             created_at=created_at,
             provenance="implemented vertical slice d081274",
         ),
+        RuleDefinition(
+            rule_id="CTX-REGIME",
+            version="0.1.0",
+            name="Intraday Market Regime Context",
+            status=RuleStatus.ACTIVE,
+            asset_scope="BTCUSDT linear perpetual context",
+            rule_type=RuleType.CONTEXT,
+            condition="classify observed regime from 30 completed 1m closes using return, normalized trend, and directional persistence",
+            definition={
+                "lookback_completed_candles": "30",
+                "timeframe": "1m",
+                "window_return_pct": "(latest_close - oldest_close) / oldest_close * 100",
+                "avg_abs_step_return_pct": "mean(abs(adjacent close-to-close return pct))",
+                "normalized_trend": "window_return_pct / avg_abs_step_return_pct; zero when all steps are zero",
+                "directional_persistence": "(up_steps - down_steps) / 29; flat steps count in denominator",
+                "strong_uptrend": "window_return_pct >= 0.50 and normalized_trend >= 5 and directional_persistence >= 0.65",
+                "uptrend": "window_return_pct >= 0.15 and normalized_trend >= 2 and directional_persistence >= 0.35",
+                "strong_downtrend": "window_return_pct <= -0.50 and normalized_trend <= -5 and directional_persistence <= -0.65",
+                "downtrend": "window_return_pct <= -0.15 and normalized_trend <= -2 and directional_persistence <= -0.35",
+                "sideways": "all other valid completed-candle windows",
+                "insufficient_data": "fewer than 30 completed candles or non-positive close",
+                "unknown": "unsupported timeframe, incomplete current candle, malformed/non-contiguous window",
+                "predictive_claim": "none; classifies observed state only",
+            },
+            created_at=created_at,
+            provenance="lifecycle unit 5 deterministic context classifier; not a trading trigger",
+        ),
     )
 
 

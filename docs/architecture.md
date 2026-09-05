@@ -227,8 +227,14 @@ separately.
 
 Market regime is a first-class versioned context contract with labels
 `STRONG_DOWNTREND`, `DOWNTREND`, `SIDEWAYS`, `UPTREND`, and
-`STRONG_UPTREND`. This unit records the capability boundary only; no final
-regime formula is asserted. Unsupported regime data is explicit and must not be
+`STRONG_UPTREND`, plus explicit `UNKNOWN` and `INSUFFICIENT_DATA` states.
+`CTX-REGIME@0.1.0` is implemented in the market-data boundary as a
+deterministic 30-completed-1m-candle classifier using window return,
+volatility-normalized trend and directional persistence. It classifies observed
+state only; it must not create signals, intents, risk approvals or orders.
+Runtime persists the context before trigger/strategy evaluation and links the
+context id/state into lane lifecycle and strategy-decision provenance.
+Unsupported, insufficient or malformed regime data is explicit and must not be
 silently treated as `SIDEWAYS`.
 
 Futures risk requires position-state validity, maximum position/exposure,

@@ -11,7 +11,15 @@ from typing import Callable
 from triggertrade.config import AppConfig, ConfigError, ExecutionVenue
 from triggertrade.execution import ExecutionError, ExecutionService, PaperExecutionAdapter
 from triggertrade.exchanges import BybitApiError, BybitDemoClient
-from triggertrade.market_data import BybitInstrument, MarketObservation, parse_spot_candles, parse_spot_instrument
+from triggertrade.market_data import (
+    BybitInstrument,
+    MarketObservation,
+    MarketRegimeContext,
+    RegimeEvaluationWindow,
+    evaluate_market_regime,
+    parse_spot_candles,
+    parse_spot_instrument,
+)
 from triggertrade.persistence import (
     ExecutionStore,
     LaneCandleLifecycle,
@@ -86,6 +94,13 @@ class DualLaneRuntime:
                     limit=70,
                 ).result
             )
+            regime_candles = parse_spot_candles(
+                self._market_client.linear_recent_candles(
+                    self._config.paper_runtime.symbol,
+                    interval=_bybit_interval(self._config.paper_runtime.candle_interval),
+                    limit=70,
+                ).result
+            )
             active_set = self._trigger_set_store.get_active_set(self._config.paper_runtime.symbol, "1m")
             active_checkpoint = None
             if active_set is not None:
@@ -124,6 +139,21 @@ class DualLaneRuntime:
             source="bybit_demo_public_candles",
             stale_after_seconds=self._config.risk_rules.stale_after_seconds,
         )
+        regime_context = evaluate_market_regime(
+            RegimeEvaluationWindow(
+                symbol=completed.symbol,
+                timeframe=completed.timeframe,
+                observed_at=completed.close_time,
+                candles=tuple(
+                    candle
+                    for candle in sorted(regime_candles, key=lambda item: item.start_time_ms)
+                    if candle.start_time_ms <= completed.candle.start_time_ms
+                ),
+                category="linear",
+                current_candle_completed=True,
+            )
+        )
+        self._runtime_store.save_market_regime(regime_context)
         active_results = ()
         if active_set is not None:
             active_results = (
@@ -135,6 +165,7 @@ class DualLaneRuntime:
                     instrument=instrument,
                     adapter=self._active_adapter,
                     candles=candles,
+                    regime_context=regime_context,
                 ),
             )
         test_results = tuple(
@@ -146,6 +177,7 @@ class DualLaneRuntime:
                 instrument=instrument,
                 adapter=self._test_adapter_factory(),
                 candles=candles,
+                regime_context=regime_context,
             )
             for trigger_set in self._trigger_set_store.list_testing_sets(completed.symbol, completed.timeframe)
         )
@@ -173,6 +205,7 @@ class DualLaneRuntime:
         instrument: BybitInstrument,
         adapter: PaperExecutionAdapter,
         candles,
+        regime_context: MarketRegimeContext,
     ) -> RuntimeCycleResult:
         if trigger_set.status not in {TriggerSetStatus.ACTIVE, TriggerSetStatus.TESTING}:
             return RuntimeCycleResult(completed.candle_id, None, skipped_reason="set_not_eligible")
@@ -208,7 +241,14 @@ class DualLaneRuntime:
         trigger = PercentagePriceMoveTrigger(self._config.trigger_rule, symbol=self._config.paper_runtime.symbol)
         signal = _scoped_signal(trigger.evaluate(scoped_observation, now=self._clock()), lane, trigger_set)
         self._trace_store.save_trigger_evaluation(signal)
-        self._save_lane_lifecycle(lane, trigger_set, completed, "trigger_evaluated", signal_id=signal.signal_id)
+        self._save_lane_lifecycle(
+            lane,
+            trigger_set,
+            completed,
+            "trigger_evaluated",
+            signal_id=signal.signal_id,
+            regime_context=regime_context,
+        )
 
         if signal.signal_type is SignalType.NO_SIGNAL:
             self._save_lane_lifecycle(
@@ -218,6 +258,7 @@ class DualLaneRuntime:
                 "no_signal",
                 signal_id=signal.signal_id,
                 processed_at=self._clock().isoformat(),
+                regime_context=regime_context,
             )
             self._checkpoint_lane(lane, trigger_set, completed)
             return RuntimeCycleResult(completed.candle_id, signal.signal_type.value)
@@ -241,6 +282,7 @@ class DualLaneRuntime:
                     signal_id=signal.signal_id,
                     processed_at=self._clock().isoformat(),
                     error=volume_signal.reason,
+                    regime_context=regime_context,
                 )
                 self._checkpoint_lane(lane, trigger_set, completed)
                 return RuntimeCycleResult(
@@ -253,6 +295,7 @@ class DualLaneRuntime:
             signal=signal,
             observation=scoped_observation,
             instrument=instrument,
+            regime_context=regime_context,
         )
         if intent is None:
             self._save_lane_lifecycle(
@@ -262,6 +305,7 @@ class DualLaneRuntime:
                 "no_intent",
                 signal_id=signal.signal_id,
                 processed_at=self._clock().isoformat(),
+                regime_context=regime_context,
             )
             self._checkpoint_lane(lane, trigger_set, completed)
             return RuntimeCycleResult(completed.candle_id, signal.signal_type.value, skipped_reason="no_intent")
@@ -292,6 +336,7 @@ class DualLaneRuntime:
                 risk_decision_id=record.risk_decision_id,
                 execution_intent_id=record.intent_id,
                 processed_at=self._clock().isoformat(),
+                regime_context=regime_context,
             )
             self._checkpoint_lane(lane, trigger_set, completed)
             return RuntimeCycleResult(completed.candle_id, signal.signal_type.value, intent.intent_id, record.risk_decision_id, True, record.status.value)
@@ -316,6 +361,7 @@ class DualLaneRuntime:
             signal_id=signal.signal_id,
             intent_id=intent.intent_id,
             risk_decision_id=risk.risk_decision_id,
+            regime_context=regime_context,
         )
         if not risk.approved:
             self._save_lane_lifecycle(
@@ -327,6 +373,7 @@ class DualLaneRuntime:
                 intent_id=intent.intent_id,
                 risk_decision_id=risk.risk_decision_id,
                 processed_at=self._clock().isoformat(),
+                regime_context=regime_context,
             )
             self._checkpoint_lane(lane, trigger_set, completed)
             return RuntimeCycleResult(completed.candle_id, signal.signal_type.value, intent.intent_id, risk.risk_decision_id, False)
@@ -341,6 +388,7 @@ class DualLaneRuntime:
                 intent_id=intent.intent_id,
                 risk_decision_id=risk.risk_decision_id,
                 processed_at=self._clock().isoformat(),
+                regime_context=regime_context,
             )
             self._checkpoint_lane(lane, trigger_set, completed)
             return RuntimeCycleResult(completed.candle_id, signal.signal_type.value, intent.intent_id, risk.risk_decision_id, True, "test_recorded")
@@ -369,6 +417,7 @@ class DualLaneRuntime:
                     risk_decision_id=risk.risk_decision_id,
                     processed_at=self._clock().isoformat(),
                     error="operator_paused",
+                    regime_context=regime_context,
                 )
                 self._checkpoint_lane(lane, trigger_set, completed)
                 return RuntimeCycleResult(
@@ -388,6 +437,7 @@ class DualLaneRuntime:
                 intent_id=intent.intent_id,
                 risk_decision_id=risk.risk_decision_id,
                 error=exc.__class__.__name__,
+                regime_context=regime_context,
             )
             return RuntimeCycleResult(completed.candle_id, signal.signal_type.value, intent.intent_id, risk.risk_decision_id, True, skipped_reason="execution_error")
         except Exception as exc:
@@ -400,6 +450,7 @@ class DualLaneRuntime:
                 intent_id=intent.intent_id,
                 risk_decision_id=risk.risk_decision_id,
                 error=exc.__class__.__name__,
+                regime_context=regime_context,
             )
             return RuntimeCycleResult(completed.candle_id, signal.signal_type.value, intent.intent_id, risk.risk_decision_id, True, skipped_reason="execution_error")
         record = replace(record, lane=lane.value, trigger_set_id=trigger_set.set_id, trigger_set_version=trigger_set.version)
@@ -414,6 +465,7 @@ class DualLaneRuntime:
             risk_decision_id=risk.risk_decision_id,
             execution_intent_id=record.intent_id,
             processed_at=self._clock().isoformat(),
+            regime_context=regime_context,
         )
         self._checkpoint_lane(lane, trigger_set, completed)
         return RuntimeCycleResult(completed.candle_id, signal.signal_type.value, intent.intent_id, risk.risk_decision_id, True, record.status.value)
@@ -431,6 +483,7 @@ class DualLaneRuntime:
         execution_intent_id: str | None = None,
         processed_at: str | None = None,
         error: str | None = None,
+        regime_context: MarketRegimeContext | None = None,
     ) -> None:
         self._runtime_store.save_lane_lifecycle(
             LaneCandleLifecycle(
@@ -448,6 +501,8 @@ class DualLaneRuntime:
                 execution_intent_id=execution_intent_id,
                 processed_at=processed_at,
                 error=error,
+                regime_context_id=None if regime_context is None else regime_context.context_id,
+                regime_state=None if regime_context is None or regime_context.label is None else regime_context.label.value,
             )
         )
 

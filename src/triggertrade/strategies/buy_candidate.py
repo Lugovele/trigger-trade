@@ -9,7 +9,7 @@ from hashlib import sha256
 
 from triggertrade.config import RiskRulesConfig, StrategyRuleConfig
 from triggertrade.execution import OrderType, Side, TradeIntent
-from triggertrade.market_data import BybitInstrument, MarketObservation
+from triggertrade.market_data import BybitInstrument, MarketObservation, MarketRegimeContext
 from triggertrade.triggers import Signal, SignalType
 
 
@@ -25,6 +25,7 @@ class BuyCandidateStrategy:
         observation: MarketObservation,
         instrument: BybitInstrument,
         blocking_state: bool = False,
+        regime_context: MarketRegimeContext | None = None,
     ) -> TradeIntent | None:
         if not self.config.enabled or blocking_state:
             return None
@@ -60,6 +61,10 @@ class BuyCandidateStrategy:
             reason_signal_ids=(signal.signal_id,),
             reason_trigger_ids=(signal.trigger_rule_id,),
             created_at=datetime.now(UTC).isoformat(),
+            regime_context_id=None if regime_context is None else regime_context.context_id,
+            regime_rule_id=None if regime_context is None else regime_context.rule_id,
+            regime_rule_version=None if regime_context is None else regime_context.version,
+            regime_state=None if regime_context is None or regime_context.label is None else regime_context.label.value,
         )
 
 

@@ -40,11 +40,12 @@ def test_empty_runtime_db_bootstraps_canonical_registries_without_fake_evidence(
     model = DashboardReadModel(db)
 
     assert result.db_path == db
-    assert result.rules_count == 4
+    assert result.rules_count == 5
     assert result.trigger_sets_count == 2
     assert result.recommendations_count == 1
-    assert {rule.rule_id for rule in model.list_rules()} >= {"TRG-001", "TRG-002"}
+    assert {rule.rule_id for rule in model.list_rules()} >= {"TRG-001", "TRG-002", "CTX-REGIME"}
     assert model.get_rule_detail("TRG-002", "0.1.0").rule["status"] == "TESTING"
+    assert model.get_rule_detail("CTX-REGIME", "0.1.0").rule["rule_type"] == "context"
     assert model.get_live_overview().rule_set == "v1"
     assert model.get_live_overview().rules_count == 3
     assert model.get_test_overview().rule_set == "v2-test"
@@ -63,7 +64,7 @@ def test_bootstrap_is_idempotent_across_repeated_startups(tmp_path):
     third = _counts(db)
 
     assert first == second == third
-    assert first == {"rules": 4, "sets": 2, "memberships": 7, "recommendations": 1, "lane_lifecycles": 0}
+    assert first == {"rules": 5, "sets": 2, "memberships": 7, "recommendations": 1, "lane_lifecycles": 0}
 
 
 def test_same_version_same_semantics_ok_and_different_semantics_fail_closed(tmp_path):

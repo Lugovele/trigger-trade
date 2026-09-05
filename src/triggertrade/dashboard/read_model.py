@@ -77,6 +77,7 @@ class TraceView:
     risk: dict[str, Any] | None
     execution: dict[str, Any] | None
     fills: tuple[dict[str, Any], ...]
+    regime: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -242,6 +243,32 @@ class BaselineComparisonRow:
 
 
 @dataclass(frozen=True)
+class MarketRegimeView:
+    context_id: str
+    state: str
+    rule: str
+    symbol: str
+    timeframe: str
+    observed_at: str
+    window_return_pct: str
+    normalized_trend: str
+    directional_persistence: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class RegimeAnalyticsRow:
+    regime: str
+    signals: int
+    closed_trades: int
+    net_pnl: str
+    expectancy: str
+    fees_gross_profit_pct: str
+    long_trades: int
+    short_trades: int
+
+
+@dataclass(frozen=True)
 class OperatorStateView:
     state: str
     changed_at: str
@@ -377,7 +404,8 @@ class DashboardReadModel:
                     """
                     SELECT candle_id, symbol, timeframe, candle_open_time, status,
                            signal_id, intent_id, risk_decision_id,
-                           execution_intent_id, processed_at, error
+                           execution_intent_id, processed_at, error,
+                           regime_context_id, regime_state
                     FROM runtime_candle_lifecycles
                     WHERE candle_id = ?
                     """,
@@ -404,7 +432,9 @@ class DashboardReadModel:
                         conn,
                         """
                         SELECT intent_id, strategy_rule_id, strategy_rule_version,
-                               symbol, side, signal_ids, trigger_ids, created_at
+                               symbol, side, signal_ids, trigger_ids, created_at,
+                               regime_context_id, regime_rule_id, regime_rule_version,
+                               regime_state
                         FROM strategy_decisions
                         WHERE intent_id = ?
                         """,
@@ -455,6 +485,7 @@ class DashboardReadModel:
             return None
         trigger_view = _decode_json_fields(trigger, {"input_snapshot"})
         strategy_view = _decode_json_fields(strategy, {"signal_ids", "trigger_ids"})
+        regime = self._regime_for_context(lifecycle["regime_context_id"]) if lifecycle["regime_context_id"] else None
         return TraceView(
             candle_id=candle_id,
             lifecycle=_safe_dict(dict(lifecycle)),
@@ -465,6 +496,7 @@ class DashboardReadModel:
             risk=_decode_json_fields(risk, {"checked_rule_ids", "blocking_rule_ids"}),
             execution=_safe_dict(dict(execution)) if execution is not None else None,
             fills=fills,
+            regime=regime,
         )
 
     def get_latest_lane_trace(self, lane: str) -> TraceView | None:
@@ -478,7 +510,7 @@ class DashboardReadModel:
                     SELECT lane, symbol, timeframe, candle_id, candle_open_time,
                            trigger_set_id, trigger_set_version, status, signal_id,
                            intent_id, risk_decision_id, execution_intent_id,
-                           processed_at, error
+                           processed_at, error, regime_context_id, regime_state
                     FROM runtime_lane_lifecycles
                     WHERE lane = ?
                     ORDER BY COALESCE(processed_at, candle_open_time) DESC
@@ -520,7 +552,7 @@ class DashboardReadModel:
                     SELECT lane, symbol, timeframe, candle_id, candle_open_time,
                            trigger_set_id, trigger_set_version, status, signal_id,
                            intent_id, risk_decision_id, execution_intent_id,
-                           processed_at, error
+                           processed_at, error, regime_context_id, regime_state
                     FROM runtime_lane_lifecycles
                     WHERE lane = ? AND symbol = ? AND timeframe = ? AND candle_id = ?
                       AND trigger_set_id = ? AND trigger_set_version = ?
@@ -550,7 +582,9 @@ class DashboardReadModel:
                         """
                         SELECT intent_id, strategy_rule_id, strategy_rule_version,
                                symbol, side, signal_ids, trigger_ids, created_at,
-                               lane, trigger_set_id, trigger_set_version
+                               lane, trigger_set_id, trigger_set_version,
+                               regime_context_id, regime_rule_id, regime_rule_version,
+                               regime_state
                         FROM strategy_decisions
                         WHERE intent_id = ?
                         """,
@@ -602,6 +636,7 @@ class DashboardReadModel:
             return None
         trigger_view = _decode_json_fields(trigger, {"input_snapshot"})
         strategy_view = _decode_json_fields(strategy, {"signal_ids", "trigger_ids"})
+        regime = self._regime_for_context(lifecycle["regime_context_id"]) if lifecycle["regime_context_id"] else None
         return TraceView(
             candle_id=candle_id,
             lifecycle=_safe_dict(dict(lifecycle)),
@@ -612,6 +647,7 @@ class DashboardReadModel:
             risk=_decode_json_fields(risk, {"checked_rule_ids", "blocking_rule_ids"}),
             execution=_safe_dict(dict(execution)) if execution is not None else None,
             fills=fills,
+            regime=regime,
         )
 
     def get_live_overview(self) -> OverviewView:
@@ -930,18 +966,20 @@ class DashboardReadModel:
         rows: list[TestSetEvidenceRow] = []
         for trigger_set in testing_sets:
             signals, failures = self._test_set_counts(trigger_set.set_id, trigger_set.version)
+            closed_trades = self._closed_trade_count(trigger_set.set_id, trigger_set.version)
+            regime_coverage = self._regime_coverage(trigger_set.set_id, trigger_set.version)
             evidence = GovernanceEvidence(
                 testing_started_at=trigger_set.created_at,
                 age_days=_age_days(trigger_set.created_at),
                 signals_observed=signals,
-                closed_trades_observed=self._closed_trade_count(trigger_set.set_id, trigger_set.version),
+                closed_trades_observed=closed_trades,
                 closed_trades_capability=(
                     EvidenceCapability.AVAILABLE
-                    if self._closed_trade_count(trigger_set.set_id, trigger_set.version) is not None
+                    if closed_trades is not None
                     else EvidenceCapability.UNAVAILABLE
                 ),
-                regime_coverage=None,
-                regime_capability=EvidenceCapability.UNAVAILABLE,
+                regime_coverage=regime_coverage,
+                regime_capability=EvidenceCapability.AVAILABLE,
                 baseline_comparison_available=active_available and self._baseline_comparison_available(trigger_set.set_id, trigger_set.version),
                 critical_failures=failures,
             )
@@ -981,6 +1019,27 @@ class DashboardReadModel:
         except sqlite3.Error:
             return None
         return None if row is None else int(row["count"] or 0)
+
+    def _regime_coverage(self, set_id: str, version: str) -> str | None:
+        if not self.db_path.exists():
+            return None
+        try:
+            with self._connect() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT DISTINCT regime_state
+                    FROM runtime_lane_lifecycles
+                    WHERE trigger_set_id = ? AND trigger_set_version = ?
+                      AND regime_state IS NOT NULL
+                      AND regime_state NOT IN ('UNKNOWN', 'INSUFFICIENT_DATA')
+                    ORDER BY regime_state
+                    """,
+                    (set_id, version),
+                ).fetchall()
+        except sqlite3.Error:
+            return None
+        regimes = [row["regime_state"] for row in rows]
+        return None if not regimes else f"{len(regimes)} regimes: {', '.join(regimes)}"
 
     def _baseline_comparison_available(self, set_id: str, version: str) -> bool:
         if not self.db_path.exists():
@@ -1144,6 +1203,92 @@ class DashboardReadModel:
                 )
         return tuple(rows)
 
+    def get_current_market_regime(self, symbol: str = "BTCUSDT", timeframe: str = "1m") -> MarketRegimeView | None:
+        if not self.db_path.exists():
+            return None
+        try:
+            with self._connect() as conn:
+                row = _fetch_optional(
+                    conn,
+                    """
+                    SELECT * FROM market_regime_evaluations
+                    WHERE symbol = ? AND timeframe = ?
+                    ORDER BY observed_at DESC
+                    LIMIT 1
+                    """,
+                    (symbol.upper(), timeframe),
+                )
+        except sqlite3.Error:
+            return None
+        return None if row is None else _regime_view(row)
+
+    def list_regime_analytics(self) -> tuple[RegimeAnalyticsRow, ...]:
+        if not self.db_path.exists():
+            return ()
+        rows: list[RegimeAnalyticsRow] = []
+        signal_counts: dict[str, int] = {}
+        trade_rows = ()
+        facts_by_regime: dict[str, tuple[TradePerformanceFact, ...]] = {}
+        try:
+            with self._connect() as conn:
+                signal_counts = {
+                    row["regime"]: int(row["signals"] or 0)
+                    for row in conn.execute(
+                        """
+                        SELECT COALESCE(l.regime_state, 'unavailable') AS regime,
+                               SUM(CASE WHEN t.signal_type IS NOT NULL AND t.signal_type != 'NO_SIGNAL' THEN 1 ELSE 0 END) AS signals
+                        FROM runtime_lane_lifecycles l
+                        LEFT JOIN trigger_evaluations t ON t.signal_id = l.signal_id
+                        GROUP BY COALESCE(l.regime_state, 'unavailable')
+                        """
+                    ).fetchall()
+                }
+        except sqlite3.Error:
+            signal_counts = {}
+        try:
+            with self._connect() as conn:
+                trade_rows = conn.execute(
+                    """
+                    SELECT COALESCE(regime_label, 'unavailable') AS regime,
+                           COUNT(*) AS closed_trades,
+                           SUM(CASE WHEN direction = 'LONG' THEN 1 ELSE 0 END) AS long_trades,
+                           SUM(CASE WHEN direction = 'SHORT' THEN 1 ELSE 0 END) AS short_trades
+                    FROM futures_closed_trades
+                    GROUP BY COALESCE(regime_label, 'unavailable')
+                    """
+                ).fetchall()
+        except sqlite3.Error:
+            trade_rows = ()
+        regimes = set(signal_counts) | {row["regime"] for row in trade_rows}
+        if trade_rows:
+            try:
+                with self._connect() as conn:
+                    facts_by_regime = {
+                        regime: _accounting_trade_facts_by_regime(conn, regime)
+                        for regime in regimes
+                        if regime not in {"unavailable", "UNKNOWN", "INSUFFICIENT_DATA"}
+                    }
+            except sqlite3.Error:
+                facts_by_regime = {}
+        trade_count_by_regime = {row["regime"]: row for row in trade_rows}
+        for regime in sorted(regimes):
+            facts = facts_by_regime.get(regime, ())
+            counts = trade_count_by_regime.get(regime)
+            net, expectancy, fees_pct = _regime_metric_values(facts)
+            rows.append(
+                RegimeAnalyticsRow(
+                    regime=regime,
+                    signals=signal_counts.get(regime, 0),
+                    closed_trades=int(counts["closed_trades"] or 0) if counts is not None else 0,
+                    net_pnl=net,
+                    expectancy=expectancy,
+                    fees_gross_profit_pct=fees_pct,
+                    long_trades=int(counts["long_trades"] or 0) if counts is not None else 0,
+                    short_trades=int(counts["short_trades"] or 0) if counts is not None else 0,
+                )
+            )
+        return tuple(rows)
+
     def get_operator_trading_state(self) -> OperatorStateView:
         if not self.db_path.exists():
             return OperatorStateView("TRADING_ENABLED", "-", "system_default", "default: no persisted operator pause")
@@ -1167,6 +1312,20 @@ class DashboardReadModel:
             source=row["source"],
             reason=row["reason"] or "-",
         )
+
+    def _regime_for_context(self, context_id: str) -> dict[str, Any] | None:
+        try:
+            with self._connect() as conn:
+                row = _fetch_optional(conn, "SELECT * FROM market_regime_evaluations WHERE context_id = ?", (context_id,))
+        except sqlite3.Error:
+            return None
+        if row is None:
+            return None
+        value = _safe_dict(dict(row))
+        value["input_snapshot"] = _json_value(value.get("input_snapshot"))
+        value["normalized_features"] = _json_value(value.get("normalized_features"))
+        value["thresholds"] = _json_value(value.get("thresholds"))
+        return value
 
     def list_logs(self, limit: int = 20) -> tuple[LogRow, ...]:
         if not self.db_path.exists():
@@ -1461,6 +1620,69 @@ def _accounting_trade_facts(conn: sqlite3.Connection, set_id: str, version: str)
     )
 
 
+def _accounting_trade_facts_by_regime(conn: sqlite3.Connection, regime: str) -> tuple[TradePerformanceFact, ...]:
+    try:
+        rows = conn.execute(
+            """
+            SELECT trade_id, trigger_set_id, trigger_set_version, symbol, direction,
+                   closed_at, net_pnl, gross_pnl, entry_fee, exit_fee, other_fees,
+                   funding, duration_seconds, regime_label
+            FROM futures_closed_trades
+            WHERE COALESCE(regime_label, 'unavailable') = ?
+            ORDER BY closed_at, trade_id
+            """,
+            (regime,),
+        ).fetchall()
+    except sqlite3.Error:
+        return ()
+    return tuple(
+        TradePerformanceFact(
+            trade_id=row["trade_id"],
+            trigger_set_id=row["trigger_set_id"],
+            trigger_set_version=row["trigger_set_version"],
+            symbol=row["symbol"],
+            direction=row["direction"],
+            closed_at=row["closed_at"],
+            net_pnl=Decimal(row["net_pnl"]),
+            gross_pnl=Decimal(row["gross_pnl"]),
+            entry_fee=Decimal(row["entry_fee"]),
+            exit_fee=Decimal(row["exit_fee"]),
+            other_fees=Decimal(row["other_fees"]),
+            funding=Decimal(row["funding"]),
+            duration_seconds=int(row["duration_seconds"]),
+            regime_label=row["regime_label"],
+        )
+        for row in rows
+    )
+
+
+def _regime_metric_values(facts: tuple[TradePerformanceFact, ...]) -> tuple[str, str, str]:
+    if not facts:
+        return "unavailable", "unavailable", "unavailable"
+    net = sum((fact.net_pnl for fact in facts), Decimal("0"))
+    expectancy = net / Decimal(len(facts))
+    gross_profit = sum((fact.gross_pnl for fact in facts if fact.gross_pnl > 0), Decimal("0"))
+    fees = sum((fact.entry_fee + fact.exit_fee + fact.other_fees for fact in facts), Decimal("0"))
+    fees_pct = None if gross_profit <= 0 else fees / gross_profit * Decimal("100")
+    return str(net), str(expectancy), _pct(fees_pct)
+
+
+def _regime_view(row: sqlite3.Row) -> MarketRegimeView:
+    features = _json_value(row["normalized_features"])
+    return MarketRegimeView(
+        context_id=row["context_id"],
+        state=row["label"] or "UNKNOWN",
+        rule=f"{row['rule_id']}@{row['version']}",
+        symbol=row["symbol"],
+        timeframe=row["timeframe"],
+        observed_at=row["observed_at"],
+        window_return_pct=str(features.get("window_return_pct", "unavailable")) if isinstance(features, dict) else "unavailable",
+        normalized_trend=str(features.get("normalized_trend", "unavailable")) if isinstance(features, dict) else "unavailable",
+        directional_persistence=str(features.get("directional_persistence", "unavailable")) if isinstance(features, dict) else "unavailable",
+        reason=row["reason"] or "classified",
+    )
+
+
 def _decimal(value: Decimal | None) -> str:
     return "unavailable" if value is None else str(value)
 
@@ -1571,6 +1793,10 @@ def _trade_intent_view(strategy: dict[str, Any] | None) -> dict[str, Any] | None
         "reason_signal_ids": strategy.get("signal_ids"),
         "reason_trigger_ids": strategy.get("trigger_ids"),
         "created_at": strategy.get("created_at"),
+        "regime_context_id": strategy.get("regime_context_id"),
+        "regime_rule_id": strategy.get("regime_rule_id"),
+        "regime_rule_version": strategy.get("regime_rule_version"),
+        "regime_state": strategy.get("regime_state"),
     }
 
 
