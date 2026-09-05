@@ -97,3 +97,9 @@ metadata provides a non-1 value. Fees are positive costs, actual funding is a
 signed account impact, and slippage is diagnostic because actual fill prices
 already determine gross P&L. Dashboard futures rows are read-only projections
 from persistence.
+
+Futures performance analytics are calculated only above accounting facts and
+are scored by Trigger Set Version. The dashboard can show closed trades, win
+rate, expectancy, profit factor, fees, funding, baseline comparison and sample
+warnings when samples exist. Empty samples and zero denominators stay
+unavailable; analytics does not auto-promote sets or mutate rules.

@@ -284,3 +284,26 @@ futures. Equity and drawdown are computed only from persisted real snapshots:
 running peak, current equity, absolute drawdown, drawdown percent, and maximum
 drawdown. Dashboard pages may only render accounting-backed persisted values;
 they must not recompute financial results in HTML or JavaScript.
+
+## Futures Performance Analytics
+
+Performance analytics sit above deterministic accounting facts. The strategy
+performance unit is a Trigger Set Version, not an individual trigger. Trigger
+level views may explain contribution or filtering behavior, but they must not
+label a single trigger profitable when results depend on full Trigger Set
+membership, strategy, risk and execution context.
+
+Analytics may group accounting-backed closed trades by Trigger Set version,
+symbol, direction, market regime when available, and time window. Baseline
+comparison between TESTING and ACTIVE sets is valid only over overlapping
+closed-trade periods; missing overlap or missing sample is reported as
+unavailable, not inferred.
+
+Core performance metrics are backend-computed from closed trades: wins,
+losses, win rate, net P&L, expectancy per trade, profit factor, fees, funding,
+fees as percent of gross profit, average duration, and LONG/SHORT breakdowns.
+Gross profit/loss are derived from accounting `gross_pnl`; profit factor and
+winner/loser averages use signed net trade outcomes.
+Max drawdown is used only where accounting-backed drawdown is available for
+the relevant scope. The dashboard renders these backend values without
+financial arithmetic.

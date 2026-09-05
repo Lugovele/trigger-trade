@@ -175,4 +175,7 @@ Backend futures accounting is now in MVP scope for deterministic financial
 facts: fill VWAP, LONG/SHORT gross P&L, actual fees, actual funding, net P&L,
 unrealized mark-price P&L, equity snapshots, drawdown, duration, Trigger Set
 attribution, and regime attribution where available. Full performance
-analytics and real-money execution remain out of scope.
+analytics aggregation remains limited to deterministic Trigger Set Version
+metrics over accounting facts: closed trades, win rate, expectancy, profit
+factor, net P&L, fees, funding, direction breakdowns, sample warnings, and
+overlapping ACTIVE/TEST comparison. Real-money execution remains out of scope.

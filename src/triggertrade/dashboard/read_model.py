@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 import json
 import sqlite3
 from typing import Any
 
+from triggertrade.analytics import TradePerformanceFact, compare_baseline, compute_futures_performance
 from triggertrade.governance import EvidenceCapability, GovernanceEvidence, GovernancePolicy, evaluate_readiness
 
 
@@ -137,6 +139,18 @@ class PerformanceRow:
     candidate_intents: int
     test_executions: int
     unavailable_metrics: str
+    closed_trades: int = 0
+    win_rate: str = "unavailable"
+    expectancy: str = "unavailable"
+    profit_factor: str = "unavailable"
+    net_pnl: str = "unavailable"
+    max_drawdown: str = "unavailable"
+    fees: str = "unavailable"
+    funding: str = "unavailable"
+    fees_gross_profit_pct: str = "unavailable"
+    readiness: str = "unavailable"
+    recommendation: str = "unavailable"
+    warnings: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -206,6 +220,25 @@ class FuturesEquityRow:
     drawdown_absolute: str
     drawdown_percent: str
     max_drawdown: str
+
+
+@dataclass(frozen=True)
+class BaselineComparisonRow:
+    candidate_set: str
+    baseline_set: str
+    available: bool
+    period: str
+    baseline_closed_trades: int
+    candidate_closed_trades: int
+    baseline_net_pnl: str
+    candidate_net_pnl: str
+    baseline_expectancy: str
+    candidate_expectancy: str
+    baseline_fees: str
+    candidate_fees: str
+    baseline_direction_mix: str
+    candidate_direction_mix: str
+    reason: str
 
 
 @dataclass(frozen=True)
@@ -793,6 +826,7 @@ class DashboardReadModel:
         sets = self.list_trigger_sets()
         if not sets or not self.db_path.exists():
             return ()
+        readiness_by_set = {f"{row.set_id}@{row.version}": row for row in self.list_test_set_evidence()}
         rows: list[PerformanceRow] = []
         with self._connect() as conn:
             for trigger_set in sets:
@@ -833,19 +867,56 @@ class DashboardReadModel:
                 period = "unavailable"
                 if counts is not None and counts["start_time"] and counts["end_time"]:
                     period = f"{counts['start_time']} -> {counts['end_time']}"
-                if counts is None or int(counts["candles"] or 0) == 0:
+                facts = _accounting_trade_facts(conn, trigger_set.set_id, trigger_set.version)
+                if counts is None and not facts:
                     continue
+                candles = int(counts["candles"] or 0) if counts is not None else 0
+                signals = int(counts["signals"] or 0) if counts is not None else 0
+                intents = int(counts["intents"] or 0) if counts is not None else 0
+                test_executions = int(counts["test_executions"] or 0) if counts is not None else 0
+                if candles == 0 and not facts:
+                    continue
+                metrics = (
+                    compute_futures_performance(
+                        set_id=trigger_set.set_id,
+                        version=trigger_set.version,
+                        status=trigger_set.status,
+                        trades=facts,
+                        max_drawdown=None,
+                    )
+                    if facts
+                    else None
+                )
+                if metrics is not None and period == "unavailable":
+                    period = metrics.period
+                readiness = readiness_by_set.get(f"{trigger_set.set_id}@{trigger_set.version}")
                 rows.append(
                     PerformanceRow(
                         set_id=trigger_set.set_id,
                         version=trigger_set.version,
                         status=trigger_set.status,
                         period=period,
-                        candles_processed=int(counts["candles"] or 0),
-                        signals=int(counts["signals"] or 0),
-                        candidate_intents=int(counts["intents"] or 0),
-                        test_executions=int(counts["test_executions"] or 0),
-                        unavailable_metrics="P&L, win rate, return and drawdown unavailable: no accounting semantics yet",
+                        candles_processed=candles,
+                        signals=signals,
+                        candidate_intents=intents,
+                        test_executions=test_executions,
+                        unavailable_metrics="P&L/accounting sample unavailable" if metrics is None else "; ".join(metrics.warnings),
+                        closed_trades=0 if metrics is None else metrics.closed_trades,
+                        win_rate=_pct(metrics.win_rate_pct) if metrics else "unavailable",
+                        expectancy=_decimal(metrics.expectancy_per_trade) if metrics else "unavailable",
+                        profit_factor=_decimal(metrics.profit_factor) if metrics and metrics.profit_factor is not None else (metrics.profit_factor_reason if metrics else "unavailable"),
+                        net_pnl=_decimal(metrics.net_pnl) if metrics else "unavailable",
+                        max_drawdown=_decimal(metrics.max_drawdown) if metrics else "unavailable",
+                        fees=_decimal(metrics.fees) if metrics else "unavailable",
+                        funding=_decimal(metrics.funding) if metrics else "unavailable",
+                        fees_gross_profit_pct=_pct(metrics.fees_as_pct_of_gross_profit) if metrics else "unavailable",
+                        readiness=readiness.readiness if readiness else "unavailable",
+                        recommendation=(
+                            "; ".join(metrics.recommendation_observations)
+                            if metrics and metrics.recommendation_observations
+                            else (readiness.recommendation_action if readiness else "unavailable")
+                        ),
+                        warnings=() if metrics is None else metrics.warnings,
                     )
                 )
         return tuple(rows)
@@ -863,11 +934,15 @@ class DashboardReadModel:
                 testing_started_at=trigger_set.created_at,
                 age_days=_age_days(trigger_set.created_at),
                 signals_observed=signals,
-                closed_trades_observed=None,
-                closed_trades_capability=EvidenceCapability.UNAVAILABLE,
+                closed_trades_observed=self._closed_trade_count(trigger_set.set_id, trigger_set.version),
+                closed_trades_capability=(
+                    EvidenceCapability.AVAILABLE
+                    if self._closed_trade_count(trigger_set.set_id, trigger_set.version) is not None
+                    else EvidenceCapability.UNAVAILABLE
+                ),
                 regime_coverage=None,
                 regime_capability=EvidenceCapability.UNAVAILABLE,
-                baseline_comparison_available=active_available,
+                baseline_comparison_available=active_available and self._baseline_comparison_available(trigger_set.set_id, trigger_set.version),
                 critical_failures=failures,
             )
             result = evaluate_readiness(evidence, policy)
@@ -879,7 +954,9 @@ class DashboardReadModel:
                     testing_started_at=result.testing_started_at,
                     age_days=result.age_days,
                     signals_observed=result.signals_observed,
-                    closed_trades_observed="unavailable",
+                    closed_trades_observed=(
+                        "unavailable" if result.closed_trades_observed is None else str(result.closed_trades_observed)
+                    ),
                     regime_coverage=result.regime_coverage,
                     readiness=result.readiness.value,
                     recommendation_action=result.recommendation_action.value,
@@ -890,6 +967,39 @@ class DashboardReadModel:
                 )
             )
         return tuple(rows)
+
+    def _closed_trade_count(self, set_id: str, version: str) -> int | None:
+        if not self.db_path.exists():
+            return None
+        try:
+            with self._connect() as conn:
+                row = _fetch_optional(
+                    conn,
+                    "SELECT COUNT(*) AS count FROM futures_closed_trades WHERE trigger_set_id = ? AND trigger_set_version = ?",
+                    (set_id, version),
+                )
+        except sqlite3.Error:
+            return None
+        return None if row is None else int(row["count"] or 0)
+
+    def _baseline_comparison_available(self, set_id: str, version: str) -> bool:
+        if not self.db_path.exists():
+            return False
+        active = next((row for row in self.list_trigger_sets() if row.status == "ACTIVE"), None)
+        if active is None:
+            return False
+        try:
+            with self._connect() as conn:
+                candidate = _accounting_trade_facts(conn, set_id, version)
+                baseline = _accounting_trade_facts(conn, active.set_id, active.version)
+        except sqlite3.Error:
+            return False
+        if not candidate or not baseline:
+            return False
+        return max(min(trade.closed_at for trade in candidate), min(trade.closed_at for trade in baseline)) <= min(
+            max(trade.closed_at for trade in candidate),
+            max(trade.closed_at for trade in baseline),
+        )
 
     def list_recent_futures_trades(self, limit: int = 20) -> tuple[FuturesTradeRow, ...]:
         if not self.db_path.exists():
@@ -994,6 +1104,45 @@ class DashboardReadModel:
             drawdown_percent=row["drawdown_percent"],
             max_drawdown=row["max_drawdown"],
         )
+
+    def list_baseline_comparisons(self) -> tuple[BaselineComparisonRow, ...]:
+        if not self.db_path.exists():
+            return ()
+        sets = self.list_trigger_sets()
+        active = next((row for row in sets if row.status == "ACTIVE"), None)
+        testing = tuple(row for row in sets if row.status == "TESTING")
+        if active is None or not testing:
+            return ()
+        rows: list[BaselineComparisonRow] = []
+        with self._connect() as conn:
+            baseline_facts = _accounting_trade_facts(conn, active.set_id, active.version)
+            for candidate in testing:
+                comparison = compare_baseline(
+                    baseline_set=f"{active.set_id}@{active.version}",
+                    candidate_set=f"{candidate.set_id}@{candidate.version}",
+                    baseline_trades=baseline_facts,
+                    candidate_trades=_accounting_trade_facts(conn, candidate.set_id, candidate.version),
+                )
+                rows.append(
+                    BaselineComparisonRow(
+                        candidate_set=comparison.candidate_set,
+                        baseline_set=comparison.baseline_set,
+                        available=comparison.available,
+                        period=comparison.overlap_period or "unavailable",
+                        baseline_closed_trades=comparison.baseline_closed_trades,
+                        candidate_closed_trades=comparison.candidate_closed_trades,
+                        baseline_net_pnl=_decimal(comparison.baseline_net_pnl),
+                        candidate_net_pnl=_decimal(comparison.candidate_net_pnl),
+                        baseline_expectancy=_decimal(comparison.baseline_expectancy),
+                        candidate_expectancy=_decimal(comparison.candidate_expectancy),
+                        baseline_fees=_decimal(comparison.baseline_fees),
+                        candidate_fees=_decimal(comparison.candidate_fees),
+                        baseline_direction_mix=comparison.baseline_direction_mix or "unavailable",
+                        candidate_direction_mix=comparison.candidate_direction_mix or "unavailable",
+                        reason=comparison.reason or "overlapping accounting sample available",
+                    )
+                )
+        return tuple(rows)
 
     def get_operator_trading_state(self) -> OperatorStateView:
         if not self.db_path.exists():
@@ -1274,6 +1423,50 @@ def _trade_row(row: sqlite3.Row) -> PaperTradeRow:
         risk_decision_id=row["risk_decision_id"],
         execution_id=row["exchange_order_id"] or row["client_order_id"],
     )
+
+
+def _accounting_trade_facts(conn: sqlite3.Connection, set_id: str, version: str) -> tuple[TradePerformanceFact, ...]:
+    try:
+        rows = conn.execute(
+            """
+            SELECT trade_id, trigger_set_id, trigger_set_version, symbol, direction,
+                   closed_at, net_pnl, gross_pnl, entry_fee, exit_fee, other_fees,
+                   funding, duration_seconds, regime_label
+            FROM futures_closed_trades
+            WHERE trigger_set_id = ? AND trigger_set_version = ?
+            ORDER BY closed_at, trade_id
+            """,
+            (set_id, version),
+        ).fetchall()
+    except sqlite3.Error:
+        return ()
+    return tuple(
+        TradePerformanceFact(
+            trade_id=row["trade_id"],
+            trigger_set_id=row["trigger_set_id"],
+            trigger_set_version=row["trigger_set_version"],
+            symbol=row["symbol"],
+            direction=row["direction"],
+            closed_at=row["closed_at"],
+            net_pnl=Decimal(row["net_pnl"]),
+            gross_pnl=Decimal(row["gross_pnl"]),
+            entry_fee=Decimal(row["entry_fee"]),
+            exit_fee=Decimal(row["exit_fee"]),
+            other_fees=Decimal(row["other_fees"]),
+            funding=Decimal(row["funding"]),
+            duration_seconds=int(row["duration_seconds"]),
+            regime_label=row["regime_label"],
+        )
+        for row in rows
+    )
+
+
+def _decimal(value: Decimal | None) -> str:
+    return "unavailable" if value is None else str(value)
+
+
+def _pct(value: Decimal | None) -> str:
+    return "unavailable" if value is None else f"{value}%"
 
 
 def _compact_set(set_id: str | None, version: str | None) -> str:

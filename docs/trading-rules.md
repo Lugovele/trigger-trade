@@ -248,6 +248,33 @@ affect gross P&L. Unrealized P&L prefers mark price and records the valuation
 source. Return-on-margin and return-on-equity remain unsupported until their
 capital-base semantics are separately reviewed.
 
+## Futures Performance Metric Semantics
+
+Strategy performance is scored at Trigger Set Version level. Rule-level
+diagnostics may explain filtering or contribution, but a single trigger must
+not be labeled independently profitable when the full set, strategy, risk, and
+execution contract produced the trade.
+
+For a closed-trade sample:
+
+- `wins`: `net_pnl > 0`.
+- `losses`: `net_pnl < 0`.
+- Breakeven trades are neither wins nor losses.
+- `win_rate`: `wins / closed_trades * 100`; unavailable when sample is empty.
+- `gross_profit`: sum of positive accounting `gross_pnl` values.
+- `gross_loss`: signed sum of negative accounting `gross_pnl` values.
+- `expectancy_per_trade`: `mean(net_pnl)` in settlement currency, not percent.
+- `profit_factor`: sum of positive net outcomes divided by absolute sum of
+  negative net outcomes. If no losing outcomes exist, it is unavailable with an
+  explicit reason instead of infinity.
+- `fees_as_pct_of_gross_profit`: total actual fees divided by positive
+  accounting gross P&L; unavailable when gross profit is non-positive.
+
+Baseline comparison is only fair over overlapping ACTIVE and TESTING
+closed-trade periods. Missing overlap, missing sample, or unavailable accounting
+facts must be shown as unavailable, not filled with defaults. Performance
+analytics do not auto-promote, mutate rules, or claim statistical significance.
+
 ## TRG-002 Robust Volume Confirmation
 
 Canonical rule id: `TRG-002`. Logical/display name: `TRG-VOLUME` / `Robust Volume Confirmation`. Initial version: `0.1.0`. Status: `TESTING` candidate only.
