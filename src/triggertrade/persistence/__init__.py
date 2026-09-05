@@ -17,6 +17,7 @@ from .trigger_set_store import (
     current_active_trigger_set,
     current_rule_definitions,
     current_testing_trigger_set,
+    current_volume_recommendation,
 )
 
 __all__ = [
@@ -36,4 +37,5 @@ __all__ = [
     "current_active_trigger_set",
     "current_rule_definitions",
     "current_testing_trigger_set",
+    "current_volume_recommendation",
 ]

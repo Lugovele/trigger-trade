@@ -36,6 +36,24 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if parsed.path.startswith("/set/"):
             self._send_html(render_dashboard(self.server.read_model, unquote(parsed.path.removeprefix("/set/"))))
             return
+        if parsed.path.startswith("/rules/"):
+            parts = [unquote(part) for part in parsed.path.strip("/").split("/")]
+            rule_id = parts[1] if len(parts) > 1 else ""
+            version = parts[2] if len(parts) > 2 else None
+            detail = self.server.read_model.get_rule_detail(rule_id, version)
+            if detail is None:
+                self._send_html(render_not_found(parsed.path), HTTPStatus.NOT_FOUND)
+            else:
+                self._send_html(render_rule_detail(detail))
+            return
+        if parsed.path.startswith("/recommendations/"):
+            recommendation_id = unquote(parsed.path.removeprefix("/recommendations/"))
+            detail = self.server.read_model.get_recommendation(recommendation_id)
+            if detail is None:
+                self._send_html(render_not_found(parsed.path), HTTPStatus.NOT_FOUND)
+            else:
+                self._send_html(render_recommendation_detail(detail))
+            return
         if parsed.path == "/healthz":
             self._send_text("ok")
             return
@@ -74,6 +92,8 @@ def render_dashboard(read_model: DashboardReadModel, selected_set: str = "") -> 
     test_trades = read_model.list_lane_trades("TEST")
     logs = read_model.list_logs()
     health = read_model.get_api_health()
+    recommendations = getattr(read_model, "list_recommendations", lambda: ())()
+    performance = getattr(read_model, "list_set_performance", lambda: ())()
     live_trace = read_model.get_latest_lane_trace("ACTIVE")
     test_trace = read_model.get_latest_lane_trace("TEST")
     return _page(
@@ -89,7 +109,7 @@ def render_dashboard(read_model: DashboardReadModel, selected_set: str = "") -> 
       <button class="utility-btn" onclick="copyData()">Copy</button>
     </div>
   </div></div>
-  <div class="tabsbar"><div class="container tabsbar-inner"><div class="tabs"><button class="tabbtn active" data-page="overview">Overview</button><button class="tabbtn" data-page="rules">Rules</button></div></div></div>
+  <div class="tabsbar"><div class="container tabsbar-inner"><div class="tabs"><button class="tabbtn active" data-page="overview">Overview</button><button class="tabbtn" data-page="rules">Rules</button><button class="tabbtn" data-page="analytics">Analytics</button></div></div></div>
   <div class="content container">
     <section class="page active" id="overview">
       <div style="display:flex;justify-content:flex-end;margin-bottom:8px"><div class="env-switch" id="envSwitch"><button id="liveBtn" class="active live" onclick="setEnv('live')">LIVE</button><button id="testBtn" onclick="setEnv('test')">TEST</button></div></div>
@@ -97,6 +117,7 @@ def render_dashboard(read_model: DashboardReadModel, selected_set: str = "") -> 
       {_overview_section("testOverview", test, test_trades, test_trace, False)}
     </section>
     <section class="page" id="rules">{_trigger_sets_panel(trigger_sets)}{_rules_panel(rules)}</section>
+    <section class="page" id="analytics">{_performance_panel(performance)}{_recommendations_panel(recommendations)}</section>
     <section class="page" id="logs"><div class="panel"><div class="activity">{_logs(logs)}</div></div></section>
     <section class="page" id="settings">{_health_panel(health)}<div class="panel"><div class="panel-head"><div class="panel-title">Connection events</div></div><div class="activity">{_logs(logs[:5])}</div></div></section>
   </div>
@@ -216,10 +237,100 @@ def _trigger_sets_panel(rows) -> str:
 
 def _rules_panel(rows) -> str:
     body = "".join(
-        f"<tr data-status='{_h(row.status.lower())}'><td><b>{_h(row.name)}</b><div class='mono muted'>{_h(row.rule_id)}</div></td><td>{_h(row.asset_scope)}</td><td>{_h(row.condition)}</td><td>{_h(row.used_in)}</td><td>{_h(row.version)}</td><td>{_status_badge(row.status)}</td></tr>"
+        f"<tr data-status='{_h(row.status.lower())}'><td><a class='linkbtn' href='/rules/{_h(row.rule_id)}'>{_h(row.name)}</a><div class='mono muted'>{_h(row.rule_id)}</div></td><td>{_h(row.asset_scope)}</td><td>{_h(row.condition)}</td><td>{_h(row.used_in)}</td><td><a class='linkbtn' href='/rules/{_h(row.rule_id)}/{_h(row.version)}'>{_h(row.version)}</a></td><td>{_status_badge(row.status)}</td></tr>"
         for row in rows
     ) or "<tr><td colspan='6' class='muted'>No rule registry records yet.</td></tr>"
     return f"<div class='filters' style='margin-bottom:12px'><input class='search' id='ruleSearch' placeholder='Search rules...' oninput='filterRules()'><select id='statusFilter' onchange='filterRules()'><option value='all'>All statuses</option><option value='active'>Active</option><option value='testing'>Testing</option><option value='draft'>Draft</option><option value='archive'>Archive</option></select><button class='button dark' disabled title='Read-only dashboard'>+ New rule</button></div><div class='panel'><div class='panel-head'><div><div class='panel-title'>Rule registry</div></div></div><div class='table-wrap'><table id='rulesTable'><thead><tr><th>Rule</th><th>Asset</th><th>Condition</th><th>Used in</th><th>Version</th><th>Status</th></tr></thead><tbody>{body}</tbody></table></div><div class='mobile-list' id='rulesMobile'></div></div>"
+
+
+def render_rule_detail(detail) -> str:
+    rule = detail.rule
+    definition = rule.get("definition") or {}
+    return _page(
+        f"{rule.get('rule_id')} {rule.get('version')}",
+        f"""
+<div class="app"><main class="main"><div class="toolbar"><div class="container toolbar-inner"><a class="brand-top" href="/">TriggerTrade</a><div class="utility-actions"><a class="utility-btn" href="/">Overview</a></div></div></div>
+<div class="tabsbar"><div class="container tabsbar-inner"><div class="tabs"><a class="tabbtn active" href="/rules/{_h(rule.get('rule_id'))}/{_h(rule.get('version'))}">Rule Detail</a><a class="tabbtn" href="/">Registry</a></div></div></div>
+<div class="content container">
+  <section class="panel"><div class="panel-head"><div><div class="panel-title">{_h(rule.get('name'))}</div><div class="panel-meta mono">{_h(rule.get('rule_id'))} @ {_h(rule.get('version'))}</div></div>{_status_badge(str(rule.get('status')))}</div><div class="section"><div class="set-detail">{_kv('Rule ID', rule.get('rule_id'))}{_kv('Version', rule.get('version'))}{_kv('Type', rule.get('rule_type'))}{_kv('Scope', rule.get('asset_scope'))}{_kv('Created', _compact(rule.get('created_at')))}{_kv('Provenance', rule.get('provenance'))}</div></div></section>
+  {_definition_panel('Purpose', rule.get('condition'))}
+  {_definition_panel('Technical Definition', definition)}
+  {_definition_panel('Formula', definition.get('relative_volume') or definition.get('condition') or rule.get('condition'))}
+  {_definition_panel('Inputs', definition.get('lookback') or definition.get('volume_unit') or definition)}
+  {_definition_panel('Parameters / Thresholds', {k:v for k,v in definition.items() if 'threshold' in k or 'lookback' in k or k in {'boundary','median','percentile_rank'}})}
+  {_definition_panel('Boundary / Missing / Stale Behavior', {k:v for k,v in definition.items() if k in {'boundary','missing_data','stale_data'}})}
+  {_used_in_panel(detail.used_in_sets)}
+  {_version_history_panel(detail.versions)}
+  {_rule_recommendations_panel(detail.recommendations)}
+</div></main></div>
+""",
+    )
+
+
+def render_recommendation_detail(detail) -> str:
+    rec = detail.recommendation
+    linked = "-" if detail.linked_set is None else f"{detail.linked_set.set_id}@{detail.linked_set.version}"
+    return _page(
+        str(rec.get("title", "Recommendation")),
+        f"""
+<div class="app"><main class="main"><div class="toolbar"><div class="container toolbar-inner"><a class="brand-top" href="/">TriggerTrade</a><div class="utility-actions"><a class="utility-btn" href="/">Analytics</a></div></div></div>
+<div class="tabsbar"><div class="container tabsbar-inner"><div class="tabs"><a class="tabbtn active" href="/recommendations/{_h(rec.get('recommendation_id'))}">Recommendation</a><a class="tabbtn" href="/">Overview</a></div></div></div>
+<div class="content container">
+  <section class="panel"><div class="panel-head"><div><div class="panel-title">{_h(rec.get('title'))}</div><div class="panel-meta mono">{_h(rec.get('recommendation_id'))}</div></div>{_status_badge(str(rec.get('status')))}</div><div class="section"><div class="set-detail">{_kv('Created', _compact(rec.get('created_at')))}{_kv('Resulting test set', linked)}{_kv('Decision', rec.get('decision') or '-')}</div></div></section>
+  {_definition_panel('Observation', rec.get('observation'))}
+  {_definition_panel('Evidence', rec.get('evidence'))}
+  {_definition_panel('Hypothesis', rec.get('hypothesis'))}
+  {_definition_panel('Recommended Experiment', rec.get('recommended_experiment'))}
+  {_definition_panel('Proposed Rule Version', rec.get('proposed_rule_changes'))}
+  {_definition_panel('Proposed Trigger Set', rec.get('proposed_trigger_set_definition'))}
+  {_definition_panel('Test Requirements', {'minimum_test_duration': rec.get('minimum_test_duration'), 'minimum_sample_size': rec.get('minimum_sample_size')})}
+  {_definition_panel('Evaluation', rec.get('evaluation_summary') or 'Pending forward evidence.')}
+</div></main></div>
+""",
+    )
+
+
+def _performance_panel(rows) -> str:
+    body = "".join(
+        f"<tr><td><span class='mono'>{_h(row.set_id)}</span><div class='muted'>{_h(row.version)}</div></td><td>{_status_badge(row.status)}</td><td>{_h(row.period)}</td><td>{row.candles_processed}</td><td>{row.signals}</td><td>{row.candidate_intents}</td><td>{row.test_executions}</td><td class='muted'>{_h(row.unavailable_metrics)}</td></tr>"
+        for row in rows
+    ) or "<tr><td colspan='8' class='muted'>No set-level runtime evidence recorded yet.</td></tr>"
+    return f"<div class='panel'><div class='panel-head'><div><div class='panel-title'>Performance</div><div class='panel-meta'>Set-vs-set evidence only; unsupported outcome metrics are not fabricated.</div></div></div><div class='table-wrap'><table><thead><tr><th>Set</th><th>Status</th><th>Period</th><th>Candles</th><th>Signals</th><th>Intents</th><th>Test records</th><th>Unavailable metrics</th></tr></thead><tbody>{body}</tbody></table></div></div>"
+
+
+def _recommendations_panel(rows) -> str:
+    body = "".join(
+        f"<tr><td><a class='linkbtn' href='/recommendations/{_h(row.recommendation_id)}'>{_h(row.title)}</a><div class='mono muted'>{_h(row.recommendation_id)}</div></td><td>{_status_badge(row.status)}</td><td>{_h(_compact(row.created_at))}</td><td>{_h(row.resulting_test_set)}</td><td class='muted'>{_h(row.evidence)}</td></tr>"
+        for row in rows
+    ) or "<tr><td colspan='5' class='muted'>No recommendations registered yet.</td></tr>"
+    return f"<div class='panel'><div class='panel-head'><div><div class='panel-title'>Recommendations</div><div class='panel-meta'>Observation, hypothesis and experiment proposals are separated; no automatic promotion.</div></div></div><div class='table-wrap'><table><thead><tr><th>Recommendation</th><th>Status</th><th>Created</th><th>Resulting set</th><th>Evidence</th></tr></thead><tbody>{body}</tbody></table></div></div>"
+
+
+def _definition_panel(title: str, value) -> str:
+    if isinstance(value, dict):
+        body = "".join(f"<div class='set-rule'><span class='mono'>{_h(k)}</span><span>{_h(v)}</span></div>" for k, v in value.items()) or "<div class='muted'>No values recorded.</div>"
+    else:
+        body = f"<div class='activity-row'><div class='mono muted'>value</div><div>{_h(value or '-')}</div><span class='badge gray'>read-only</span></div>"
+    return f"<section class='panel'><div class='panel-head'><div class='panel-title'>{_h(title)}</div></div><div class='activity'>{body}</div></section>"
+
+
+def _used_in_panel(rows) -> str:
+    body = "".join(f"<tr><td class='mono'>{_h(row.get('set_id'))}</td><td>{_h(row.get('version'))}</td><td>{_status_badge(str(row.get('status')))}</td><td>{_h(row.get('purpose'))}</td></tr>" for row in rows) or "<tr><td colspan='4' class='muted'>This exact rule version is not referenced by a Trigger Set.</td></tr>"
+    return f"<section class='panel'><div class='panel-head'><div class='panel-title'>Used In Trigger Sets</div></div><div class='table-wrap'><table><thead><tr><th>Set</th><th>Version</th><th>Status</th><th>Purpose</th></tr></thead><tbody>{body}</tbody></table></div></section>"
+
+
+def _version_history_panel(rows) -> str:
+    body = "".join(f"<tr><td><a class='linkbtn' href='/rules/{_h(row.get('rule_id'))}/{_h(row.get('version'))}'>{_h(row.get('version'))}</a></td><td>{_h(_compact(row.get('created_at')))}</td><td>{_h(row.get('condition'))}</td><td>{_status_badge(str(row.get('status')))}</td><td>{_h((row.get('definition') or {}).get('source_recommendation_id', '-'))}</td></tr>" for row in rows)
+    return f"<section class='panel'><div class='panel-head'><div class='panel-title'>Version History</div></div><div class='table-wrap'><table><thead><tr><th>Version</th><th>Created</th><th>Changed parameters / summary</th><th>Status</th><th>Source</th></tr></thead><tbody>{body}</tbody></table></div></section>"
+
+
+def _rule_recommendations_panel(rows) -> str:
+    body = "".join(f"<tr><td><a class='linkbtn' href='/recommendations/{_h(row.get('recommendation_id'))}'>{_h(row.get('title'))}</a></td><td>{_status_badge(str(row.get('status')))}</td><td>{_h(row.get('hypothesis'))}</td></tr>" for row in rows) or "<tr><td colspan='3' class='muted'>No recommendations reference this exact rule version.</td></tr>"
+    return f"<section class='panel'><div class='panel-head'><div class='panel-title'>Recommendations</div></div><div class='table-wrap'><table><thead><tr><th>Recommendation</th><th>Status</th><th>Hypothesis</th></tr></thead><tbody>{body}</tbody></table></div></section>"
+
+
+def _kv(label: str, value) -> str:
+    return f"<div><div class='fl'>{_h(label)}</div><div class='fv'>{_h(value or '-')}</div></div>"
 
 
 def _logs(rows) -> str:
@@ -275,7 +386,7 @@ def _page(title: str, body: str) -> str:
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{_h(title)}</title>
 <style>
-:root{{--bg:#f6f7f9;--panel:#fff;--text:#18181b;--muted:#71717a;--line:#e4e4e7;--line2:#d4d4d8;--green:#15803d;--greenbg:#f0fdf4;--blue:#1d4ed8;--bluebg:#eff6ff;--amber:#a16207;--amberbg:#fffbeb;--page-max:1440px;--page-pad:22px}}*{{box-sizing:border-box}}body{{margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--bg);color:var(--text)}}button,input,select{{font:inherit}}.app{{min-height:100vh}}.main{{min-width:0}}.container{{width:100%;max-width:var(--page-max);margin:0 auto;padding-inline:var(--page-pad)}}.toolbar{{height:58px;background:#fff;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:20}}.toolbar-inner{{height:58px;display:flex;align-items:center;justify-content:space-between}}.brand-top{{font-weight:780;font-size:15px;letter-spacing:-.01em}}.utility-actions{{display:flex;align-items:center;gap:8px}}.utility-btn{{border:1px solid var(--line2);background:#fff;border-radius:8px;padding:6px 9px;font-size:11px;font-weight:700;color:#3f3f46;cursor:pointer}}.env-switch{{display:inline-flex;align-items:center;gap:4px;background:#f7f7f8;border:1px solid #ececef;border-radius:999px;padding:2px}}.env-switch button{{border:0;background:transparent;padding:5px 10px;border-radius:999px;font-size:10px;font-weight:700;color:#8a8a91;cursor:pointer;letter-spacing:.02em}}.env-switch button.active.live,.env-switch button.active.test{{background:#fff;color:#27272a;box-shadow:0 1px 2px rgba(24,24,27,.07)}}.tabsbar{{background:#fff;border-bottom:1px solid var(--line)}}.tabs{{display:flex;gap:22px;height:40px;align-items:flex-end}}.tabbtn{{border:0;background:transparent;padding:0 0 9px;color:#71717a;font-size:12px;font-weight:700;cursor:pointer;border-bottom:2px solid transparent}}.tabbtn.active{{color:#18181b;border-bottom-color:#18181b}}.content{{padding-top:10px;padding-bottom:18px}}.page{{display:none}}.page.active{{display:block}}.cards{{display:flex;gap:7px;margin-bottom:9px;overflow-x:auto;flex-wrap:nowrap;scrollbar-width:none}}.cards::-webkit-scrollbar{{display:none}}.card{{background:#fff;border:1px solid var(--line);border-radius:9px;padding:9px 11px;min-height:0;flex:1 1 0;min-width:0}}.label{{font-size:9px;color:var(--muted);margin-bottom:3px}}.value{{font-size:16px;font-weight:750;line-height:1.15;overflow-wrap:anywhere}}.sub{{font-size:9px;color:var(--muted);margin-top:2px}}.positive{{color:var(--green)}}.panel{{background:#fff;border:1px solid var(--line);border-radius:11px;overflow:hidden;margin-bottom:11px}}.panel-head{{padding:12px 14px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:12px}}.panel-title{{font-size:13px;font-weight:700}}.panel-meta{{font-size:10px;color:var(--muted);margin-top:2px}}.table-wrap{{overflow:auto}}table{{width:100%;border-collapse:collapse;font-size:12px}}th{{padding:9px 11px;background:#fafafa;border-bottom:1px solid var(--line);text-align:left;font-size:10px;color:#71717a;text-transform:uppercase;letter-spacing:.03em;white-space:nowrap}}td{{padding:11px;border-bottom:1px solid #f0f0f1;white-space:nowrap;vertical-align:top}}tbody tr:last-child td{{border-bottom:0}}.mono{{font-family:"SFMono-Regular",Consolas,monospace;font-size:11px}}.muted{{color:var(--muted)}}.badge{{display:inline-flex;padding:4px 7px;border-radius:999px;font-size:10px;font-weight:750;border:1px solid transparent}}.badge.live{{background:#18181b;color:#fff}}.badge.test{{background:#fff;color:#52525b;border-color:#d4d4d8}}.badge.green{{background:var(--greenbg);color:var(--green);border-color:#dcfce7}}.badge.blue{{background:var(--bluebg);color:var(--blue);border-color:#dbeafe}}.badge.amber{{background:var(--amberbg);color:var(--amber);border-color:#fef3c7}}.badge.gray{{background:#f4f4f5;color:#52525b;border-color:#e4e4e7}}.filters{{display:flex;gap:8px;align-items:center;flex-wrap:wrap}}.search,select{{border:1px solid var(--line2);background:#fff;border-radius:8px;padding:8px 10px;font-size:12px;outline:none}}.search{{min-width:220px}}.button{{border:1px solid var(--line2);background:#fff;padding:8px 10px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer}}.button.dark{{background:#18181b;color:#fff;border-color:#18181b}}.button:disabled{{opacity:.45;cursor:not-allowed}}.panel-actions{{display:flex;gap:7px;align-items:center}}.linkbtn{{border:0;background:transparent;padding:0;color:#18181b;text-decoration:underline;text-decoration-color:#a1a1aa;text-underline-offset:3px;font:inherit;font-weight:700;cursor:pointer}}.set-detail{{display:grid;grid-template-columns:1fr 1fr;gap:10px 16px;margin-bottom:12px}}.set-rules{{display:flex;flex-direction:column;gap:8px}}.set-rule{{display:flex;justify-content:space-between;gap:10px;padding:9px 10px;border:1px solid var(--line);border-radius:8px;background:#fafafa;font-size:11px}}.activity{{padding:3px 14px 8px}}.activity-row{{display:grid;grid-template-columns:110px 1fr auto;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid #f0f0f1;font-size:12px}}.activity-row:last-child{{border-bottom:0}}.mobile-list{{display:none;gap:9px}}.mcard{{background:#fff;border:1px solid var(--line);border-radius:11px;padding:13px}}.mhead{{display:flex;justify-content:space-between;gap:10px;margin-bottom:10px}}.mtitle{{font-size:13px;font-weight:750}}.msub{{font-size:10px;color:var(--muted);margin-top:2px}}.mgrid{{display:grid;grid-template-columns:1fr 1fr;gap:8px 12px}}.fl{{font-size:9px;color:var(--muted);margin-bottom:2px}}.fv{{font-size:12px;font-weight:650;overflow-wrap:anywhere}}.drawer-bg{{display:none;position:fixed;inset:0;background:rgba(24,24,27,.18);z-index:50}}.drawer-bg.open{{display:block}}.drawer{{position:absolute;right:0;top:0;bottom:0;width:min(440px,95vw);background:#fff;padding:22px;overflow:auto}}.drawer-head{{display:flex;justify-content:space-between;gap:12px;margin-bottom:18px}}.drawer h2{{font-size:19px;margin:3px 0 7px}}.iconbtn{{width:32px;height:32px;border:1px solid var(--line);background:#fff;border-radius:8px;cursor:pointer}}.section{{padding:16px 0;border-top:1px solid var(--line)}}.section-title{{font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin-bottom:10px}}.modal-bg{{display:none;position:fixed;inset:0;background:rgba(24,24,27,.22);z-index:60;padding:28px}}.modal-bg.open{{display:flex;align-items:flex-start;justify-content:center}}.modal{{width:min(1180px,100%);max-height:calc(100vh - 56px);overflow:auto;background:#fff;border-radius:12px;border:1px solid var(--line);box-shadow:0 20px 50px rgba(24,24,27,.14)}}.modal-head{{padding:14px 16px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:12px;position:sticky;top:0;background:#fff;z-index:2}}.modal-title{{font-size:14px;font-weight:750}}.modal-body{{padding:14px 16px}}.filter-grid{{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:14px}}.filter-field label{{display:block;font-size:10px;color:var(--muted);margin-bottom:4px}}.filter-field input,.filter-field select{{width:100%;border:1px solid var(--line2);border-radius:8px;padding:8px 9px;font-size:12px;background:#fff}}.modal-actions{{display:flex;gap:8px;justify-content:flex-end;margin-top:10px}}@media(max-width:900px){{.cards{{grid-template-columns:repeat(2,1fr)}}}}@media(max-width:760px){{:root{{--page-pad:12px}}body{{background:#fff}}.app{{display:block}}.main{{padding-bottom:0}}.toolbar{{height:54px}}.toolbar-inner{{height:54px}}.brand-top{{font-size:14px}}.utility-actions{{gap:5px}}.utility-btn{{padding:5px 7px;font-size:10px}}.tabsbar{{}}.tabs{{height:38px;gap:18px}}.tabbtn{{font-size:11px;padding-bottom:8px}}.content{{padding-top:8px;padding-bottom:12px}}.cards{{display:flex;gap:6px;overflow-x:auto;flex-wrap:nowrap;padding-bottom:2px;scrollbar-width:none}}.card{{flex:0 0 132px;min-width:132px;padding:8px 9px}}.value{{font-size:15px}}.desktop-table{{display:none}}.mobile-list{{display:grid}}.panel{{margin-bottom:11px}}.panel-head{{padding:10px 11px}}.activity{{padding:0 11px 6px}}.activity-row{{grid-template-columns:70px 1fr;font-size:11px}}.activity-row>:last-child{{display:none}}.filters{{width:100%}}.search{{width:100%;min-width:0}}.panel-actions{{gap:5px}}.panel-actions .button{{padding:6px 8px;font-size:10px}}.modal-bg{{padding:0}}.modal{{width:100%;height:100%;max-height:none;border-radius:0}}.filter-grid{{grid-template-columns:1fr 1fr}}.drawer{{width:100%;padding:16px}}.set-detail{{grid-template-columns:1fr 1fr}}.set-rule{{display:block}}.set-rule span{{display:block}}.set-rule span+span{{margin-top:4px;color:var(--muted)}}}}
+:root{{--bg:#f6f7f9;--panel:#fff;--text:#18181b;--muted:#71717a;--line:#e4e4e7;--line2:#d4d4d8;--green:#15803d;--greenbg:#f0fdf4;--blue:#1d4ed8;--bluebg:#eff6ff;--amber:#a16207;--amberbg:#fffbeb;--page-max:1440px;--page-pad:22px}}*{{box-sizing:border-box}}body{{margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--bg);color:var(--text)}}button,input,select{{font:inherit}}.app{{min-height:100vh}}.main{{min-width:0}}.container{{width:100%;max-width:var(--page-max);margin:0 auto;padding-inline:var(--page-pad)}}.toolbar{{height:58px;background:#fff;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:20}}.toolbar-inner{{height:58px;display:flex;align-items:center;justify-content:space-between}}a{{color:inherit}}.brand-top{{font-weight:780;font-size:15px;letter-spacing:-.01em}}.utility-actions{{display:flex;align-items:center;gap:8px}}.utility-btn{{border:1px solid var(--line2);background:#fff;border-radius:8px;padding:6px 9px;font-size:11px;font-weight:700;color:#3f3f46;cursor:pointer}}.env-switch{{display:inline-flex;align-items:center;gap:4px;background:#f7f7f8;border:1px solid #ececef;border-radius:999px;padding:2px}}.env-switch button{{border:0;background:transparent;padding:5px 10px;border-radius:999px;font-size:10px;font-weight:700;color:#8a8a91;cursor:pointer;letter-spacing:.02em}}.env-switch button.active.live,.env-switch button.active.test{{background:#fff;color:#27272a;box-shadow:0 1px 2px rgba(24,24,27,.07)}}.tabsbar{{background:#fff;border-bottom:1px solid var(--line)}}.tabs{{display:flex;gap:22px;height:40px;align-items:flex-end}}.tabbtn{{border:0;background:transparent;padding:0 0 9px;color:#71717a;font-size:12px;font-weight:700;cursor:pointer;border-bottom:2px solid transparent}}.tabbtn.active{{color:#18181b;border-bottom-color:#18181b}}.content{{padding-top:10px;padding-bottom:18px}}.page{{display:none}}.page.active{{display:block}}.cards{{display:flex;gap:7px;margin-bottom:9px;overflow-x:auto;flex-wrap:nowrap;scrollbar-width:none}}.cards::-webkit-scrollbar{{display:none}}.card{{background:#fff;border:1px solid var(--line);border-radius:9px;padding:9px 11px;min-height:0;flex:1 1 0;min-width:0}}.label{{font-size:9px;color:var(--muted);margin-bottom:3px}}.value{{font-size:16px;font-weight:750;line-height:1.15;overflow-wrap:anywhere}}.sub{{font-size:9px;color:var(--muted);margin-top:2px}}.positive{{color:var(--green)}}.panel{{background:#fff;border:1px solid var(--line);border-radius:11px;overflow:hidden;margin-bottom:11px}}.panel-head{{padding:12px 14px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:12px}}.panel-title{{font-size:13px;font-weight:700}}.panel-meta{{font-size:10px;color:var(--muted);margin-top:2px}}.table-wrap{{overflow:auto}}table{{width:100%;border-collapse:collapse;font-size:12px}}th{{padding:9px 11px;background:#fafafa;border-bottom:1px solid var(--line);text-align:left;font-size:10px;color:#71717a;text-transform:uppercase;letter-spacing:.03em;white-space:nowrap}}td{{padding:11px;border-bottom:1px solid #f0f0f1;white-space:nowrap;vertical-align:top}}tbody tr:last-child td{{border-bottom:0}}.mono{{font-family:"SFMono-Regular",Consolas,monospace;font-size:11px}}.muted{{color:var(--muted)}}.badge{{display:inline-flex;padding:4px 7px;border-radius:999px;font-size:10px;font-weight:750;border:1px solid transparent}}.badge.live{{background:#18181b;color:#fff}}.badge.test{{background:#fff;color:#52525b;border-color:#d4d4d8}}.badge.green{{background:var(--greenbg);color:var(--green);border-color:#dcfce7}}.badge.blue{{background:var(--bluebg);color:var(--blue);border-color:#dbeafe}}.badge.amber{{background:var(--amberbg);color:var(--amber);border-color:#fef3c7}}.badge.gray{{background:#f4f4f5;color:#52525b;border-color:#e4e4e7}}.filters{{display:flex;gap:8px;align-items:center;flex-wrap:wrap}}.search,select{{border:1px solid var(--line2);background:#fff;border-radius:8px;padding:8px 10px;font-size:12px;outline:none}}.search{{min-width:220px}}.button{{border:1px solid var(--line2);background:#fff;padding:8px 10px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer}}.button.dark{{background:#18181b;color:#fff;border-color:#18181b}}.button:disabled{{opacity:.45;cursor:not-allowed}}.panel-actions{{display:flex;gap:7px;align-items:center}}.linkbtn{{border:0;background:transparent;padding:0;color:#18181b;text-decoration:underline;text-decoration-color:#a1a1aa;text-underline-offset:3px;font:inherit;font-weight:700;cursor:pointer}}.set-detail{{display:grid;grid-template-columns:1fr 1fr;gap:10px 16px;margin-bottom:12px}}.set-rules{{display:flex;flex-direction:column;gap:8px}}.set-rule{{display:flex;justify-content:space-between;gap:10px;padding:9px 10px;border:1px solid var(--line);border-radius:8px;background:#fafafa;font-size:11px}}.activity{{padding:3px 14px 8px}}.activity-row{{display:grid;grid-template-columns:110px 1fr auto;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid #f0f0f1;font-size:12px}}.activity-row:last-child{{border-bottom:0}}.mobile-list{{display:none;gap:9px}}.mcard{{background:#fff;border:1px solid var(--line);border-radius:11px;padding:13px}}.mhead{{display:flex;justify-content:space-between;gap:10px;margin-bottom:10px}}.mtitle{{font-size:13px;font-weight:750}}.msub{{font-size:10px;color:var(--muted);margin-top:2px}}.mgrid{{display:grid;grid-template-columns:1fr 1fr;gap:8px 12px}}.fl{{font-size:9px;color:var(--muted);margin-bottom:2px}}.fv{{font-size:12px;font-weight:650;overflow-wrap:anywhere}}.drawer-bg{{display:none;position:fixed;inset:0;background:rgba(24,24,27,.18);z-index:50}}.drawer-bg.open{{display:block}}.drawer{{position:absolute;right:0;top:0;bottom:0;width:min(440px,95vw);background:#fff;padding:22px;overflow:auto}}.drawer-head{{display:flex;justify-content:space-between;gap:12px;margin-bottom:18px}}.drawer h2{{font-size:19px;margin:3px 0 7px}}.iconbtn{{width:32px;height:32px;border:1px solid var(--line);background:#fff;border-radius:8px;cursor:pointer}}.section{{padding:16px 0;border-top:1px solid var(--line)}}.section-title{{font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin-bottom:10px}}.modal-bg{{display:none;position:fixed;inset:0;background:rgba(24,24,27,.22);z-index:60;padding:28px}}.modal-bg.open{{display:flex;align-items:flex-start;justify-content:center}}.modal{{width:min(1180px,100%);max-height:calc(100vh - 56px);overflow:auto;background:#fff;border-radius:12px;border:1px solid var(--line);box-shadow:0 20px 50px rgba(24,24,27,.14)}}.modal-head{{padding:14px 16px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:12px;position:sticky;top:0;background:#fff;z-index:2}}.modal-title{{font-size:14px;font-weight:750}}.modal-body{{padding:14px 16px}}.filter-grid{{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:14px}}.filter-field label{{display:block;font-size:10px;color:var(--muted);margin-bottom:4px}}.filter-field input,.filter-field select{{width:100%;border:1px solid var(--line2);border-radius:8px;padding:8px 9px;font-size:12px;background:#fff}}.modal-actions{{display:flex;gap:8px;justify-content:flex-end;margin-top:10px}}@media(max-width:900px){{.cards{{grid-template-columns:repeat(2,1fr)}}}}@media(max-width:760px){{:root{{--page-pad:12px}}body{{background:#fff}}.app{{display:block}}.main{{padding-bottom:0}}.toolbar{{height:54px}}.toolbar-inner{{height:54px}}.brand-top{{font-size:14px}}.utility-actions{{gap:5px}}.utility-btn{{padding:5px 7px;font-size:10px}}.tabsbar{{}}.tabs{{height:38px;gap:18px}}.tabbtn{{font-size:11px;padding-bottom:8px}}.content{{padding-top:8px;padding-bottom:12px}}.cards{{display:flex;gap:6px;overflow-x:auto;flex-wrap:nowrap;padding-bottom:2px;scrollbar-width:none}}.card{{flex:0 0 132px;min-width:132px;padding:8px 9px}}.value{{font-size:15px}}.desktop-table{{display:none}}.mobile-list{{display:grid}}.panel{{margin-bottom:11px}}.panel-head{{padding:10px 11px}}.activity{{padding:0 11px 6px}}.activity-row{{grid-template-columns:70px 1fr;font-size:11px}}.activity-row>:last-child{{display:none}}.filters{{width:100%}}.search{{width:100%;min-width:0}}.panel-actions{{gap:5px}}.panel-actions .button{{padding:6px 8px;font-size:10px}}.modal-bg{{padding:0}}.modal{{width:100%;height:100%;max-height:none;border-radius:0}}.filter-grid{{grid-template-columns:1fr 1fr}}.drawer{{width:100%;padding:16px}}.set-detail{{grid-template-columns:1fr 1fr}}.set-rule{{display:block}}.set-rule span{{display:block}}.set-rule span+span{{margin-top:4px;color:var(--muted)}}}}
 </style>
 </head>
 <body>{body}</body>

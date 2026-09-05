@@ -10,6 +10,8 @@ from typing import Mapping
 class SignalType(StrEnum):
     BUY_CANDIDATE = "BUY_CANDIDATE"
     NO_SIGNAL = "NO_SIGNAL"
+    CONFIRMED = "CONFIRMED"
+    NOT_CONFIRMED = "NOT_CONFIRMED"
 
 
 @dataclass(frozen=True)

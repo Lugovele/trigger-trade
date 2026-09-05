@@ -149,3 +149,9 @@ MVP is complete when one configured strategy can:
 7. survive restart without silently corrupting order/position state.
 
 Live trading is a separate acceptance step after paper-mode validation.
+
+## Analytics MVP Scope
+
+In MVP scope: immutable rule version history, exact Trigger Set membership, read-only Rule Detail pages, a Recommendation Registry, supported set-level evidence counts, and a first TESTING-only volume confirmation candidate.
+
+Out of scope: automatic promotion, automatic parameter optimization, LLM trading recommendations, backtesting platform, P&L/portfolio accounting, new SELL logic, and any direct execution from analytics or dashboard.

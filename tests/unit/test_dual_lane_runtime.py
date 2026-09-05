@@ -1,4 +1,4 @@
-﻿from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from triggertrade.config import ExecutionVenue, load_config
 from triggertrade.execution import PaperExecutionAdapter
@@ -11,7 +11,7 @@ from triggertrade.persistence import (
     bootstrap_current_trigger_sets,
 )
 from triggertrade.services.dual_lane_runtime import DualLaneRuntime
-from triggertrade.trigger_sets import TriggerSetStatus
+from triggertrade.trigger_sets import Lane, TriggerSetStatus
 from tests.unit.test_paper_runtime import FakeMarketClient, FakeResponse, _candle
 
 
@@ -27,7 +27,7 @@ def test_same_completed_candle_fans_out_to_active_and_test_lanes(tmp_path):
     assert len(result.test) == 1
     assert result.active[0].candle_id == result.test[0].candle_id
     assert result.active[0].execution_status == "filled"
-    assert result.test[0].execution_status == "test_recorded"
+    assert result.test[0].skipped_reason == "volume_not_confirmed"
     assert active_adapter.create_calls == 1
     assert test_adapters[0].create_calls == 0
 
@@ -50,14 +50,13 @@ def test_lane_and_trigger_set_attribution_is_persisted(tmp_path):
         timeframe="1m",
         candle_id=result.candle_id,
         trigger_set_id="triggertrade-core-candidate",
-        trigger_set_version="v1-test",
+        trigger_set_version="v2-test",
     )
 
     assert active.status == "completed"
-    assert test.status == "test_recorded"
-    assert active.intent_id != test.intent_id
+    assert test.status == "no_intent"
+    assert test.intent_id is None
     assert ExecutionStore(path).get_by_intent(active.intent_id).lane == "ACTIVE"
-    assert ExecutionStore(path).get_by_intent(test.intent_id) is None
 
 
 def test_same_candle_same_lane_same_set_is_not_duplicated_after_restart(tmp_path):
@@ -131,7 +130,7 @@ def test_draft_and_archive_sets_are_not_evaluated(tmp_path):
     bootstrap_current_trigger_sets(trigger_sets, created_at="2026-09-05T00:00:00+00:00")
     trigger_sets.transition_status(
         set_id="triggertrade-core-candidate",
-        version="v1-test",
+        version="v2-test",
         status=TriggerSetStatus.ARCHIVE,
         changed_at="2026-09-05T00:10:00+00:00",
         reason="stop test",
@@ -160,7 +159,7 @@ def test_test_lane_failure_does_not_corrupt_active_lane(tmp_path):
     result = runtime.process_once()
 
     assert result.active[0].execution_status == "filled"
-    assert result.test[0].execution_status == "test_recorded"
+    assert result.test[0].skipped_reason == "volume_not_confirmed"
     assert active_adapter.create_calls == 1
 
 
@@ -171,7 +170,7 @@ def test_testing_set_does_not_auto_promote_to_active(tmp_path):
 
     trigger_sets = TriggerSetStore(path)
     assert trigger_sets.get_active_set("BTCUSDT", "1m").version == "v1"
-    assert trigger_sets.get_set("triggertrade-core-candidate", "v1-test").status is TriggerSetStatus.TESTING
+    assert trigger_sets.get_set("triggertrade-core-candidate", "v2-test").status is TriggerSetStatus.TESTING
 
 
 def _runtime(
@@ -185,6 +184,7 @@ def _runtime(
     trigger_sets=None,
     market_client=None,
     clock=None,
+    stale_after_seconds="120",
 ):
     env = {
         "TRIGGERTRADE_EXECUTION_VENUE": ExecutionVenue.LOCAL_PAPER.value,
@@ -192,7 +192,7 @@ def _runtime(
         "TRIGGERTRADE_RUNTIME_SYMBOL": "BTCUSDT",
         "TRIGGERTRADE_CANDLE_INTERVAL": "1",
         "TRIGGERTRADE_POLL_INTERVAL_SECONDS": "1",
-        "TRIGGERTRADE_STALE_AFTER_SECONDS": "120",
+        "TRIGGERTRADE_STALE_AFTER_SECONDS": stale_after_seconds,
     }
     config = load_config(env)
     db_path = path or (tmp_path / "dual.sqlite3")
@@ -231,7 +231,7 @@ def test_testing_set_waits_for_candle_after_activation(tmp_path):
         timeframe="1m",
         candle_id=result.candle_id,
         trigger_set_id="triggertrade-core-candidate",
-        trigger_set_version="v1-test",
+        trigger_set_version="v2-test",
     ) is None
 
 
@@ -251,3 +251,101 @@ def test_lane_checkpoint_gap_fails_closed(tmp_path):
     assert first.candle_id == "BTCUSDT:1m:2026-09-05T12:01:00+00:00"
     assert second.skipped_reason == "checkpoint_gap"
 
+
+
+
+class VolumeConfirmedMarketClient(FakeMarketClient):
+    def recent_candles(self, symbol, interval, limit):
+        rows = []
+        for i in range(60):
+            rows.append(_volume_candle(self.start + timedelta(minutes=i), "100", "1"))
+        rows.append(_volume_candle(self.start + timedelta(minutes=60), "98", "2"))
+        rows.append(_volume_candle(self.start + timedelta(minutes=61), "98", "1"))
+        return FakeResponse({"list": list(reversed(rows))})
+
+
+def test_testing_candidate_evaluates_trg_002_and_records_confirmed_set(tmp_path):
+    path = tmp_path / "dual.sqlite3"
+    result = _runtime(
+        tmp_path,
+        path=path,
+        market_client=VolumeConfirmedMarketClient(),
+        clock=lambda: datetime(2026, 9, 5, 13, 1, 30, tzinfo=UTC),
+    ).process_once()
+
+    assert result.test[0].execution_status == "test_recorded"
+    test = RuntimeStore(path).get_lane_lifecycle(
+        lane="TEST",
+        symbol="BTCUSDT",
+        timeframe="1m",
+        candle_id=result.candle_id,
+        trigger_set_id="triggertrade-core-candidate",
+        trigger_set_version="v2-test",
+    )
+    assert test.status == "test_recorded"
+
+    import sqlite3
+    with sqlite3.connect(path) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            """
+            SELECT signal_type, condition_result, input_snapshot
+            FROM trigger_evaluations
+            WHERE trigger_rule_id = 'TRG-002' AND lane = 'TEST'
+            """
+        ).fetchone()
+    assert row["signal_type"] == "CONFIRMED"
+    assert row["condition_result"] == 1
+    import json
+    assert json.loads(row["input_snapshot"])["relative_volume"] == "2"
+
+
+def _volume_candle(open_time: datetime, close: str, volume: str) -> list[str]:
+    return [
+        str(int(open_time.timestamp() * 1000)),
+        close,
+        close,
+        close,
+        close,
+        volume,
+        close,
+    ]
+
+
+
+def test_trg_002_uses_runtime_stale_after_seconds(tmp_path):
+    from triggertrade.services.dual_lane_runtime import _volume_signal
+    from triggertrade.services.runtime import CompletedCandle
+    from triggertrade.persistence import current_testing_trigger_set
+    import json
+
+    candles = parse_candles_for_volume_confirmed()
+    completed = CompletedCandle(
+        symbol="BTCUSDT",
+        timeframe="1m",
+        candle_id="BTCUSDT:1m:2026-09-05T13:00:00+00:00",
+        open_time=datetime(2026, 9, 5, 13, 0, tzinfo=UTC),
+        close_time=datetime(2026, 9, 5, 13, 1, tzinfo=UTC),
+        candle=candles[-2],
+        previous_candle=candles[-3],
+    )
+    signal = _volume_signal(
+        completed=completed,
+        candles=candles,
+        lane=Lane.TEST,
+        trigger_set=current_testing_trigger_set(created_at="2026-09-05T00:00:00+00:00"),
+        now=datetime(2026, 9, 5, 13, 1, 30, tzinfo=UTC),
+        stale_after_seconds=10,
+    )
+
+    snapshot = signal.input_snapshot
+    assert signal.signal_type == "NOT_CONFIRMED"
+    assert snapshot["stale_after_seconds"] == "10"
+    assert snapshot["stale_data_reason"] == "stale_candle"
+
+
+def parse_candles_for_volume_confirmed():
+    from triggertrade.market_data import parse_spot_candles
+
+    candles = parse_spot_candles(VolumeConfirmedMarketClient().recent_candles("BTCUSDT", "1", 70).result)
+    return tuple(sorted(candles, key=lambda candle: candle.start_time_ms))

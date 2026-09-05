@@ -408,3 +408,49 @@ def test_lane_trades_are_joined_through_lane_lifecycle(tmp_path):
     trades = DashboardReadModel(db).list_lane_trades("ACTIVE")
 
     assert [trade.intent_id for trade in trades] == ["intent-buy"]
+
+
+
+def test_rule_detail_and_recommendations_read_model(tmp_path):
+    db = tmp_path / "read_model.sqlite3"
+    bootstrap_current_trigger_sets(TriggerSetStore(db), created_at="2026-09-05T00:00:00+00:00")
+    model = DashboardReadModel(db)
+
+    detail = model.get_rule_detail("TRG-002", "0.1.0")
+
+    assert detail is not None
+    assert detail.rule["definition"]["logical_name"] == "TRG-VOLUME"
+    assert detail.versions[0]["version"] == "0.1.0"
+    assert detail.used_in_sets[0]["set_id"] == "triggertrade-core-candidate"
+    assert detail.recommendations[0]["recommendation_id"] == "REC-TRG-VOLUME-001"
+
+    recommendations = model.list_recommendations()
+    assert recommendations[0].resulting_test_set == "triggertrade-core-candidate@v2-test"
+    assert "No historical performance" in recommendations[0].evidence
+
+    rec_detail = model.get_recommendation("REC-TRG-VOLUME-001")
+    assert rec_detail.linked_set.version == "v2-test"
+    assert rec_detail.recommendation["hypothesis"].startswith("Price moves")
+
+    TriggerSetStore(db).transition_recommendation_status(
+        recommendation_id="REC-TRG-VOLUME-001",
+        status="EVALUATED",
+        changed_at="2026-09-05T01:00:00+00:00",
+        reason="unit regression for dashboard detail live status",
+    )
+    transitioned_detail = model.get_recommendation("REC-TRG-VOLUME-001")
+    assert transitioned_detail.recommendation["status"] == "EVALUATED"
+    assert model.list_recommendations()[0].status == "EVALUATED"
+    transitioned_rule = model.get_rule_detail("TRG-002", "0.1.0")
+    assert transitioned_rule.recommendations[0]["status"] == "EVALUATED"
+
+
+def test_set_performance_uses_supported_counts_only(tmp_path):
+    db = tmp_path / "read_model.sqlite3"
+    bootstrap_current_trigger_sets(TriggerSetStore(db), created_at="2026-09-05T00:00:00+00:00")
+
+    rows = DashboardReadModel(db).list_set_performance()
+
+    assert rows
+    assert all("P&L" in row.unavailable_metrics for row in rows)
+    assert all(row.candles_processed == 0 for row in rows)

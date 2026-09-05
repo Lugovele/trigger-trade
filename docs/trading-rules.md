@@ -21,8 +21,8 @@ Examples:
 
 ```text
 TRG-001  percentage price move trigger
-TRG-002  RSI threshold trigger
-TRG-003  volume spike trigger
+TRG-002  robust volume confirmation candidate
+TRG-003  reserved for future trigger
 
 STR-001  candidate buy from confirmed oversold condition
 
@@ -186,3 +186,19 @@ rule ids and rule versions
 ```
 
 The initial `TRG-001` threshold remains a development/demo configuration value. It is not evidence of a profitable trading edge. Visual dashboard fixtures may mention reference-only ideas such as RSI or momentum, but those fixture labels are not production rule definitions and must not affect runtime behavior.
+
+## TRG-002 Robust Volume Confirmation
+
+Canonical rule id: `TRG-002`. Logical/display name: `TRG-VOLUME` / `Robust Volume Confirmation`. Initial version: `0.1.0`. Status: `TESTING` candidate only.
+
+Input is the Bybit Spot base volume of the current completed BTCUSDT `1m` candle and the previous 60 completed BTCUSDT `1m` candles. The current candle is excluded from the lookback.
+
+Median definition: sort the 60 previous volumes ascending and average positions 30 and 31 using 1-based indexing.
+
+Relative volume: `current_volume / median_volume_60`. If the median is zero, the rule fails closed as `NOT_CONFIRMED`.
+
+Percentile rank: `count(previous_volume <= current_volume) / 60 * 100`. Ties count as less-or-equal.
+
+Condition: `relative_volume >= 2.0 AND volume_percentile >= 90`. Both boundaries are inclusive, so exactly `2.0` and exactly `90` pass.
+
+Failure behavior: fewer than 60 previous completed candles, missing current volume, stale candle, incomplete current candle, wrong symbol/timeframe, or zero median returns `NOT_CONFIRMED` and cannot create an order path. Parameters `60 / 2.0 / 90` are candidate TEST values only and are not validated profitable production rules. The ACTIVE set is unchanged.

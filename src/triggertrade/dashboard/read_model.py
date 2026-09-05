@@ -99,6 +99,44 @@ class RuleRow:
 
 
 @dataclass(frozen=True)
+class RuleDetailView:
+    rule: dict[str, Any]
+    versions: tuple[dict[str, Any], ...]
+    used_in_sets: tuple[dict[str, Any], ...]
+    recommendations: tuple[dict[str, Any], ...]
+
+
+@dataclass(frozen=True)
+class RecommendationRow:
+    recommendation_id: str
+    created_at: str
+    status: str
+    title: str
+    resulting_test_set: str
+    evidence: str
+
+
+@dataclass(frozen=True)
+class RecommendationDetailView:
+    recommendation: dict[str, Any]
+    linked_set: TriggerSetRow | None
+    linked_rules: tuple[dict[str, Any], ...]
+
+
+@dataclass(frozen=True)
+class PerformanceRow:
+    set_id: str
+    version: str
+    status: str
+    period: str
+    candles_processed: int
+    signals: int
+    candidate_intents: int
+    test_executions: int
+    unavailable_metrics: str
+
+
+@dataclass(frozen=True)
 class OverviewView:
     lane: str
     status: str
@@ -539,6 +577,181 @@ class DashboardReadModel:
     def get_trigger_set(self, set_id: str, version: str) -> TriggerSetRow | None:
         return next((item for item in self.list_trigger_sets() if item.set_id == set_id and item.version == version), None)
 
+    def get_rule_detail(self, rule_id: str, version: str | None = None) -> RuleDetailView | None:
+        if not rule_id or len(rule_id) > 80 or (version is not None and len(version) > 40) or not self.db_path.exists():
+            return None
+        try:
+            with self._connect() as conn:
+                if version is None:
+                    rule = _fetch_optional(
+                        conn,
+                        """
+                        SELECT rule_id, version, name, status, asset_scope, rule_type,
+                               condition, definition, created_at, updated_at, provenance
+                        FROM rule_definitions
+                        WHERE rule_id = ?
+                        ORDER BY created_at DESC, version DESC
+                        LIMIT 1
+                        """,
+                        (rule_id,),
+                    )
+                else:
+                    rule = _fetch_optional(
+                        conn,
+                        """
+                        SELECT rule_id, version, name, status, asset_scope, rule_type,
+                               condition, definition, created_at, updated_at, provenance
+                        FROM rule_definitions
+                        WHERE rule_id = ? AND version = ?
+                        """,
+                        (rule_id, version),
+                    )
+                if rule is None:
+                    return None
+                versions = conn.execute(
+                    """
+                    SELECT rule_id, version, name, status, condition, definition,
+                           created_at, updated_at, provenance
+                    FROM rule_definitions
+                    WHERE rule_id = ?
+                    ORDER BY created_at DESC, version DESC
+                    """,
+                    (rule_id,),
+                ).fetchall()
+                used = conn.execute(
+                    """
+                    SELECT s.set_id, s.version, s.status, s.purpose, s.symbol, s.timeframe,
+                           m.rule_version
+                    FROM trigger_set_memberships m
+                    JOIN trigger_set_versions s
+                      ON s.set_id = m.set_id AND s.version = m.set_version
+                    WHERE m.rule_id = ? AND m.rule_version = ?
+                    ORDER BY s.created_at DESC, s.set_id, s.version
+                    """,
+                    (rule["rule_id"], rule["version"]),
+                ).fetchall()
+                recs = _recommendations_for_rule(conn, rule["rule_id"], rule["version"])
+        except sqlite3.Error:
+            return None
+        return RuleDetailView(
+            rule=_decode_rule_row(rule),
+            versions=tuple(_decode_rule_row(row) for row in versions),
+            used_in_sets=tuple(_safe_dict(dict(row)) for row in used),
+            recommendations=recs,
+        )
+
+    def list_recommendations(self) -> tuple[RecommendationRow, ...]:
+        if not self.db_path.exists():
+            return ()
+        try:
+            with self._connect() as conn:
+                rows = conn.execute(
+                    "SELECT recommendation_id, status, created_at, title, payload FROM recommendations ORDER BY created_at DESC, recommendation_id"
+                ).fetchall()
+        except sqlite3.Error:
+            return ()
+        return tuple(_recommendation_row(row) for row in rows)
+
+    def get_recommendation(self, recommendation_id: str) -> RecommendationDetailView | None:
+        if not recommendation_id or len(recommendation_id) > 120 or not self.db_path.exists():
+            return None
+        try:
+            with self._connect() as conn:
+                row = _fetch_optional(
+                    conn,
+                    "SELECT recommendation_id, status, created_at, title, payload FROM recommendations WHERE recommendation_id = ?",
+                    (recommendation_id,),
+                )
+                if row is None:
+                    return None
+                data = _json_value(row["payload"])
+                data["status"] = row["status"]
+                linked_set = None
+                set_id = data.get("resulting_test_set_id")
+                set_version = data.get("resulting_test_set_version")
+                if set_id and set_version:
+                    set_row = _fetch_optional(
+                        conn,
+                        """
+                        SELECT s.set_id, s.version, s.purpose, s.status, s.symbol,
+                               s.timeframe, s.created_at, COUNT(m.rule_id) AS rules_count
+                        FROM trigger_set_versions s
+                        LEFT JOIN trigger_set_memberships m
+                          ON m.set_id = s.set_id AND m.set_version = s.version
+                        WHERE s.set_id = ? AND s.version = ?
+                        GROUP BY s.set_id, s.version, s.purpose, s.status, s.symbol,
+                                 s.timeframe, s.created_at
+                        """,
+                        (set_id, set_version),
+                    )
+                    if set_row is not None:
+                        linked_set = TriggerSetRow(
+                            set_id=set_row["set_id"], version=set_row["version"], purpose=set_row["purpose"],
+                            rules_count=int(set_row["rules_count"]), created_at=set_row["created_at"],
+                            status=set_row["status"], symbol=set_row["symbol"], timeframe=set_row["timeframe"],
+                            rules=(),
+                        )
+                linked_rules = tuple(
+                    _decode_rule_row(rule)
+                    for rule_id, version in data.get("source_rule_versions", [])
+                    for rule in [_fetch_optional(
+                        conn,
+                        """
+                        SELECT rule_id, version, name, status, asset_scope, rule_type,
+                               condition, definition, created_at, updated_at, provenance
+                        FROM rule_definitions WHERE rule_id = ? AND version = ?
+                        """,
+                        (rule_id, version),
+                    )]
+                    if rule is not None
+                )
+        except sqlite3.Error:
+            return None
+        return RecommendationDetailView(recommendation=_safe_dict(data), linked_set=linked_set, linked_rules=linked_rules)
+
+    def list_set_performance(self) -> tuple[PerformanceRow, ...]:
+        sets = self.list_trigger_sets()
+        if not sets or not self.db_path.exists():
+            return ()
+        rows: list[PerformanceRow] = []
+        with self._connect() as conn:
+            for trigger_set in sets:
+                try:
+                    counts = _fetch_optional(
+                        conn,
+                        """
+                        SELECT COUNT(*) AS candles,
+                               SUM(CASE WHEN t.signal_type IS NOT NULL AND t.signal_type != 'NO_SIGNAL' THEN 1 ELSE 0 END) AS signals,
+                               SUM(CASE WHEN l.intent_id IS NOT NULL THEN 1 ELSE 0 END) AS intents,
+                               SUM(CASE WHEN l.status = 'test_recorded' THEN 1 ELSE 0 END) AS test_executions,
+                               MIN(l.candle_open_time) AS start_time,
+                               MAX(l.candle_open_time) AS end_time
+                        FROM runtime_lane_lifecycles l
+                        LEFT JOIN trigger_evaluations t ON t.signal_id = l.signal_id
+                        WHERE l.trigger_set_id = ? AND l.trigger_set_version = ?
+                        """,
+                        (trigger_set.set_id, trigger_set.version),
+                    )
+                except sqlite3.Error:
+                    counts = None
+                period = "unavailable"
+                if counts is not None and counts["start_time"] and counts["end_time"]:
+                    period = f"{counts['start_time']} -> {counts['end_time']}"
+                rows.append(
+                    PerformanceRow(
+                        set_id=trigger_set.set_id,
+                        version=trigger_set.version,
+                        status=trigger_set.status,
+                        period=period,
+                        candles_processed=0 if counts is None else int(counts["candles"] or 0),
+                        signals=0 if counts is None else int(counts["signals"] or 0),
+                        candidate_intents=0 if counts is None else int(counts["intents"] or 0),
+                        test_executions=0 if counts is None else int(counts["test_executions"] or 0),
+                        unavailable_metrics="P&L, win rate, return and drawdown unavailable: no accounting semantics yet",
+                    )
+                )
+        return tuple(rows)
+
     def list_logs(self, limit: int = 20) -> tuple[LogRow, ...]:
         if not self.db_path.exists():
             return ()
@@ -664,6 +877,39 @@ class DashboardReadModel:
             return ()
         return tuple(_safe_dict(dict(row)) for row in rows)
 
+
+def _decode_rule_row(row: sqlite3.Row) -> dict[str, Any]:
+    value = _safe_dict(dict(row))
+    value["definition"] = _json_value(value.get("definition"))
+    return value
+
+
+def _recommendation_row(row: sqlite3.Row) -> RecommendationRow:
+    data = _json_value(row["payload"])
+    set_id = data.get("resulting_test_set_id") or "-"
+    set_version = data.get("resulting_test_set_version") or "-"
+    return RecommendationRow(
+        recommendation_id=row["recommendation_id"],
+        created_at=row["created_at"],
+        status=row["status"],
+        title=row["title"],
+        resulting_test_set=f"{set_id}@{set_version}" if set_id != "-" else "-",
+        evidence=data.get("evidence", "-"),
+    )
+
+
+def _recommendations_for_rule(conn: sqlite3.Connection, rule_id: str, version: str) -> tuple[dict[str, Any], ...]:
+    rows = conn.execute("SELECT status, payload FROM recommendations ORDER BY created_at DESC, recommendation_id").fetchall()
+    matches = []
+    needle = [rule_id, version]
+    for row in rows:
+        data = _json_value(row["payload"])
+        data["status"] = row["status"]
+        proposed = data.get("proposed_rule_changes", {})
+        sources = data.get("source_rule_versions", [])
+        if needle in sources or proposed.get("add_rule_version") == f"{rule_id}@{version}":
+            matches.append(_safe_dict(data))
+    return tuple(matches)
 
 def _empty_runtime_state(db_health: str) -> RuntimeStateView:
     return RuntimeStateView(

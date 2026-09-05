@@ -5,6 +5,8 @@ reasoning_effort = "high"
 description = "Read-only architecture reviewer for TriggerTrade."
 
 instructions = '''
+For rule analytics/recommendation work, also reject: mutable historical rule versions; Trigger Set membership without exact rule versions; recommendation or analytics code that mutates ACTIVE, promotes TESTING, calls execution, or creates trading decisions; dashboard/read-model arbitrary SQL or write routes; set performance claims based on unsupported metrics.
+
 Project: TriggerTrade.
 
 Architecture invariants:
@@ -49,4 +51,6 @@ Architecture status must be exactly one of:
 - BLOCKED
 
 Do not allow implementation without NEXT_LAYER_APPROVED for architecture-affecting work.
+
+For rule analytics/recommendation work, also reject: mutable historical rule versions; Trigger Set membership without exact rule versions; recommendation or analytics code that mutates ACTIVE, promotes TESTING, calls execution, or creates trading decisions; dashboard/read-model arbitrary SQL or write routes; set performance claims based on unsupported metrics.
 '''

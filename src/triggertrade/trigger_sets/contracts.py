@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Mapping
+from typing import Any, Mapping
 
 
 class Lane(StrEnum):
@@ -33,6 +33,16 @@ class RuleType(StrEnum):
 
 
 @dataclass(frozen=True)
+class RuleIdentity:
+    rule_id: str
+    name: str
+    rule_type: RuleType
+    asset_scope: str
+    description: str
+    created_at: str
+
+
+@dataclass(frozen=True)
 class RuleDefinition:
     rule_id: str
     version: str
@@ -45,6 +55,52 @@ class RuleDefinition:
     created_at: str
     provenance: str
     updated_at: str | None = None
+    logical_name: str | None = None
+    description: str | None = None
+    supersedes_version: str | None = None
+    formula: str | None = None
+    parameter_snapshot: Mapping[str, Any] | None = None
+    input_contract: Mapping[str, Any] | None = None
+    output_contract: Mapping[str, Any] | None = None
+    boundary_semantics: str | None = None
+    stale_data_semantics: str | None = None
+    missing_data_semantics: str | None = None
+    semantic_hash: str | None = None
+    change_summary: Mapping[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class RuleVersion(RuleDefinition):
+    """Immutable semantic version of a logical trading rule.
+
+    RuleDefinition remains as a backwards-compatible name for the stored
+    version record used by existing code.
+    """
+
+
+@dataclass(frozen=True)
+class Recommendation:
+    recommendation_id: str
+    created_at: str
+    status: str
+    title: str
+    observation_window_start: str | None
+    observation_window_end: str | None
+    source_set_versions: tuple[tuple[str, str], ...]
+    source_rule_versions: tuple[tuple[str, str], ...]
+    observation: str
+    evidence: str
+    hypothesis: str
+    recommended_experiment: str
+    proposed_rule_changes: Mapping[str, Any]
+    proposed_trigger_set_definition: Mapping[str, Any]
+    minimum_test_duration: str
+    minimum_sample_size: str
+    resulting_test_set_id: str | None = None
+    resulting_test_set_version: str | None = None
+    evaluation_summary: str | None = None
+    decision: str | None = None
+    closed_at: str | None = None
 
 
 @dataclass(frozen=True)

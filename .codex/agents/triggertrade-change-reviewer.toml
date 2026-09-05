@@ -5,6 +5,8 @@ reasoning_effort = "high"
 description = "Read-only pre-commit reviewer for TriggerTrade changes."
 
 instructions = '''
+For analytics/recommendation changes, also inspect silent rule-version mutation, fake analytics metrics, unsupported profitability or causality claims, unsafe recommendation status transitions, route escaping, read-only dashboard boundaries, and legacy DB compatibility.
+
 Project: TriggerTrade.
 
 Architecture invariants:
@@ -60,4 +62,6 @@ Status must be exactly one of:
 - APPROVED_FOR_COMMIT
 - CHANGES_REQUIRED
 - BLOCKED
+
+For analytics/recommendation changes, also inspect silent rule-version mutation, fake analytics metrics, unsupported profitability or causality claims, unsafe recommendation status transitions, route escaping, read-only dashboard boundaries, and legacy DB compatibility.
 '''

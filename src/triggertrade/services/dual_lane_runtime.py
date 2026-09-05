@@ -33,7 +33,7 @@ from triggertrade.services.runtime import (
 )
 from triggertrade.strategies import BuyCandidateStrategy
 from triggertrade.trigger_sets import Lane, TriggerSetStatus, TriggerSetVersion
-from triggertrade.triggers import PercentagePriceMoveTrigger, SignalType
+from triggertrade.triggers import PercentagePriceMoveTrigger, RobustVolumeConfirmationTrigger, Signal, SignalType, VolumeCandleWindow, VolumeConfirmationConfig, VolumeConfirmationResult
 
 
 @dataclass(frozen=True)
@@ -82,7 +82,7 @@ class DualLaneRuntime:
                 self._market_client.recent_candles(
                     self._config.paper_runtime.symbol,
                     interval=_bybit_interval(self._config.paper_runtime.candle_interval),
-                    limit=4,
+                    limit=70,
                 ).result
             )
             active_set = self._trigger_set_store.get_active_set(self._config.paper_runtime.symbol, "1m")
@@ -133,6 +133,7 @@ class DualLaneRuntime:
                     observation=observation,
                     instrument=instrument,
                     adapter=self._active_adapter,
+                    candles=candles,
                 ),
             )
         test_results = tuple(
@@ -143,6 +144,7 @@ class DualLaneRuntime:
                 observation=observation,
                 instrument=instrument,
                 adapter=self._test_adapter_factory(),
+                candles=candles,
             )
             for trigger_set in self._trigger_set_store.list_testing_sets(completed.symbol, completed.timeframe)
         )
@@ -169,6 +171,7 @@ class DualLaneRuntime:
         observation: MarketObservation,
         instrument: BybitInstrument,
         adapter: PaperExecutionAdapter,
+        candles,
     ) -> RuntimeCycleResult:
         if trigger_set.status not in {TriggerSetStatus.ACTIVE, TriggerSetStatus.TESTING}:
             return RuntimeCycleResult(completed.candle_id, None, skipped_reason="set_not_eligible")
@@ -217,6 +220,33 @@ class DualLaneRuntime:
             )
             self._checkpoint_lane(lane, trigger_set, completed)
             return RuntimeCycleResult(completed.candle_id, signal.signal_type.value)
+
+        if ("TRG-002", "0.1.0") in trigger_set.rule_versions:
+            volume_signal = _volume_signal(
+                completed=completed,
+                candles=candles,
+                lane=lane,
+                trigger_set=trigger_set,
+                now=self._clock(),
+                stale_after_seconds=self._config.risk_rules.stale_after_seconds,
+            )
+            self._trace_store.save_trigger_evaluation(volume_signal)
+            if volume_signal.signal_type is not SignalType.CONFIRMED:
+                self._save_lane_lifecycle(
+                    lane,
+                    trigger_set,
+                    completed,
+                    "no_intent",
+                    signal_id=signal.signal_id,
+                    processed_at=self._clock().isoformat(),
+                    error=volume_signal.reason,
+                )
+                self._checkpoint_lane(lane, trigger_set, completed)
+                return RuntimeCycleResult(
+                    completed.candle_id,
+                    signal.signal_type.value,
+                    skipped_reason="volume_not_confirmed",
+                )
 
         intent = BuyCandidateStrategy(self._config.strategy_rule, self._config.risk_rules).decide(
             signal=signal,
@@ -414,6 +444,62 @@ class DualLaneRuntime:
     def _log(self, message: str) -> None:
         self._logger(f"triggertrade dual-lane runtime: {message}")
 
+
+
+def _volume_signal(
+    *,
+    completed: CompletedCandle,
+    candles,
+    lane: Lane,
+    trigger_set: TriggerSetVersion,
+    now: datetime,
+    stale_after_seconds: int,
+) -> Signal:
+    previous = tuple(
+        candle
+        for candle in sorted(candles, key=lambda item: item.start_time_ms)
+        if candle.start_time_ms < completed.candle.start_time_ms
+    )
+    evaluation = RobustVolumeConfirmationTrigger(
+        VolumeConfirmationConfig(stale_after_seconds=stale_after_seconds),
+        symbol=completed.symbol,
+    ).evaluate(
+        VolumeCandleWindow(
+            symbol=completed.symbol,
+            timeframe=completed.timeframe,
+            observed_at=completed.close_time,
+            current_candle=completed.candle,
+            previous_candles=previous[-60:],
+            current_candle_completed=True,
+        ),
+        now=now,
+    )
+    snapshot = {
+        "current_volume": evaluation.current_volume or "",
+        "median_volume_60": evaluation.median_volume_60 or "",
+        "relative_volume": evaluation.relative_volume or "",
+        "volume_percentile": evaluation.volume_percentile or "",
+        "relative_volume_threshold": evaluation.relative_volume_threshold,
+        "percentile_threshold": evaluation.percentile_threshold,
+        "missing_data_reason": evaluation.missing_data_reason or "",
+        "stale_data_reason": evaluation.stale_data_reason or "",
+        "stale_after_seconds": str(stale_after_seconds),
+    }
+    return Signal(
+        signal_id=_scoped_id(evaluation.evaluation_id, lane, trigger_set),
+        trigger_rule_id=evaluation.rule_id,
+        trigger_rule_version=evaluation.rule_version,
+        symbol=evaluation.symbol,
+        observed_at=evaluation.observed_at,
+        window=evaluation.timeframe,
+        input_snapshot=snapshot,
+        condition_result=evaluation.condition_result,
+        signal_type=SignalType.CONFIRMED if evaluation.result is VolumeConfirmationResult.CONFIRMED else SignalType.NOT_CONFIRMED,
+        reason=evaluation.missing_data_reason or evaluation.stale_data_reason or evaluation.result.value.lower(),
+        lane=lane.value,
+        trigger_set_id=trigger_set.set_id,
+        trigger_set_version=trigger_set.version,
+    )
 
 def _scoped_signal(signal, lane: Lane, trigger_set: TriggerSetVersion):
     scoped_id = _scoped_id(signal.signal_id, lane, trigger_set)

@@ -123,3 +123,9 @@ Changes that add, remove, promote, archive, or alter trigger set membership requ
 A trigger set promotion must be explicit and audited. Tests may provide evidence that a TESTING set behaved as expected, but tests do not automatically promote that set to ACTIVE. The dashboard may display ACTIVE and TEST evidence, but it must not perform promotion or change rule configuration.
 
 The reviewer should verify that lane-specific idempotency keys include `lane`, `symbol`, `timeframe`, `candle_id`, `trigger_set_id`, and `trigger_set_version`, and that legacy records remain readable after schema extension.
+
+## Rule Recommendation Lifecycle
+
+Analytics/recommendation changes require architecture review for rule-version immutability, recommendation boundaries, no automatic promotion, no execution shortcuts, and dashboard read-only behavior. Changes introducing or changing trigger semantics require trading-rules review for exact inputs, units, operators, boundary behavior, stale/missing behavior, and TEST/ACTIVE status.
+
+Recommendations must keep Observation, Hypothesis, and Recommended Experiment separate. Review evidence must not claim unsupported causality or fabricate P&L, win-rate, return, drawdown, or expectancy metrics when backend accounting semantics do not exist.

@@ -7,11 +7,22 @@ import json
 import sqlite3
 from typing import Iterable
 
-from triggertrade.trigger_sets import RuleDefinition, RuleStatus, RuleType, TriggerSetStatus, TriggerSetVersion
+from triggertrade.trigger_sets import Recommendation, RuleDefinition, RuleStatus, RuleType, TriggerSetStatus, TriggerSetVersion
 
 
 class TriggerSetStoreError(RuntimeError):
     pass
+
+
+_RECOMMENDATION_TRANSITIONS = {
+    "PROPOSED": {"ACCEPTED_FOR_TEST", "REJECTED", "ARCHIVED"},
+    "ACCEPTED_FOR_TEST": {"TESTING", "REJECTED", "ARCHIVED"},
+    "TESTING": {"EVALUATED", "REJECTED", "ARCHIVED"},
+    "EVALUATED": {"ADOPTED", "REJECTED", "ARCHIVED"},
+    "ADOPTED": {"ARCHIVED"},
+    "REJECTED": {"ARCHIVED"},
+    "ARCHIVED": set(),
+}
 
 
 class TriggerSetStore:
@@ -22,7 +33,7 @@ class TriggerSetStore:
         self._init_schema()
 
     def save_rule(self, rule: RuleDefinition) -> RuleDefinition:
-        definition = json.dumps(dict(rule.definition), sort_keys=True)
+        definition = json.dumps(_rule_definition_payload(rule), sort_keys=True)
         with self._connect() as conn:
             existing = conn.execute(
                 "SELECT status, condition, definition FROM rule_definitions WHERE rule_id = ? AND version = ?",
@@ -190,6 +201,120 @@ class TriggerSetStore:
             ).fetchall()
         return tuple(_row_to_rule(row) for row in rows)
 
+    def get_rule(self, rule_id: str, version: str | None = None) -> RuleDefinition | None:
+        with self._connect() as conn:
+            if version is None:
+                row = conn.execute(
+                    """
+                    SELECT rule_id, version, name, status, asset_scope, rule_type,
+                           condition, definition, created_at, updated_at, provenance
+                    FROM rule_definitions
+                    WHERE rule_id = ?
+                    ORDER BY created_at DESC, version DESC
+                    LIMIT 1
+                    """,
+                    (rule_id,),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    """
+                    SELECT rule_id, version, name, status, asset_scope, rule_type,
+                           condition, definition, created_at, updated_at, provenance
+                    FROM rule_definitions
+                    WHERE rule_id = ? AND version = ?
+                    """,
+                    (rule_id, version),
+                ).fetchone()
+        return None if row is None else _row_to_rule(row)
+
+    def list_rule_versions(self, rule_id: str) -> tuple[RuleDefinition, ...]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT rule_id, version, name, status, asset_scope, rule_type,
+                       condition, definition, created_at, updated_at, provenance
+                FROM rule_definitions
+                WHERE rule_id = ?
+                ORDER BY created_at DESC, version DESC
+                """,
+                (rule_id,),
+            ).fetchall()
+        return tuple(_row_to_rule(row) for row in rows)
+
+    def save_recommendation(self, recommendation: Recommendation) -> Recommendation:
+        payload = _recommendation_payload(recommendation)
+        with self._connect() as conn:
+            existing = conn.execute(
+                "SELECT status, payload FROM recommendations WHERE recommendation_id = ?",
+                (recommendation.recommendation_id,),
+            ).fetchone()
+            if existing is not None:
+                if existing["payload"] != payload:
+                    raise TriggerSetStoreError("recommendations are immutable; create a new recommendation")
+                return recommendation
+            conn.execute(
+                """
+                INSERT INTO recommendations (recommendation_id, status, created_at, title, payload)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (recommendation.recommendation_id, recommendation.status, recommendation.created_at, recommendation.title, payload),
+            )
+        return recommendation
+
+    def transition_recommendation_status(
+        self,
+        *,
+        recommendation_id: str,
+        status: str,
+        changed_at: str,
+        reason: str,
+    ) -> Recommendation:
+        target = status.strip().upper()
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT status, payload FROM recommendations WHERE recommendation_id = ?",
+                (recommendation_id,),
+            ).fetchone()
+            if row is None:
+                raise TriggerSetStoreError("recommendation not found")
+            current = row["status"]
+            if current == target:
+                return _recommendation_from_row(row)
+            if target not in _RECOMMENDATION_TRANSITIONS.get(current, set()):
+                raise TriggerSetStoreError("invalid recommendation status transition")
+            conn.execute(
+                "UPDATE recommendations SET status = ? WHERE recommendation_id = ?",
+                (target, recommendation_id),
+            )
+            conn.execute(
+                """
+                INSERT INTO recommendation_transitions (
+                    recommendation_id, from_status, to_status, changed_at, reason
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (recommendation_id, current, target, changed_at, reason),
+            )
+            updated = conn.execute(
+                "SELECT status, payload FROM recommendations WHERE recommendation_id = ?",
+                (recommendation_id,),
+            ).fetchone()
+        return _recommendation_from_row(updated)
+
+    def list_recommendations(self) -> tuple[Recommendation, ...]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT status, payload FROM recommendations ORDER BY created_at DESC, recommendation_id"
+            ).fetchall()
+        return tuple(_recommendation_from_row(row) for row in rows)
+
+    def get_recommendation(self, recommendation_id: str) -> Recommendation | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT status, payload FROM recommendations WHERE recommendation_id = ?",
+                (recommendation_id,),
+            ).fetchone()
+        return None if row is None else _recommendation_from_row(row)
+
     def get_set(
         self,
         set_id: str,
@@ -318,6 +443,31 @@ class TriggerSetStore:
                 """
             )
 
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS recommendations (
+                    recommendation_id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    payload TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS recommendation_transitions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    recommendation_id TEXT NOT NULL,
+                    from_status TEXT NOT NULL,
+                    to_status TEXT NOT NULL,
+                    changed_at TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    FOREIGN KEY (recommendation_id) REFERENCES recommendations(recommendation_id)
+                )
+                """
+            )
+
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path)
         conn.row_factory = sqlite3.Row
@@ -333,6 +483,9 @@ def bootstrap_current_trigger_sets(store: TriggerSetStore, *, created_at: str = 
     testing = current_testing_trigger_set(created_at=created_at)
     if store.get_set(testing.set_id, testing.version) is None:
         store.create_set(testing)
+    recommendation = current_volume_recommendation(created_at=created_at)
+    if store.get_recommendation(recommendation.recommendation_id) is None:
+        store.save_recommendation(recommendation)
 
 
 def current_rule_definitions(*, created_at: str) -> tuple[RuleDefinition, ...]:
@@ -348,6 +501,30 @@ def current_rule_definitions(*, created_at: str) -> tuple[RuleDefinition, ...]:
             definition={"lookback_window": "1m", "threshold_source": "TRIGGERTRADE_TRG_001_THRESHOLD_PCT", "boundary": "inclusive_lte"},
             created_at=created_at,
             provenance="implemented vertical slice d081274",
+        ),
+        RuleDefinition(
+            rule_id="TRG-002",
+            version="0.1.0",
+            name="Robust Volume Confirmation",
+            status=RuleStatus.TESTING,
+            asset_scope="BTCUSDT spot",
+            rule_type=RuleType.TRIGGER,
+            condition="relative_volume >= 2.0 AND volume_percentile >= 90",
+            definition={
+                "logical_name": "TRG-VOLUME",
+                "lookback_completed_candles": "60",
+                "volume_unit": "Bybit spot base volume",
+                "median": "median of previous 60 completed candle volumes; even count uses average of sorted positions 30 and 31",
+                "relative_volume": "current_volume / median_volume_60",
+                "percentile_rank": "count(previous_volume <= current_volume) / 60 * 100; ties count as <=",
+                "boundary": "inclusive: relative_volume >= 2.0 and percentile_rank >= 90",
+                "missing_data": "NOT_CONFIRMED for fewer than 60 previous candles, missing current volume, or zero median",
+                "stale_data": "NOT_CONFIRMED for stale or incomplete current candle",
+                "candidate_only": "true",
+                "source_recommendation_id": "REC-TRG-VOLUME-001",
+            },
+            created_at=created_at,
+            provenance="candidate recommendation REC-TRG-VOLUME-001; not validated profitable production rule",
         ),
         RuleDefinition(
             rule_id="STR-001",
@@ -396,18 +573,80 @@ def current_active_trigger_set(*, created_at: str) -> TriggerSetVersion:
 def current_testing_trigger_set(*, created_at: str) -> TriggerSetVersion:
     return TriggerSetVersion(
         set_id="triggertrade-core-candidate",
-        version="v1-test",
-        purpose="Forward-test candidate using current rule semantics",
+        version="v2-test",
+        purpose="Forward-test baseline plus TRG-VOLUME v1 candidate confirmation",
         status=TriggerSetStatus.TESTING,
         symbol="BTCUSDT",
         timeframe="1m",
-        rule_versions=(("TRG-001", "0.1.0"), ("STR-001", "0.1.0"), ("RSK-PAPER-001", "0.1.0")),
+        rule_versions=(("TRG-001", "0.1.0"), ("TRG-002", "0.1.0"), ("STR-001", "0.1.0"), ("RSK-PAPER-001", "0.1.0")),
         strategy_version="STR-001@0.1.0",
         risk_profile_version="RSK-PAPER-001@0.1.0",
-        config_snapshot={"threshold": "demo-config", "execution": "isolated_test_paper"},
+        config_snapshot={"threshold": "demo-config", "execution": "isolated_test_paper", "candidate_rule": "TRG-002@0.1.0"},
         created_at=created_at,
-        provenance="safe candidate fixture for parallel lane plumbing",
+        provenance="REC-TRG-VOLUME-001 accepted for TESTING candidate evaluation; ACTIVE set unchanged",
     )
+
+
+def current_volume_recommendation(*, created_at: str) -> Recommendation:
+    return Recommendation(
+        recommendation_id="REC-TRG-VOLUME-001",
+        created_at=created_at,
+        status="TESTING",
+        title="Test robust volume confirmation as a candidate filter",
+        observation_window_start=None,
+        observation_window_end=None,
+        source_set_versions=(("triggertrade-core", "v1"),),
+        source_rule_versions=(("TRG-001", "0.1.0"),),
+        observation="The current active baseline evaluates price-move conditions without a robust completed-candle volume confirmation rule.",
+        evidence="Evidence status: proposed experiment only. No historical performance, P&L, win-rate, drawdown, or causal edge is claimed.",
+        hypothesis="Price moves accompanied by abnormal relative volume may be a useful candidate filter for forward testing.",
+        recommended_experiment="Create a TESTING trigger set equal to the active baseline plus TRG-VOLUME v1, then compare set-vs-set forward evidence.",
+        proposed_rule_changes={"add_rule_version": "TRG-002@0.1.0", "logical_name": "TRG-VOLUME", "status": "TESTING"},
+        proposed_trigger_set_definition={"set_id": "triggertrade-core-candidate", "version": "v2-test", "membership": ["TRG-001@0.1.0", "TRG-002@0.1.0", "STR-001@0.1.0", "RSK-PAPER-001@0.1.0"]},
+        minimum_test_duration="not yet defined; requires explicit human/reviewer decision before evaluation",
+        minimum_sample_size="not yet defined; no automatic promotion allowed",
+        resulting_test_set_id="triggertrade-core-candidate",
+        resulting_test_set_version="v2-test",
+        evaluation_summary="Pending forward evidence; performance is evaluated at Trigger Set level, not as an isolated trigger claim.",
+        decision="ACCEPTED_FOR_TEST; no ACTIVE promotion",
+    )
+
+
+def _recommendation_payload(recommendation: Recommendation) -> str:
+    return json.dumps(recommendation.__dict__, sort_keys=True)
+
+
+def _recommendation_from_row(row: sqlite3.Row) -> Recommendation:
+    data = json.loads(row["payload"])
+    data["status"] = row["status"]
+    return Recommendation(
+        **{
+            **data,
+            "source_set_versions": tuple(tuple(item) for item in data["source_set_versions"]),
+            "source_rule_versions": tuple(tuple(item) for item in data["source_rule_versions"]),
+        }
+    )
+
+def _rule_definition_payload(rule: RuleDefinition) -> dict[str, object]:
+    payload: dict[str, object] = dict(rule.definition)
+    semantic_fields = {
+        "logical_name": rule.logical_name,
+        "description": rule.description,
+        "supersedes_version": rule.supersedes_version,
+        "formula": rule.formula,
+        "parameter_snapshot": rule.parameter_snapshot,
+        "input_contract": rule.input_contract,
+        "output_contract": rule.output_contract,
+        "boundary_semantics": rule.boundary_semantics,
+        "stale_data_semantics": rule.stale_data_semantics,
+        "missing_data_semantics": rule.missing_data_semantics,
+        "semantic_hash": rule.semantic_hash,
+        "change_summary": rule.change_summary,
+    }
+    metadata = {key: value for key, value in semantic_fields.items() if value is not None}
+    if metadata:
+        payload["_version_metadata"] = metadata
+    return payload
 
 
 def _validate_membership(conn: sqlite3.Connection, memberships: tuple[tuple[str, str], ...]) -> None:

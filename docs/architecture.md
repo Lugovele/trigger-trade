@@ -160,3 +160,11 @@ completed market candle
 Lane identity is part of the business key for every runtime lifecycle: `lane + symbol + timeframe + candle_id + trigger_set_id + trigger_set_version`. This prevents ACTIVE and TEST records from colliding while still proving that both lanes evaluated the same market event.
 
 The TEST lane is analysis-only. It may run trigger, strategy, and risk logic and may persist decisions, but it must not call Bybit private/order APIs or affect ACTIVE paper execution. Promotion from TESTING to ACTIVE is an explicit audited transition; the dashboard does not provide automatic promotion or trading controls.
+
+## Rule Analytics and Recommendations
+
+Rule identity is split between a logical rule id and immutable rule versions. Trigger Sets must reference exact `rule_id + version` pairs. Once a rule version has been recorded for TESTING or ACTIVE evidence, semantic fields such as formula, thresholds, inputs, boundary behavior, stale-data behavior, missing-data behavior, and output semantics must not be edited in place. Any material change creates a new version and preserves historical reproducibility.
+
+Recommendations are audited experiment proposals. The lifecycle is `Observation -> Hypothesis -> Recommendation -> Candidate Trigger Set -> TESTING -> Evaluation -> Decision`. A recommendation may create or reference a TESTING candidate set through explicit reviewed code/config, but it must never promote TESTING to ACTIVE, mutate ACTIVE, or call execution. Analytics evaluates performance at Trigger Set version level, not by declaring an isolated trigger profitable.
+
+Dashboard Rule Detail and Analytics pages are read-only projections over persistence. They may link rules, exact versions, trigger sets, recommendations, and supported evidence counts. They must not evaluate triggers, approve risk, place/cancel orders, expose arbitrary SQL, expose `.env`, or render secrets.

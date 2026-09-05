@@ -153,3 +153,77 @@ def test_trigger_set_drawer_data_is_script_escaped():
     assert "</script><script>" not in html
     assert "setRules.replaceChildren" in html
     assert "innerHTML=s.rules" not in html
+
+
+
+def test_analytics_and_rule_detail_routes_render(tmp_path):
+    from http.client import HTTPConnection
+    from triggertrade.dashboard.__main__ import create_server
+    from triggertrade.persistence import TriggerSetStore, bootstrap_current_trigger_sets
+
+    db = tmp_path / "dashboard.sqlite3"
+    bootstrap_current_trigger_sets(TriggerSetStore(db), created_at="2026-09-05T00:00:00+00:00")
+    server = create_server(port=0, db_path=db)
+    host, port = server.server_address
+    import threading
+
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection(host, port, timeout=2)
+        conn.request("GET", "/")
+        html = conn.getresponse().read().decode("utf-8")
+        assert "Analytics" in html
+        assert "Performance" in html
+        assert "Recommendations" in html
+        assert "P&amp;L, win rate, return and drawdown unavailable" in html
+
+        conn.request("GET", "/rules/TRG-002/0.1.0")
+        detail = conn.getresponse().read().decode("utf-8")
+        assert "Robust Volume Confirmation" in detail
+        assert "relative_volume &gt;= 2.0 AND volume_percentile &gt;= 90" in detail
+        assert "Version History" in detail
+        assert "Used In Trigger Sets" in detail
+        assert "TRG-VOLUME" in detail
+
+        conn.request("GET", "/recommendations/REC-TRG-VOLUME-001")
+        recommendation = conn.getresponse().read().decode("utf-8")
+        assert "Observation" in recommendation
+        assert "Hypothesis" in recommendation
+        assert "Recommended Experiment" in recommendation
+        assert "No historical performance" in recommendation
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_dashboard_new_routes_are_read_only_and_safe_for_missing_ids(tmp_path):
+    from http.client import HTTPConnection
+    from triggertrade.dashboard.__main__ import create_server
+    from triggertrade.persistence import TriggerSetStore, bootstrap_current_trigger_sets
+
+    db = tmp_path / "dashboard.sqlite3"
+    bootstrap_current_trigger_sets(TriggerSetStore(db), created_at="2026-09-05T00:00:00+00:00")
+    server = create_server(port=0, db_path=db)
+    host, port = server.server_address
+    import threading
+
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection(host, port, timeout=2)
+        conn.request("POST", "/recommendations/REC-TRG-VOLUME-001")
+        response = conn.getresponse()
+        response.read()
+        assert response.status == 405
+
+        conn.request("GET", "/rules/DOES-NOT-EXIST")
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+        assert response.status == 404
+        assert "Traceback" not in body
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
