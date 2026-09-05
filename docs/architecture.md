@@ -159,7 +159,7 @@ completed market candle
 
 Lane identity is part of the business key for every runtime lifecycle: `lane + symbol + timeframe + candle_id + trigger_set_id + trigger_set_version`. This prevents ACTIVE and TEST records from colliding while still proving that both lanes evaluated the same market event.
 
-The TEST lane is analysis-only. It may run trigger, strategy, and risk logic and may persist decisions, but it must not call Bybit private/order APIs or affect ACTIVE paper execution. Promotion from TESTING to ACTIVE is an explicit audited transition; the dashboard does not provide automatic promotion or trading controls.
+The TEST lane is analysis-only. It may run trigger, strategy, and risk logic and may persist decisions, but it must not call Bybit private/order APIs or affect ACTIVE paper execution. Promotion from TESTING to ACTIVE is an explicit audited transition; the dashboard does not provide automatic promotion, rule editing, order placement, or strategy/risk controls. Its only operator control is the persisted local STOP/RESUME gate for new ACTIVE submissions.
 
 ## Rule Analytics and Recommendations
 
@@ -170,3 +170,27 @@ Recommendations are audited experiment proposals. The lifecycle is `Observation 
 Dashboard Rule Detail and Analytics pages are read-only projections over persistence. They may link rules, exact versions, trigger sets, recommendations, and supported evidence counts. They must not evaluate triggers, approve risk, place/cancel orders, expose arbitrary SQL, expose `.env`, or render secrets.
 
 Canonical registry bootstrap is a shared service-layer startup concern. It writes only configured RuleDefinitions, immutable TriggerSetVersions, memberships, and Recommendations into the intended runtime SQLite database before runtime/dashboard services open their stores. Runtime evidence remains separate: bootstrap must not create candle lifecycles, orders, fills, performance history, P&L, or synthetic analytics rows. If an existing exact rule/set/recommendation identity has different semantics, bootstrap fails closed through persistence immutability instead of silently mutating history.
+
+## Intraday Experiment Governance
+
+TriggerTrade's primary strategy class is intraday systematic trading. Evidence
+is accumulated from frequent completed-candle observations and evaluated at
+Trigger Set version level, not as an isolated trigger profit claim.
+
+`EvidenceReadiness` is separate from `TriggerSetStatus`. A set may remain
+`TESTING` while its readiness projection moves through `COLLECTING`, `EARLY`,
+`REVIEW_READY`, `STRONG_EVIDENCE`, `INSUFFICIENT_DIVERSITY`, or `BLOCKED`.
+Readiness is a deterministic backend projection over persisted runtime evidence
+and a versioned governance policy. It is not an automatic promotion criterion.
+
+Recommendation actions are advisory only: continue testing, extend sample,
+create a new version, compare with baseline, reject candidate, or mark ready for
+human promotion review. Governance code must not mutate ACTIVE sets, promote
+TESTING sets, call execution, or invent unsupported P&L/regime/accounting
+metrics.
+
+Local operator pause state is persisted separately from trading rules. The
+dashboard may request confirmed `TRADING_PAUSED` / `TRADING_ENABLED` changes,
+but new ACTIVE execution is blocked in the execution service before submission.
+TEST lane evidence collection, analytics, market-data processing, and
+reconciliation of existing orders remain allowed while paused.

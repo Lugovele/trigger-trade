@@ -20,6 +20,7 @@ from triggertrade.persistence import (
     RuntimeStore,
     TraceStore,
     TriggerSetStore,
+    OperatorStateStore,
 )
 from triggertrade.risk import RiskManager
 from triggertrade.services.runtime import (
@@ -53,6 +54,7 @@ class DualLaneRuntime:
         trace_store: TraceStore,
         runtime_store: RuntimeStore,
         trigger_set_store: TriggerSetStore,
+        operator_state_store: OperatorStateStore | None = None,
         active_adapter: PaperExecutionAdapter | None = None,
         test_adapter_factory: Callable[[], PaperExecutionAdapter] | None = None,
         clock: Callable[[], datetime] | None = None,
@@ -64,6 +66,7 @@ class DualLaneRuntime:
         self._trace_store = trace_store
         self._runtime_store = runtime_store
         self._trigger_set_store = trigger_set_store
+        self._operator_state_store = operator_state_store
         self._active_adapter = active_adapter or PaperExecutionAdapter(clock_ms=lambda: int(time.time() * 1000))
         self._test_adapter_factory = test_adapter_factory or (lambda: PaperExecutionAdapter(clock_ms=lambda: int(time.time() * 1000)))
         self._clock = clock or (lambda: datetime.now(UTC))
@@ -197,7 +200,7 @@ class DualLaneRuntime:
             trigger_set_id=trigger_set.set_id,
             trigger_set_version=trigger_set.version,
         )
-        if existing is not None and existing.status in {"no_signal", "no_intent", "risk_rejected", "test_recorded", "completed"}:
+        if existing is not None and existing.status in {"no_signal", "no_intent", "risk_rejected", "test_recorded", "completed", "active_execution_paused"}:
             self._checkpoint_lane(lane, trigger_set, completed)
             return RuntimeCycleResult(completed.candle_id, None, skipped_reason="already_processed")
 
@@ -273,6 +276,8 @@ class DualLaneRuntime:
                 store=self._execution_store,
                 instrument=instrument,
                 available_quote_balance=self._config.paper_runtime.paper_quote_balance,
+                execution_lane=lane.value,
+                operator_trading_state=self._operator_state_value,
             )
             record = service.reconcile(existing_execution)
             record = replace(record, lane=lane.value, trigger_set_id=trigger_set.set_id, trigger_set_version=trigger_set.version)
@@ -347,10 +352,45 @@ class DualLaneRuntime:
                 store=self._execution_store,
                 instrument=instrument,
                 available_quote_balance=self._config.paper_runtime.paper_quote_balance,
+                execution_lane=lane.value,
+                operator_trading_state=self._operator_state_value,
             )
             record = service.submit_approved_limit_order(intent=intent, risk_decision=risk)
             record = service.reconcile(record)
-        except (ExecutionError, Exception) as exc:
+        except ExecutionError as exc:
+            if "operator pause" in str(exc):
+                self._save_lane_lifecycle(
+                    lane,
+                    trigger_set,
+                    completed,
+                    "active_execution_paused",
+                    signal_id=signal.signal_id,
+                    intent_id=intent.intent_id,
+                    risk_decision_id=risk.risk_decision_id,
+                    processed_at=self._clock().isoformat(),
+                    error="operator_paused",
+                )
+                self._checkpoint_lane(lane, trigger_set, completed)
+                return RuntimeCycleResult(
+                    completed.candle_id,
+                    signal.signal_type.value,
+                    intent.intent_id,
+                    risk.risk_decision_id,
+                    False,
+                    skipped_reason="operator_paused",
+                )
+            self._save_lane_lifecycle(
+                lane,
+                trigger_set,
+                completed,
+                "execution_error",
+                signal_id=signal.signal_id,
+                intent_id=intent.intent_id,
+                risk_decision_id=risk.risk_decision_id,
+                error=exc.__class__.__name__,
+            )
+            return RuntimeCycleResult(completed.candle_id, signal.signal_type.value, intent.intent_id, risk.risk_decision_id, True, skipped_reason="execution_error")
+        except Exception as exc:
             self._save_lane_lifecycle(
                 lane,
                 trigger_set,
@@ -441,6 +481,11 @@ class DualLaneRuntime:
 
     def _log(self, message: str) -> None:
         self._logger(f"triggertrade dual-lane runtime: {message}")
+
+    def _operator_state_value(self) -> str:
+        if self._operator_state_store is None:
+            return "TRADING_ENABLED"
+        return self._operator_state_store.get_trading_state().state.value
 
 
 

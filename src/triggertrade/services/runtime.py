@@ -547,6 +547,7 @@ class RuntimeGapError(RuntimeError):
 
 def build_runtime_from_env(env: dict[str, str]):
     from triggertrade.persistence import TriggerSetStore
+    from triggertrade.persistence import OperatorStateStore
     from triggertrade.services.dual_lane_runtime import DualLaneRuntime
 
     runtime_env = dict(env)
@@ -562,6 +563,7 @@ def build_runtime_from_env(env: dict[str, str]):
         trace_store=TraceStore(db_path),
         runtime_store=RuntimeStore(db_path),
         trigger_set_store=TriggerSetStore(db_path),
+        operator_state_store=OperatorStateStore(db_path),
     )
 
 

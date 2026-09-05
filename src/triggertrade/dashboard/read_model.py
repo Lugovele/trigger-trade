@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 import json
 import sqlite3
 from typing import Any
+
+from triggertrade.governance import EvidenceCapability, GovernanceEvidence, GovernancePolicy, evaluate_readiness
 
 
 @dataclass(frozen=True)
@@ -134,6 +137,32 @@ class PerformanceRow:
     candidate_intents: int
     test_executions: int
     unavailable_metrics: str
+
+
+@dataclass(frozen=True)
+class TestSetEvidenceRow:
+    set_id: str
+    version: str
+    status: str
+    testing_started_at: str
+    age_days: int
+    signals_observed: int
+    closed_trades_observed: str
+    regime_coverage: str
+    readiness: str
+    recommendation_action: str
+    missing_evidence: tuple[str, ...]
+    blocking_reasons: tuple[str, ...]
+    comparison_available: bool
+    policy: str
+
+
+@dataclass(frozen=True)
+class OperatorStateView:
+    state: str
+    changed_at: str
+    source: str
+    reason: str
 
 
 @dataclass(frozen=True)
@@ -770,6 +799,71 @@ class DashboardReadModel:
                 )
         return tuple(rows)
 
+    def list_test_set_evidence(self) -> tuple[TestSetEvidenceRow, ...]:
+        testing_sets = tuple(row for row in self.list_trigger_sets() if row.status == "TESTING")
+        if not testing_sets:
+            return ()
+        active_available = any(row.status == "ACTIVE" for row in self.list_trigger_sets())
+        policy = GovernancePolicy()
+        rows: list[TestSetEvidenceRow] = []
+        for trigger_set in testing_sets:
+            signals, failures = self._test_set_counts(trigger_set.set_id, trigger_set.version)
+            evidence = GovernanceEvidence(
+                testing_started_at=trigger_set.created_at,
+                age_days=_age_days(trigger_set.created_at),
+                signals_observed=signals,
+                closed_trades_observed=None,
+                closed_trades_capability=EvidenceCapability.UNAVAILABLE,
+                regime_coverage=None,
+                regime_capability=EvidenceCapability.UNAVAILABLE,
+                baseline_comparison_available=active_available,
+                critical_failures=failures,
+            )
+            result = evaluate_readiness(evidence, policy)
+            rows.append(
+                TestSetEvidenceRow(
+                    set_id=trigger_set.set_id,
+                    version=trigger_set.version,
+                    status=trigger_set.status,
+                    testing_started_at=result.testing_started_at,
+                    age_days=result.age_days,
+                    signals_observed=result.signals_observed,
+                    closed_trades_observed="unavailable",
+                    regime_coverage=result.regime_coverage,
+                    readiness=result.readiness.value,
+                    recommendation_action=result.recommendation_action.value,
+                    missing_evidence=result.evidence_gaps,
+                    blocking_reasons=result.blocking_reasons,
+                    comparison_available=result.comparison_available,
+                    policy=f"{result.policy_id}@{result.policy_version}",
+                )
+            )
+        return tuple(rows)
+
+    def get_operator_trading_state(self) -> OperatorStateView:
+        if not self.db_path.exists():
+            return OperatorStateView("TRADING_ENABLED", "-", "system_default", "default: no persisted operator pause")
+        try:
+            with self._connect() as conn:
+                row = _fetch_optional(
+                    conn,
+                    """
+                    SELECT state, changed_at, source, reason
+                    FROM operator_trading_state
+                    WHERE scope = 'ACTIVE'
+                    """,
+                )
+        except sqlite3.Error:
+            return OperatorStateView("UNKNOWN", "-", "read_model", "operator state unavailable")
+        if row is None:
+            return OperatorStateView("TRADING_ENABLED", "-", "system_default", "default: no persisted operator pause")
+        return OperatorStateView(
+            state=row["state"],
+            changed_at=row["changed_at"],
+            source=row["source"],
+            reason=row["reason"] or "-",
+        )
+
     def list_logs(self, limit: int = 20) -> tuple[LogRow, ...]:
         if not self.db_path.exists():
             return ()
@@ -895,6 +989,29 @@ class DashboardReadModel:
             return ()
         return tuple(_safe_dict(dict(row)) for row in rows)
 
+    def _test_set_counts(self, set_id: str, version: str) -> tuple[int, int]:
+        if not self.db_path.exists():
+            return 0, 0
+        try:
+            with self._connect() as conn:
+                row = _fetch_optional(
+                    conn,
+                    """
+                    SELECT
+                        SUM(CASE WHEN t.signal_type IS NOT NULL AND t.signal_type != 'NO_SIGNAL' THEN 1 ELSE 0 END) AS signals,
+                        SUM(CASE WHEN l.status = 'execution_error' THEN 1 ELSE 0 END) AS failures
+                    FROM runtime_lane_lifecycles l
+                    LEFT JOIN trigger_evaluations t ON t.signal_id = l.signal_id
+                    WHERE l.lane = 'TEST' AND l.trigger_set_id = ? AND l.trigger_set_version = ?
+                    """,
+                    (set_id, version),
+                )
+        except sqlite3.Error:
+            return 0, 0
+        if row is None:
+            return 0, 0
+        return int(row["signals"] or 0), int(row["failures"] or 0)
+
 
 def _decode_rule_row(row: sqlite3.Row) -> dict[str, Any]:
     value = _safe_dict(dict(row))
@@ -941,6 +1058,16 @@ def _empty_runtime_state(db_health: str) -> RuntimeStateView:
         last_processed_at=None,
         db_health=db_health,
     )
+
+
+def _age_days(value: str) -> int:
+    try:
+        started = datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return 0
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=UTC)
+    return max((datetime.now(UTC) - started).days, 0)
 
 
 def _legacy_trigger_sets() -> tuple[TriggerSetRow, ...]:

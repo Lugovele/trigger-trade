@@ -37,12 +37,12 @@ The dashboard and continuous paper runtime resolve the same SQLite path from `.e
 
 On startup they call the shared canonical registry bootstrap before opening runtime/read services. Configured Rule Versions, Trigger Sets, and Recommendations are visible even before runtime evidence exists.
 
-The dashboard is intentionally read-only after startup initialization. It does not evaluate triggers, create strategy decisions, approve risk, call execution services, place/cancel orders, or expose API credentials. The startup bootstrap stores only canonical registry metadata, not fake candles, trades, fills, P&L, or performance evidence. P&L, portfolio accounting, alerts, and operator controls are intentionally deferred until backend semantics exist.
+The dashboard is intentionally read-only for trading logic after startup initialization. It does not evaluate triggers, create strategy decisions, approve risk, call execution services, place/cancel orders, or expose API credentials. The startup bootstrap stores only canonical registry metadata, not fake candles, trades, fills, P&L, or performance evidence. P&L, portfolio accounting, and alerts are intentionally deferred until backend semantics exist.
 ## Trigger Sets and Lanes
 
 The runtime now bootstraps versioned trigger sets and evaluates the current ACTIVE set alongside TESTING sets over the same completed candle. ACTIVE remains the only lane connected to paper execution. TEST lanes are persisted for comparison and dashboard visibility only; they do not submit Bybit orders or change trading configuration.
 
-Dashboard views show ACTIVE/TEST lane summaries, trigger set versions, rule registry details, runtime logs, and local-only read models. The interface intentionally keeps promotion, rule editing, P&L, portfolio accounting, and trading controls deferred.
+Dashboard views show ACTIVE/TEST lane summaries, trigger set versions, rule registry details, runtime logs, and local-only read models. The interface intentionally keeps promotion, rule editing, P&L, and portfolio accounting deferred.
 
 ## Rule Analytics and Recommendations
 
@@ -51,3 +51,24 @@ Rules now have a logical identity and immutable versions. Trigger Set membership
 The first candidate analytics experiment is `TRG-002@0.1.0`, display name `Robust Volume Confirmation`, logical name `TRG-VOLUME`. It is TESTING only and uses candidate/demo parameters: previous 60 completed BTCUSDT spot candles, median base volume baseline, `relative_volume >= 2.0`, and empirical percentile rank `count(previous_volume <= current_volume) / 60 * 100 >= 90`. These parameters are not validated production trading edge.
 
 The local dashboard adds read-only Rule Detail pages under `/rules/<rule_id>/<version>` and an Analytics tab with set-level supported counts plus Recommendation Registry entries. Analytics never promotes a set, mutates rules, calls execution, or fabricates unsupported P&L/win-rate/return/drawdown metrics.
+
+## Intraday Governance
+
+TriggerTrade is treated as an intraday systematic trading project: evidence is
+collected from many short-interval observations and evaluated at Trigger Set
+level. TESTING Trigger Sets have a separate `EvidenceReadiness` projection
+(`COLLECTING`, `EARLY`, `REVIEW_READY`, `STRONG_EVIDENCE`,
+`INSUFFICIENT_DIVERSITY`, `BLOCKED`) that does not change Trigger Set lifecycle
+status and never auto-promotes a set.
+
+The initial governance policy is versioned as
+`intraday-governance-defaults@0.1.0`: 7 calendar days, 100 candidate signals,
+and 50 closed trades. These are configurable governance defaults for review
+readiness only, not statistically proven trading thresholds. Closed-trade and
+market-regime metrics are shown as unavailable until backend accounting/regime
+semantics exist.
+
+The local dashboard includes a persistent `STOP TRADING` control. When paused,
+new ACTIVE executions fail closed at the execution boundary, while TEST lane
+collection, analytics, market-data processing, and reconciliation continue.
+Pause state survives restart and requires an explicit Resume action.

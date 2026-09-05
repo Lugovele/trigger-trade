@@ -187,6 +187,11 @@ rule ids and rule versions
 
 The initial `TRG-001` threshold remains a development/demo configuration value. It is not evidence of a profitable trading edge. Visual dashboard fixtures may mention reference-only ideas such as RSI or momentum, but those fixture labels are not production rule definitions and must not affect runtime behavior.
 
+Intraday governance thresholds, such as the initial 7-day / 100-signal /
+50-closed-trade readiness gates, are lifecycle review policy. They are not
+trigger, strategy, or risk alpha semantics and must not be treated as proof of
+profitability or automatic promotion criteria.
+
 ## TRG-002 Robust Volume Confirmation
 
 Canonical rule id: `TRG-002`. Logical/display name: `TRG-VOLUME` / `Robust Volume Confirmation`. Initial version: `0.1.0`. Status: `TESTING` candidate only.

@@ -154,4 +154,9 @@ Live trading is a separate acceptance step after paper-mode validation.
 
 In MVP scope: immutable rule version history, exact Trigger Set membership, read-only Rule Detail pages, a Recommendation Registry, supported set-level evidence counts, and a first TESTING-only volume confirmation candidate.
 
+Intraday governance is in MVP scope as review readiness, not auto-promotion.
+The dashboard may show TEST set readiness, missing evidence, recommendation
+actions, and a persistent local STOP TRADING control. It must not add new
+trigger semantics, execution product models, P&L accounting, or futures support.
+
 Out of scope: automatic promotion, automatic parameter optimization, LLM trading recommendations, backtesting platform, P&L/portfolio accounting, new SELL logic, and any direct execution from analytics or dashboard.

@@ -6,6 +6,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from hashlib import sha256
+from typing import Callable
 
 from triggertrade.config import (
     AppConfig,
@@ -39,12 +40,16 @@ class ExecutionService:
         store: ExecutionStore,
         instrument: BybitInstrument,
         available_quote_balance: Decimal | None = None,
+        execution_lane: str | None = None,
+        operator_trading_state: Callable[[], str] | None = None,
     ) -> None:
         self._config = config
         self._adapter = adapter
         self._store = store
         self._instrument = instrument
         self._available_quote_balance = available_quote_balance
+        self._execution_lane = execution_lane
+        self._operator_trading_state = operator_trading_state
 
     def submit_approved_limit_order(
         self,
@@ -60,6 +65,7 @@ class ExecutionService:
             price=intent.price,
         )
         self._validate_available_balance(intent)
+        self._validate_operator_trading_state()
 
         now = _now()
         client_order_id = client_order_id_for_intent(intent.intent_id)
@@ -251,6 +257,15 @@ class ExecutionService:
             raise ExecutionError("available quote balance is required before buy submission")
         if self._available_quote_balance < intent.quantity * intent.price:
             raise ExecutionError("available quote balance is below requested order notional")
+
+    def _validate_operator_trading_state(self) -> None:
+        if self._execution_lane != "ACTIVE" or self._operator_trading_state is None:
+            return
+        state = self._operator_trading_state()
+        if state == "TRADING_PAUSED":
+            raise ExecutionError("new ACTIVE execution is blocked by persistent operator pause")
+        if state != "TRADING_ENABLED":
+            raise ExecutionError("unknown operator trading state; execution fails closed")
 
 
 def client_order_id_for_intent(intent_id: str) -> str:

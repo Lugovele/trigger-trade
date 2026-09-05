@@ -134,3 +134,20 @@ Recommendations must keep Observation, Hypothesis, and Recommended Experiment se
 ## Registry Bootstrap Changes
 
 Changes to production registry initialization require architecture review. Reviewers should verify a single shared bootstrap path, consistent runtime/dashboard DB resolution, idempotency across repeated startup, safe additive legacy migration, no dashboard-owned business initialization, and fail-closed behavior for same-version semantic mismatch. Bootstrap evidence must distinguish configured registry entities from runtime evidence; tests must not populate fake candles, trades, fills, P&L, or recommendations to make the dashboard look active.
+
+## Intraday Governance Changes
+
+Intraday experiment governance changes require architecture review when they add
+readiness states, recommendation actions, persistence, dashboard controls, or
+execution safety gates. Trading-rules review is required only when trigger,
+strategy, or risk semantics change.
+
+Readiness policy defaults are lifecycle governance settings, not trading alpha
+rules. The initial policy (`intraday-governance-defaults@0.1.0`) uses 7 calendar
+days, 100 candidate signals, and 50 closed trades as review-readiness gates.
+Unsupported capabilities must be represented explicitly as unavailable and must
+not be rendered as zero evidence.
+
+STOP TRADING changes must be persisted and audited. Paused state must survive
+restart, block only new ACTIVE submissions at the execution boundary, and leave
+TEST lane evidence, analytics, market data, and reconciliation available.
