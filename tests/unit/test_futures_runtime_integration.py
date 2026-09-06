@@ -15,6 +15,8 @@ from triggertrade.market_data import FuturesMarketEvent, MarketRegimeContext, Ma
 from triggertrade.persistence import (
     FuturesExecutionStore,
     FuturesExecutionRecord,
+    FuturesPositionRecord,
+    FuturesPositionStore,
     OperatorStateStore,
     RuntimeStore,
     TraceStore,
@@ -25,6 +27,7 @@ from triggertrade.persistence import (
 from triggertrade.persistence.futures_accounting_store import FuturesAccountingStore
 from triggertrade.services.futures_runtime import FuturesDualLaneRuntime, _is_futures_set
 from triggertrade.services.runtime import build_runtime_from_env
+from triggertrade.execution.position_lifecycle import PositionStatus, futures_position_id
 from triggertrade.strategies import IntegrationDirectionalFuturesStrategy
 from triggertrade.trigger_sets import Lane
 from triggertrade.triggers import Signal, SignalType
@@ -337,6 +340,8 @@ def _runtime(
     client=None,
     active_adapter=None,
     operator_store=None,
+    position_store=None,
+    account_provider=None,
     demo_expected_gross_move="1",
     market="linear",
 ):
@@ -354,8 +359,9 @@ def _runtime(
         runtime_store=RuntimeStore(db_path),
         trigger_set_store=trigger_sets,
         operator_state_store=operator_store or OperatorStateStore(db_path),
+        position_store=position_store,
         active_adapter=active_adapter or RecordingFuturesAdapter(order_status="New"),
-        account_provider=lambda _: _account(instrument),
+        account_provider=account_provider or (lambda _: _account(instrument)),
         clock=lambda: datetime(2026, 9, 5, 13, 10, 30, tzinfo=UTC),
         logger=lambda message: None,
     )
@@ -526,7 +532,7 @@ def _instrument():
     )
 
 
-def _account(instrument):
+def _account(instrument, *, position_size=Decimal("0"), mark_price=None):
     return FuturesAccountState(
         symbol=instrument.symbol,
         category=ContractCategory.LINEAR,
@@ -537,7 +543,46 @@ def _account(instrument):
         configured_leverage=Decimal("1"),
         margin_mode="ISOLATED",
         position_mode="ONE_WAY",
-        position_size=Decimal("0"),
+        position_size=position_size,
+        mark_price=mark_price,
+    )
+
+
+def _position_record(*, open_intent_id):
+    position_id = futures_position_id(open_intent_id)
+    return FuturesPositionRecord(
+        position_id=position_id,
+        trade_id=f"trade-{position_id}",
+        symbol="BTCUSDT",
+        side="LONG",
+        status=PositionStatus.OPEN.value,
+        opened_at="2026-09-05T13:00:00+00:00",
+        closed_at=None,
+        entry_price="100",
+        current_qty="0.1",
+        initial_qty="0.1",
+        leverage="1",
+        position_value="10",
+        tp_price="101",
+        tp_pct="0.01",
+        sl_price="99",
+        sl_pct="0.01",
+        trigger_set_id="triggertrade-futures-core",
+        trigger_set_version="v1",
+        strategy_rule_id="STR-FUT-001",
+        strategy_rule_version="0.1.0",
+        risk_rule_version="futures-position-risk-v1",
+        protective_exit_version="protective-exit-v1",
+        evidence_source="ACTIVE",
+        open_intent_id=open_intent_id,
+        open_risk_decision_id="risk-open",
+        open_execution_id=f"ttf-{open_intent_id}",
+        close_intent_id=None,
+        close_risk_decision_id=None,
+        close_execution_id=None,
+        close_reason=None,
+        rule_snapshot={"take_profit_pct": "0.01", "stop_loss_pct": "0.01"},
+        updated_at="2026-09-05T13:00:00+00:00",
     )
 
 

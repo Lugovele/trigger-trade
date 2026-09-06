@@ -139,8 +139,23 @@ state, explicit reconciliation, and cancellation/recovery allowed while trading
 is paused.
 
 No futures bootstrap or dashboard path may call transfer, withdrawal,
-cancel-all, close-all, leverage escalation, or mainnet endpoints. Emergency
-close semantics remain out of scope.
+leverage escalation, or mainnet endpoints. Backend manual close and close-all
+are reviewed execution capabilities only: they submit reduce-only closing
+orders through the futures execution boundary, persist audit events, and do
+not expose dashboard order controls.
+
+Every new ACTIVE futures position must pin `protective-exit-v1` take-profit
+and stop-loss plans before execution. The initial implementation is
+runtime-managed rather than exchange-native because the current Bybit adapter
+does not expose a reviewed TP/SL endpoint contract. Closing triggers use mark
+price semantics: LONG closes at TP when mark price is greater than or equal to
+TP and at SL when mark price is less than or equal to SL; SHORT closes at TP
+when mark price is less than or equal to TP and at SL when mark price is
+greater than or equal to SL. All protective, manual, and close-all exits use
+reduce-only close actions and remain allowed while entries are paused. Runtime
+startup reconciles unresolved executions and persisted open/unknown positions
+before evaluating new entry decisions; unresolved disagreement for a symbol
+continues to fail closed instead of submitting a blind duplicate.
 
 ## Futures Accounting Safety
 

@@ -208,6 +208,42 @@ Allowed position states are `FLAT`, `LONG`, and `SHORT`. Direct flips are not
 valid trading rules in this version; they must be represented as close then
 open in a future reviewed lifecycle.
 
+Full futures position lifecycle is governed by `futures-position-risk-v1` and
+`protective-exit-v1`. Every `OPEN_LONG` or `OPEN_SHORT` must include a fixed
+take-profit and stop-loss plan. `DYNAMIC` take-profit exists only as an
+interface value and is not approved for runtime execution.
+
+Initial protective-exit v1 formulas:
+
+```text
+LONG TP  = entry * (1 + configured_take_profit_pct)
+LONG SL  = entry * (1 - configured_stop_loss_pct)
+SHORT TP = entry * (1 - configured_take_profit_pct)
+SHORT SL = entry * (1 + configured_stop_loss_pct)
+```
+
+Prices are floored to the exchange tick and then side relationships are
+validated. LONG requires TP above entry and SL below entry. SHORT requires TP
+below entry and SL above entry.
+
+Risk/reward is enforced separately from net edge:
+
+```text
+LONG reward = TP - entry
+LONG risk   = entry - SL
+SHORT reward = entry - TP
+SHORT risk   = SL - entry
+R/R = reward / risk
+```
+
+The boundary is inclusive: R/R equal to the configured minimum passes.
+Zero/negative risk, invalid side geometry, missing TP/SL, and below-minimum
+R/R fail closed. Close reasons are limited to `TAKE_PROFIT`, `STOP_LOSS`,
+`MANUAL`, and `CLOSE_ALL`; `SIGNAL_EXIT` is not part of this unit.
+`OPEN_SHORT`/`CLOSE_SHORT` are supported by the backend lifecycle and manual
+Demo validation path. Production `STR-FUT-001@0.1.0` remains long-only until a
+separate reviewed strategy rule approves short-entry semantics.
+
 Default leverage is `1x`. Leverage is a risk parameter, not a source of
 profitability, and the system must not auto-increase it. No artificial
 `max trades per day = N` cap is introduced here; frequency is constrained by

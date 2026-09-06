@@ -123,6 +123,27 @@ python -m triggertrade.services.regime_smoke
 The smoke uses Bybit Demo public linear candles only; it does not load private
 credentials or call order endpoints.
 
+## Futures Position Lifecycle
+
+TriggerTrade futures execution is Bybit Demo linear only. New ACTIVE entries
+must pass risk with mandatory fixed take-profit and stop-loss plans, inclusive
+risk/reward validation, net-edge validation, 1x default leverage, and one net
+position per symbol. TP/SL, manual close, close-all and reconciliation are
+backend services; the dashboard remains read-only and cannot place orders.
+SHORT lifecycle plumbing is backend/manual/smoke capable, while the current
+production strategy remains `STR-FUT-001@0.1.0` long-only pending a separate
+short-entry rule review.
+
+Run the opt-in lifecycle smoke manually with:
+
+```powershell
+$env:RUN_TRIGGERTRADE_FUTURES_LIFECYCLE_SMOKE="1"
+python scripts/bybit_demo_futures_lifecycle_smoke.py
+```
+
+The smoke uses sanitized output only and stops rather than forcing unsafe
+fills when a safe Demo PostOnly order does not become an actual position.
+
 ## Continuous Futures Runtime
 
 `python -m triggertrade.services.runtime` now starts the continuous futures

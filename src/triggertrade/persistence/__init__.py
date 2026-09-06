@@ -2,6 +2,7 @@
 
 from .execution_store import ExecutionFill, ExecutionRecord, ExecutionStore
 from .futures_execution_store import FuturesExecutionRecord, FuturesExecutionStore
+from .futures_position_store import FuturesClosedPositionRecord, FuturesPositionEvent, FuturesPositionRecord, FuturesPositionStore
 from .operator_state_store import OperatorStateStore, OperatorTradingState, TradingState
 from .runtime_store import (
     CandleLifecycle,
@@ -33,6 +34,10 @@ __all__ = [
     "ExecutionStore",
     "FuturesExecutionRecord",
     "FuturesExecutionStore",
+    "FuturesClosedPositionRecord",
+    "FuturesPositionEvent",
+    "FuturesPositionRecord",
+    "FuturesPositionStore",
     "OperatorStateStore",
     "OperatorTradingState",
     "RuntimeCheckpoint",

@@ -16,7 +16,13 @@ class FuturesAccountingBridge:
         self._accounting_store = accounting_store
         self._adapter = adapter
 
-    def ingest_execution(self, *, record: FuturesExecutionRecord, intent: FuturesTradeIntent | None = None) -> None:
+    def ingest_execution(
+        self,
+        *,
+        record: FuturesExecutionRecord,
+        intent: FuturesTradeIntent | None = None,
+        trade_id: str | None = None,
+    ) -> None:
         if intent is not None and intent.intent_id != record.intent_id:
             raise ValueError("futures accounting bridge intent/record mismatch")
         if record.status not in {OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED}:
@@ -25,12 +31,12 @@ class FuturesAccountingBridge:
             return
         rows = self._adapter.fetch_executions(symbol=record.symbol, client_order_id=record.client_order_id)
         for row in rows:
-            event = _fill_event(record, row)
+            event = _fill_event(record, row, trade_id=trade_id, intent=intent)
             self._accounting_store.record_fill(event)
-        _try_close_trade(record, self._accounting_store)
+        _try_close_trade(record, self._accounting_store, trade_id=trade_id)
 
 
-def _fill_event(record: FuturesExecutionRecord, row: dict) -> FuturesFillEvent:
+def _fill_event(record: FuturesExecutionRecord, row: dict, *, trade_id: str | None = None, intent: FuturesTradeIntent | None = None) -> FuturesFillEvent:
     exec_id = str(row.get("execId") or row.get("exec_id") or f"{record.client_order_id}-{row.get('execTime', '')}")
     qty = Decimal(str(row.get("execQty") or row.get("qty") or "0"))
     price = Decimal(str(row.get("execPrice") or row.get("price") or record.requested_price))
@@ -42,7 +48,7 @@ def _fill_event(record: FuturesExecutionRecord, row: dict) -> FuturesFillEvent:
         occurred_at = datetime.fromtimestamp(int(occurred_at) / 1000, UTC).isoformat()
     return FuturesFillEvent(
         event_id=f"bybit-{exec_id}",
-        trade_id=_trade_id(record.intent_id),
+        trade_id=trade_id or _trade_id(record.intent_id),
         execution_id=record.client_order_id,
         symbol=record.symbol,
         direction=_direction(record.position_action),
@@ -55,13 +61,13 @@ def _fill_event(record: FuturesExecutionRecord, row: dict) -> FuturesFillEvent:
         requested_price=Decimal(record.requested_price),
         trigger_set_id=record.trigger_set_id,
         trigger_set_version=record.trigger_set_version,
-        regime_label=None,
+        regime_label=None if trade_id is None or intent is None else intent.regime_state,
         source="exchange",
     )
 
 
-def _try_close_trade(record: FuturesExecutionRecord, store: FuturesAccountingStore) -> None:
-    trade_id = _trade_id(record.intent_id)
+def _try_close_trade(record: FuturesExecutionRecord, store: FuturesAccountingStore, *, trade_id: str | None = None) -> None:
+    trade_id = trade_id or _trade_id(record.intent_id)
     fills = store.list_fills(trade_id)
     entry = tuple(fill for fill in fills if fill.action in {PositionAction.OPEN_LONG.value, PositionAction.OPEN_SHORT.value})
     exit_fills = tuple(fill for fill in fills if fill.action in {PositionAction.CLOSE_LONG.value, PositionAction.CLOSE_SHORT.value})

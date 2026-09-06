@@ -249,11 +249,28 @@ context id/state into lane lifecycle and strategy-decision provenance.
 Unsupported, insufficient or malformed regime data is explicit and must not be
 silently treated as `SIDEWAYS`.
 
+Position lifecycle state is persisted separately from order lifecycle state.
+`FuturesPositionStore` is the backend authority for open/closing/closed/unknown
+positions, protective-exit plans, rule snapshots, set attribution, close
+reasons, and closed-position accounting links. Order records remain immutable
+execution facts; accounting consumes linked open/close fills under the stable
+position trade id.
+
+Protective exits are runtime-managed in `protective-exit-v1`. They monitor
+backend mark-price facts and submit reduce-only closing orders through
+`FuturesExecutionService`; dashboard/read models do not own TP/SL logic and do
+not expose order actions. Manual close and close-all are backend service
+contracts with persisted audit events. Pause blocks only new ACTIVE entries;
+TP/SL, manual close, close-all, reconciliation, TEST lane, and analytics
+continue.
+
 Futures risk requires position-state validity, maximum position/exposure,
 configured leverage, available margin, margin/position mode validity,
 liquidation-buffer capability, duplicate intent checks, churn/cooldown hooks,
-operator pause, session/daily loss capability hooks, and a deterministic
-net-edge gate. Expected net edge is:
+operator pause, session/daily loss capability hooks, mandatory TP/SL plans,
+one net position per symbol, position sizing by configured available-capital
+percentage, inclusive risk/reward validation, and a deterministic net-edge
+gate. Expected net edge is:
 
 ```text
 expected gross price move

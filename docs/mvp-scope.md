@@ -182,6 +182,14 @@ sample warnings, and overlapping ACTIVE/TEST comparison. `CTX-REGIME@0.1.0`
 is now in scope as observed-state context only, not as a trading trigger.
 Real-money execution remains out of scope.
 
+The deterministic futures lifecycle now includes backend-managed
+`OPEN_LONG`, `CLOSE_LONG`, `OPEN_SHORT`, and `CLOSE_SHORT` flows, mandatory
+fixed TP/SL plans, risk/reward validation, manual close, close-all, restart
+recovery, reconciliation, and one net position per symbol. Production runtime
+remains Bybit Demo linear and currently narrows market-data scope to BTCUSDT;
+multi-symbol position storage/service behavior is backend-ready and covered by
+tests for future runtime expansion.
+
 ## Historical Replay MVP Scope
 
 In scope: a narrow internal replay engine for Bybit Demo public BTCUSDT linear

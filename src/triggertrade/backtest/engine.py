@@ -13,6 +13,7 @@ from triggertrade.accounting import ACCOUNTING_VERSION
 from triggertrade.analytics import TradePerformanceFact, compute_futures_performance
 from triggertrade.config import AppConfig
 from triggertrade.execution.futures import FundingEstimate, FuturesExecutionConfig, FuturesRiskManager, PositionState, estimate_costs
+from triggertrade.execution.position_lifecycle import build_fixed_protective_exit_plan
 from triggertrade.market_data import FuturesAccountState, FuturesInstrumentMetadata, RegimeEvaluationWindow, evaluate_market_regime, futures_event_from_completed_candle, volume_window_from_futures_event
 from triggertrade.market_data.futures import ContractCategory
 from triggertrade.persistence import FuturesExecutionStore, RuntimeStore, TraceStore, TriggerSetStore
@@ -131,7 +132,22 @@ class BacktestEngine:
             if decision.intent is None:
                 no_action += 1
                 continue
-            intent = replace(decision.intent, lane=BACKTEST_EVIDENCE_SOURCE, intent_id=f"bt-{decision.intent.intent_id}")
+            take_profit, stop_loss = build_fixed_protective_exit_plan(
+                action=decision.intent.action,
+                entry_price=decision.intent.price,
+                take_profit_pct=self._config.futures_runtime.take_profit_pct,
+                stop_loss_pct=self._config.futures_runtime.stop_loss_pct,
+                price_tick=self._instrument.price_tick,
+                calculated_at=event.close_time.isoformat(),
+            )
+            intent = replace(
+                decision.intent,
+                lane=BACKTEST_EVIDENCE_SOURCE,
+                intent_id=f"bt-{decision.intent.intent_id}",
+                take_profit=take_profit,
+                stop_loss=stop_loss,
+                minimum_risk_reward=self._config.futures_runtime.minimum_risk_reward,
+            )
             self._trace_store.save_futures_strategy_decision(intent, tuple(signal_ids))
             intents += 1
             cost = estimate_costs(

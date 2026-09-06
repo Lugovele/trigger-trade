@@ -23,6 +23,7 @@ from triggertrade.execution.futures import (
     futures_exchange_side,
     next_position_state,
 )
+from triggertrade.execution.position_lifecycle import build_fixed_protective_exit_plan
 from triggertrade.exchanges import BybitApiError, BybitDemoClient
 from triggertrade.market_data import ContractCategory, FuturesAccountState, FuturesInstrumentMetadata, RegimeCapability
 from triggertrade.market_data.bybit import parse_linear_instrument
@@ -498,6 +499,16 @@ def _risk_manager(store, *, config=None):
 
 
 def _intent(action, *, current=PositionState.FLAT, leverage=Decimal("1"), expected_move=None, category=ContractCategory.LINEAR):
+    tp, sl = (None, None)
+    if action in {PositionAction.OPEN_LONG, PositionAction.OPEN_SHORT} and category is ContractCategory.LINEAR:
+        tp, sl = build_fixed_protective_exit_plan(
+            action=action,
+            entry_price=Decimal("10000.0"),
+            take_profit_pct=Decimal("0.01"),
+            stop_loss_pct=Decimal("0.0025"),
+            price_tick=Decimal("0.1"),
+            calculated_at="2026-09-05T00:00:00+00:00",
+        )
     return FuturesTradeIntent(
         intent_id="futures-intent-1",
         symbol="BTCUSDT",
@@ -510,6 +521,9 @@ def _intent(action, *, current=PositionState.FLAT, leverage=Decimal("1"), expect
         configured_leverage=leverage,
         expected_gross_price_move=expected_move,
         lane="ACTIVE",
+        take_profit=tp,
+        stop_loss=sl,
+        minimum_risk_reward=Decimal("1.5"),
     )
 
 

@@ -134,6 +134,12 @@ class FuturesRuntimeConfig:
     position_mode: str = "ONE_WAY"
     minimum_net_edge: Decimal = Decimal("0.01")
     max_position_notional: Decimal = Decimal("10")
+    position_size_pct_of_available_capital: Decimal = Decimal("0.10")
+    max_total_position_notional: Decimal = Decimal("30")
+    max_open_positions: int = 3
+    take_profit_pct: Decimal = Decimal("0.01")
+    stop_loss_pct: Decimal = Decimal("0.0025")
+    minimum_risk_reward: Decimal = Decimal("1.5")
     maker_fee_rate: Decimal = Decimal("0.0002")
     taker_fee_rate: Decimal = Decimal("0.00055")
     spread_cost: Decimal = Decimal("0")
@@ -258,6 +264,18 @@ def load_config(env: Mapping[str, str] | None = None) -> AppConfig:
         position_mode=source.get("TRIGGERTRADE_FUTURES_POSITION_MODE", "ONE_WAY").strip().upper(),
         minimum_net_edge=_decimal_value(source.get("TRIGGERTRADE_MINIMUM_NET_EDGE", "0.01"), "TRIGGERTRADE_MINIMUM_NET_EDGE"),
         max_position_notional=_decimal_value(source.get("TRIGGERTRADE_MAX_FUTURES_POSITION_NOTIONAL", "10"), "TRIGGERTRADE_MAX_FUTURES_POSITION_NOTIONAL"),
+        position_size_pct_of_available_capital=_decimal_value(
+            source.get("TRIGGERTRADE_FUTURES_POSITION_SIZE_PCT", "0.10"),
+            "TRIGGERTRADE_FUTURES_POSITION_SIZE_PCT",
+        ),
+        max_total_position_notional=_decimal_value(
+            source.get("TRIGGERTRADE_MAX_TOTAL_FUTURES_POSITION_NOTIONAL", "30"),
+            "TRIGGERTRADE_MAX_TOTAL_FUTURES_POSITION_NOTIONAL",
+        ),
+        max_open_positions=_int_value(source.get("TRIGGERTRADE_MAX_OPEN_FUTURES_POSITIONS", "3"), "TRIGGERTRADE_MAX_OPEN_FUTURES_POSITIONS"),
+        take_profit_pct=_decimal_value(source.get("TRIGGERTRADE_FUTURES_TAKE_PROFIT_PCT", "0.01"), "TRIGGERTRADE_FUTURES_TAKE_PROFIT_PCT"),
+        stop_loss_pct=_decimal_value(source.get("TRIGGERTRADE_FUTURES_STOP_LOSS_PCT", "0.0025"), "TRIGGERTRADE_FUTURES_STOP_LOSS_PCT"),
+        minimum_risk_reward=_decimal_value(source.get("TRIGGERTRADE_FUTURES_MIN_RISK_REWARD", "1.5"), "TRIGGERTRADE_FUTURES_MIN_RISK_REWARD"),
         maker_fee_rate=_decimal_value(source.get("TRIGGERTRADE_FUTURES_MAKER_FEE_RATE", "0.0002"), "TRIGGERTRADE_FUTURES_MAKER_FEE_RATE"),
         taker_fee_rate=_decimal_value(source.get("TRIGGERTRADE_FUTURES_TAKER_FEE_RATE", "0.00055"), "TRIGGERTRADE_FUTURES_TAKER_FEE_RATE"),
         spread_cost=_decimal_value(source.get("TRIGGERTRADE_FUTURES_SPREAD_COST", "0"), "TRIGGERTRADE_FUTURES_SPREAD_COST"),

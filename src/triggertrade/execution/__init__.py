@@ -34,6 +34,18 @@ __all__ = [
     "futures_client_order_id",
     "futures_exchange_side",
     "next_position_state",
+    "CloseReason",
+    "FuturesPositionLifecycleService",
+    "PositionRiskConfig",
+    "PositionStatus",
+    "ProtectiveExitMode",
+    "StopLossPlan",
+    "TakeProfitPlan",
+    "build_fixed_protective_exit_plan",
+    "calculate_position_size",
+    "evaluate_risk_reward",
+    "should_trigger_protective_exit",
+    "unrealized_pnl_pct",
 ]
 
 
@@ -69,4 +81,22 @@ def __getattr__(name: str):
         from . import futures
 
         return getattr(futures, name)
+    position_names = {
+        "CloseReason",
+        "FuturesPositionLifecycleService",
+        "PositionRiskConfig",
+        "PositionStatus",
+        "ProtectiveExitMode",
+        "StopLossPlan",
+        "TakeProfitPlan",
+        "build_fixed_protective_exit_plan",
+        "calculate_position_size",
+        "evaluate_risk_reward",
+        "should_trigger_protective_exit",
+        "unrealized_pnl_pct",
+    }
+    if name in position_names:
+        from . import position_lifecycle
+
+        return getattr(position_lifecycle, name)
     raise AttributeError(name)

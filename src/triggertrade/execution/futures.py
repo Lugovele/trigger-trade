@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
 from hashlib import sha256
-from typing import Callable
+from typing import Any, Callable
 
 from triggertrade.config import BybitEnvironment, TradingMode
 from triggertrade.execution.contracts import OrderStatus, OrderType, Side
@@ -97,6 +97,9 @@ class FuturesTradeIntent:
     regime_rule_id: str | None = None
     regime_rule_version: str | None = None
     regime_state: str | None = None
+    take_profit: Any | None = None
+    stop_loss: Any | None = None
+    minimum_risk_reward: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -143,6 +146,8 @@ FUTURES_RISK_RULE_IDS = (
     "FRSK-009",
     "FRSK-010",
     "FRSK-011",
+    "FRSK-012",
+    "FRSK-013",
 )
 
 
@@ -220,6 +225,27 @@ class FuturesRiskManager:
             blocking.append("FRSK-008")
         if not _demo_linear_safety_ok(self._config, intent):
             blocking.append("FRSK-006")
+        if intent.action in {PositionAction.OPEN_LONG, PositionAction.OPEN_SHORT}:
+            try:
+                from triggertrade.execution.position_lifecycle import evaluate_risk_reward, validate_protective_exit_plan
+
+                validate_protective_exit_plan(
+                    action=intent.action,
+                    entry_price=intent.price,
+                    take_profit=intent.take_profit,
+                    stop_loss=intent.stop_loss,
+                )
+                rr = evaluate_risk_reward(
+                    action=intent.action,
+                    entry_price=intent.price,
+                    take_profit=intent.take_profit,
+                    stop_loss=intent.stop_loss,
+                    minimum_ratio=intent.minimum_risk_reward or Decimal("0"),
+                )
+                if not rr.approved:
+                    blocking.append("FRSK-013")
+            except Exception:
+                blocking.append("FRSK-012")
 
         net_edge = estimate_net_edge(
             expected_gross_price_move=intent.expected_gross_price_move,
@@ -290,7 +316,7 @@ class FuturesExecutionService:
         if existing is not None:
             return self.reconcile(existing)
 
-        self._validate_operator_trading_state()
+        self._validate_operator_trading_state(intent)
         record = FuturesExecutionRecord(
             intent_id=intent.intent_id,
             risk_decision_id=risk_decision.risk_decision_id,
@@ -404,8 +430,8 @@ class FuturesExecutionService:
             raise ExecutionError("Bybit futures execution requires demo base URL")
         if intent.category is not ContractCategory.LINEAR or self._config.category is not ContractCategory.LINEAR:
             raise ExecutionError("only Bybit linear USDT perpetual futures are supported")
-        if intent.symbol != self._config.symbol or intent.symbol != "BTCUSDT":
-            raise ExecutionError("only BTCUSDT futures are supported in this slice")
+        if intent.symbol != self._config.symbol:
+            raise ExecutionError("futures intent symbol must match configured execution symbol")
         if intent.order_type is not OrderType.LIMIT:
             raise ExecutionError("only futures limit orders are supported")
 
@@ -444,8 +470,10 @@ class FuturesExecutionService:
         if self._account.available_margin < required_margin:
             raise ExecutionError("available margin is below required initial margin")
 
-    def _validate_operator_trading_state(self) -> None:
+    def _validate_operator_trading_state(self, intent: FuturesTradeIntent) -> None:
         if self._execution_lane != "ACTIVE":
+            return
+        if intent.action not in {PositionAction.OPEN_LONG, PositionAction.OPEN_SHORT}:
             return
         if self._operator_trading_state is None:
             raise ExecutionError("ACTIVE futures execution requires persistent operator trading state")
@@ -552,7 +580,7 @@ def _demo_linear_safety_ok(config: FuturesExecutionConfig, intent: FuturesTradeI
         and config.bybit_base_url == "https://api-demo.bybit.com"
         and config.category is ContractCategory.LINEAR
         and intent.category is ContractCategory.LINEAR
-        and intent.symbol == "BTCUSDT"
+        and intent.symbol == config.symbol
     )
 
 

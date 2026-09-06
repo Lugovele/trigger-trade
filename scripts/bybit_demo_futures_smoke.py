@@ -29,6 +29,7 @@ from triggertrade.execution.futures import (  # noqa: E402
     PositionState,
     estimate_costs,
 )
+from triggertrade.execution.position_lifecycle import build_fixed_protective_exit_plan  # noqa: E402
 from triggertrade.exchanges import BybitApiError, BybitDemoClient, parse_wallet_balance  # noqa: E402
 from triggertrade.market_data import ContractCategory, FuturesAccountState, parse_linear_instrument, parse_linear_ticker  # noqa: E402
 from triggertrade.persistence import FuturesExecutionStore  # noqa: E402
@@ -109,6 +110,19 @@ def run_smoke(env: dict[str, str]) -> FuturesSmokeResult:
         configured_leverage=Decimal("1"),
         expected_gross_price_move=Decimal("1"),
         lane="MANUAL_DEMO_VALIDATION",
+    )
+    take_profit, stop_loss = build_fixed_protective_exit_plan(
+        action=intent.action,
+        entry_price=intent.price,
+        take_profit_pct=Decimal("0.01"),
+        stop_loss_pct=Decimal("0.005"),
+        price_tick=instrument.price_tick,
+    )
+    intent = __import__("dataclasses").replace(
+        intent,
+        take_profit=take_profit,
+        stop_loss=stop_loss,
+        minimum_risk_reward=Decimal("1.5"),
     )
     cost = estimate_costs(
         notional=quantity * price,

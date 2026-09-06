@@ -20,6 +20,8 @@ from triggertrade.execution.futures import (
     PositionState,
     estimate_costs,
 )
+from triggertrade.execution.position_lifecycle import build_fixed_protective_exit_plan
+from triggertrade.execution.position_lifecycle import FuturesPositionLifecycleService, PositionRiskConfig
 from triggertrade.exchanges import BybitApiError, BybitDemoClient
 from triggertrade.market_data import (
     FuturesAccountState,
@@ -43,6 +45,7 @@ from triggertrade.persistence import (
     TriggerSetStore,
 )
 from triggertrade.persistence.futures_accounting_store import FuturesAccountingStore
+from triggertrade.persistence.futures_position_store import FuturesPositionStore
 from triggertrade.services.futures_accounting_bridge import FuturesAccountingBridge
 from triggertrade.services.runtime import CompletedCandle, RuntimeCycleResult, RuntimeGapError, latest_completed_candle, next_completed_candle
 from triggertrade.services.test_futures_simulator import TestFuturesSimulator
@@ -73,6 +76,7 @@ class FuturesDualLaneRuntime:
         runtime_store: RuntimeStore,
         trigger_set_store: TriggerSetStore,
         operator_state_store: OperatorStateStore,
+        position_store: FuturesPositionStore | None = None,
         active_adapter: BybitFuturesExecutionAdapter | None = None,
         test_simulator: TestFuturesSimulator | None = None,
         account_provider: Callable[[FuturesInstrumentMetadata], FuturesAccountState] | None = None,
@@ -87,6 +91,7 @@ class FuturesDualLaneRuntime:
         self._runtime_store = runtime_store
         self._trigger_set_store = trigger_set_store
         self._operator_state_store = operator_state_store
+        self._position_store = position_store or FuturesPositionStore(config.futures_runtime.db_path)
         self._active_adapter = active_adapter or BybitFuturesExecutionAdapter(market_client)
         self._test_simulator = test_simulator or TestFuturesSimulator(
             accounting_store=accounting_store,
@@ -113,6 +118,7 @@ class FuturesDualLaneRuntime:
             active_set = self._trigger_set_store.get_active_set(self._config.futures_runtime.symbol, "1m")
             if active_set is not None:
                 self._recover_active_unresolved(instrument)
+                self._monitor_active_positions(instrument)
             active_checkpoint = _lane_checkpoint(self._runtime_store, Lane.ACTIVE, active_set) if active_set else None
             completed = next_completed_candle(
                 candles,
@@ -313,6 +319,20 @@ class FuturesDualLaneRuntime:
             return RuntimeCycleResult(completed.candle_id, signal.signal_type.value, skipped_reason=decision.reason)
 
         intent = decision.intent
+        take_profit, stop_loss = build_fixed_protective_exit_plan(
+            action=intent.action,
+            entry_price=intent.price,
+            take_profit_pct=self._config.futures_runtime.take_profit_pct,
+            stop_loss_pct=self._config.futures_runtime.stop_loss_pct,
+            price_tick=instrument.price_tick,
+            calculated_at=self._clock().isoformat(),
+        )
+        intent = replace(
+            intent,
+            take_profit=take_profit,
+            stop_loss=stop_loss,
+            minimum_risk_reward=self._config.futures_runtime.minimum_risk_reward,
+        )
         self._trace_store.save_futures_strategy_decision(intent, tuple(signal_ids))
         if lane is Lane.ACTIVE:
             existing = self._futures_execution_store.get_by_intent(intent.intent_id)
@@ -438,22 +458,26 @@ class FuturesDualLaneRuntime:
             self._checkpoint_lane(lane, trigger_set, completed)
             return RuntimeCycleResult(completed.candle_id, signal.signal_type.value, intent.intent_id, risk.risk_decision_id, True, "test_simulated")
 
-        service = FuturesExecutionService(
-            config=_execution_config(self._config),
-            adapter=self._active_adapter,
-            store=self._futures_execution_store,
-            instrument=instrument,
-            account=account,
-            execution_lane=lane.value,
-            operator_trading_state=self._operator_state_value,
-        )
         try:
-            record = service.submit_approved_limit_order(intent=intent, risk_decision=risk)
-            record = service.reconcile(record)
-            FuturesAccountingBridge(accounting_store=self._accounting_store, adapter=self._active_adapter).ingest_execution(
-                record=record,
-                intent=intent,
+            lifecycle = FuturesPositionLifecycleService(
+                execution_config=_execution_config(self._config),
+                risk_config=_position_risk_config(self._config),
+                execution_store=self._futures_execution_store,
+                position_store=self._position_store,
+                accounting_store=self._accounting_store,
+                adapter=self._active_adapter,
+                instrument=instrument,
+                account=account,
+                execution_lane=lane.value,
+                operator_trading_state=self._operator_state_value,
             )
+            opened = lifecycle.open_position(
+                intent=intent,
+                risk_decision=risk,
+                take_profit=take_profit,
+                stop_loss=stop_loss,
+            )
+            record = opened.execution
         except Exception as exc:
             status = "active_execution_paused" if "pause" in str(exc).lower() else "execution_error"
             self._save_lane_lifecycle(
@@ -472,7 +496,7 @@ class FuturesDualLaneRuntime:
                 self._checkpoint_lane(lane, trigger_set, completed)
             return RuntimeCycleResult(completed.candle_id, signal.signal_type.value, intent.intent_id, risk.risk_decision_id, True, skipped_reason=status)
 
-        if record.status is OrderStatus.UNKNOWN:
+        if record is not None and record.status is OrderStatus.UNKNOWN:
             self._save_lane_lifecycle(
                 lane,
                 trigger_set,
@@ -500,7 +524,7 @@ class FuturesDualLaneRuntime:
             regime_context=regime_context,
         )
         self._checkpoint_lane(lane, trigger_set, completed)
-        return RuntimeCycleResult(completed.candle_id, signal.signal_type.value, intent.intent_id, risk.risk_decision_id, True, record.status.value)
+        return RuntimeCycleResult(completed.candle_id, signal.signal_type.value, intent.intent_id, risk.risk_decision_id, True, None if record is None else record.status.value)
 
     def _price_signal(self, *, lane: Lane, trigger_set: TriggerSetVersion, completed: CompletedCandle, event) -> Signal:
         observation = event.to_market_observation(stale_after_seconds=self._config.risk_rules.stale_after_seconds)
@@ -562,6 +586,19 @@ class FuturesDualLaneRuntime:
 
     def _recover_active_unresolved(self, instrument: FuturesInstrumentMetadata) -> None:
         account = self._account_state(instrument, Lane.ACTIVE)
+        lifecycle = FuturesPositionLifecycleService(
+            execution_config=_execution_config(self._config),
+            risk_config=_position_risk_config(self._config),
+            execution_store=self._futures_execution_store,
+            position_store=self._position_store,
+            accounting_store=self._accounting_store,
+            adapter=self._active_adapter,
+            instrument=instrument,
+            account=account,
+            execution_lane=Lane.ACTIVE.value,
+            operator_trading_state=self._operator_state_value,
+        )
+        lifecycle.recover_after_restart()
         service = FuturesExecutionService(
             config=_execution_config(self._config),
             adapter=self._active_adapter,
@@ -572,8 +609,35 @@ class FuturesDualLaneRuntime:
             operator_trading_state=self._operator_state_value,
         )
         bridge = FuturesAccountingBridge(accounting_store=self._accounting_store, adapter=self._active_adapter)
+        position_intents = {
+            intent_id
+            for position in self._position_store.list_open_positions(include_unknown=True)
+            for intent_id in (position.open_intent_id, position.close_intent_id)
+            if intent_id
+        }
         for record in service.recover_unresolved():
-            bridge.ingest_execution(record=record)
+            if record.intent_id not in position_intents:
+                bridge.ingest_execution(record=record)
+
+    def _monitor_active_positions(self, instrument: FuturesInstrumentMetadata) -> None:
+        account = self._account_state(instrument, Lane.ACTIVE)
+        if account.mark_price is None:
+            return
+        lifecycle = FuturesPositionLifecycleService(
+            execution_config=_execution_config(self._config),
+            risk_config=_position_risk_config(self._config),
+            execution_store=self._futures_execution_store,
+            position_store=self._position_store,
+            accounting_store=self._accounting_store,
+            adapter=self._active_adapter,
+            instrument=instrument,
+            account=account,
+            execution_lane=Lane.ACTIVE.value,
+            operator_trading_state=self._operator_state_value,
+        )
+        for position in self._position_store.list_open_positions():
+            if position.symbol == instrument.symbol:
+                lifecycle.monitor_protective_exit(position_id=position.position_id, mark_price=account.mark_price)
 
     def _save_lane_lifecycle(
         self,
@@ -665,6 +729,18 @@ def _execution_config(config: AppConfig) -> FuturesExecutionConfig:
         symbol=config.futures_runtime.symbol,
         default_leverage=config.futures_runtime.leverage,
         max_configured_leverage=config.futures_runtime.leverage,
+    )
+
+
+def _position_risk_config(config: AppConfig) -> PositionRiskConfig:
+    return PositionRiskConfig(
+        take_profit_pct=config.futures_runtime.take_profit_pct,
+        stop_loss_pct=config.futures_runtime.stop_loss_pct,
+        minimum_risk_reward=config.futures_runtime.minimum_risk_reward,
+        position_size_pct_of_available_capital=config.futures_runtime.position_size_pct_of_available_capital,
+        max_position_notional=config.futures_runtime.max_position_notional,
+        max_total_position_notional=config.futures_runtime.max_total_position_notional,
+        max_open_positions=config.futures_runtime.max_open_positions,
     )
 
 
