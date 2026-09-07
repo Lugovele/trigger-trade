@@ -35,6 +35,8 @@ class CandleLifecycle:
     error: str | None = None
     regime_context_id: str | None = None
     regime_state: str | None = None
+    rules_version_id: str | None = None
+    rules_evaluation: dict[str, str | None] | None = None
 
 
 @dataclass(frozen=True)
@@ -68,6 +70,8 @@ class LaneCandleLifecycle:
     error: str | None = None
     regime_context_id: str | None = None
     regime_state: str | None = None
+    rules_version_id: str | None = None
+    rules_evaluation: dict[str, str | None] | None = None
 
 
 class RuntimeStore:
@@ -113,8 +117,9 @@ class RuntimeStore:
                 INSERT OR REPLACE INTO runtime_candle_lifecycles (
                     candle_id, symbol, timeframe, candle_open_time, status,
                     signal_id, intent_id, risk_decision_id, execution_intent_id,
-                    processed_at, error, regime_context_id, regime_state
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    processed_at, error, regime_context_id, regime_state,
+                    rules_version_id, rules_evaluation
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     lifecycle.candle_id,
@@ -130,6 +135,8 @@ class RuntimeStore:
                     lifecycle.error,
                     lifecycle.regime_context_id,
                     lifecycle.regime_state,
+                    lifecycle.rules_version_id,
+                    json.dumps(lifecycle.rules_evaluation or {}, sort_keys=True),
                 ),
             )
 
@@ -203,8 +210,9 @@ class RuntimeStore:
                     lane, symbol, timeframe, candle_id, candle_open_time,
                     trigger_set_id, trigger_set_version, status, signal_id,
                     intent_id, risk_decision_id, execution_intent_id,
-                    processed_at, error, regime_context_id, regime_state
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    processed_at, error, regime_context_id, regime_state,
+                    rules_version_id, rules_evaluation
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     lifecycle.lane,
@@ -223,6 +231,8 @@ class RuntimeStore:
                     lifecycle.error,
                     lifecycle.regime_context_id,
                     lifecycle.regime_state,
+                    lifecycle.rules_version_id,
+                    json.dumps(lifecycle.rules_evaluation or {}, sort_keys=True),
                 ),
             )
 
@@ -242,7 +252,8 @@ class RuntimeStore:
                 SELECT lane, symbol, timeframe, candle_id, candle_open_time,
                        trigger_set_id, trigger_set_version, status, signal_id,
                        intent_id, risk_decision_id, execution_intent_id,
-                       processed_at, error, regime_context_id, regime_state
+                       processed_at, error, regime_context_id, regime_state,
+                       rules_version_id, rules_evaluation
                 FROM runtime_lane_lifecycles
                 WHERE lane = ? AND symbol = ? AND timeframe = ? AND candle_id = ?
                   AND trigger_set_id = ? AND trigger_set_version = ?
@@ -375,6 +386,8 @@ class RuntimeStore:
             )
             _add_column_if_missing(conn, "runtime_candle_lifecycles", "regime_context_id", "TEXT")
             _add_column_if_missing(conn, "runtime_candle_lifecycles", "regime_state", "TEXT")
+            _add_column_if_missing(conn, "runtime_candle_lifecycles", "rules_version_id", "TEXT")
+            _add_column_if_missing(conn, "runtime_candle_lifecycles", "rules_evaluation", "TEXT")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS runtime_lane_state (
@@ -410,12 +423,16 @@ class RuntimeStore:
                     error TEXT,
                     regime_context_id TEXT,
                     regime_state TEXT,
+                    rules_version_id TEXT,
+                    rules_evaluation TEXT,
                     PRIMARY KEY (lane, symbol, timeframe, candle_id, trigger_set_id, trigger_set_version)
                 )
                 """
             )
             _add_column_if_missing(conn, "runtime_lane_lifecycles", "regime_context_id", "TEXT")
             _add_column_if_missing(conn, "runtime_lane_lifecycles", "regime_state", "TEXT")
+            _add_column_if_missing(conn, "runtime_lane_lifecycles", "rules_version_id", "TEXT")
+            _add_column_if_missing(conn, "runtime_lane_lifecycles", "rules_evaluation", "TEXT")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS market_regime_evaluations (
@@ -472,6 +489,8 @@ def _row_to_lifecycle(row: sqlite3.Row) -> CandleLifecycle:
         error=row["error"],
         regime_context_id=_optional(row, "regime_context_id"),
         regime_state=_optional(row, "regime_state"),
+        rules_version_id=_optional(row, "rules_version_id"),
+        rules_evaluation=_json_optional(row, "rules_evaluation"),
     )
 
 
@@ -507,6 +526,8 @@ def _row_to_lane_lifecycle(row: sqlite3.Row) -> LaneCandleLifecycle:
         error=row["error"],
         regime_context_id=_optional(row, "regime_context_id"),
         regime_state=_optional(row, "regime_state"),
+        rules_version_id=_optional(row, "rules_version_id"),
+        rules_evaluation=_json_optional(row, "rules_evaluation"),
     )
 
 
@@ -536,3 +557,10 @@ def _add_column_if_missing(conn: sqlite3.Connection, table: str, column: str, de
 
 def _optional(row: sqlite3.Row, key: str):
     return row[key] if key in row.keys() else None
+
+
+def _json_optional(row: sqlite3.Row, key: str) -> dict[str, str | None] | None:
+    raw = _optional(row, key)
+    if not raw:
+        return None
+    return json.loads(raw)

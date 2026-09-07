@@ -43,6 +43,7 @@ class IntegrationDirectionalFuturesStrategy:
         leverage: Decimal,
         expected_gross_move: Decimal | None,
         created_at: datetime,
+        expected_gross_move_required: bool = True,
     ) -> FuturesStrategyDecision:
         if not _signal_matches_event(primary_signal, event, trigger_set, lane, rule_id="TRG-001", version="0.2.0"):
             return FuturesStrategyDecision(None, None, "primary_trigger_provenance_mismatch")
@@ -60,7 +61,9 @@ class IntegrationDirectionalFuturesStrategy:
             return FuturesStrategyDecision(None, None, "regime_provenance_mismatch")
         if regime_context.label not in {MarketRegimeLabel.DOWNTREND, MarketRegimeLabel.STRONG_DOWNTREND}:
             return FuturesStrategyDecision(None, None, "regime_not_downtrend_reversal_context")
-        if expected_gross_move is None or expected_gross_move <= 0:
+        if expected_gross_move_required and (expected_gross_move is None or expected_gross_move <= 0):
+            return FuturesStrategyDecision(None, None, "demo_expected_gross_move_unavailable")
+        if expected_gross_move is not None and expected_gross_move < 0:
             return FuturesStrategyDecision(None, None, "demo_expected_gross_move_unavailable")
 
         intent = FuturesTradeIntent(

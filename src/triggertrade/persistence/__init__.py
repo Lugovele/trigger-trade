@@ -4,6 +4,7 @@ from .execution_store import ExecutionFill, ExecutionRecord, ExecutionStore
 from .futures_execution_store import FuturesExecutionRecord, FuturesExecutionStore
 from .futures_position_store import FuturesClosedPositionRecord, FuturesPositionEvent, FuturesPositionRecord, FuturesPositionStore
 from .operator_state_store import OperatorStateStore, OperatorTradingState, TradingState
+from .trading_rules_store import TradingRulesStore
 from .runtime_store import (
     CandleLifecycle,
     LaneCandleLifecycle,
@@ -44,6 +45,7 @@ __all__ = [
     "RuntimeStore",
     "RuntimeStoreError",
     "TraceStore",
+    "TradingRulesStore",
     "TradingState",
     "TriggerSetStore",
     "TriggerSetStoreError",

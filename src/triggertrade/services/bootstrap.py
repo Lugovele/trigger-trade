@@ -8,7 +8,8 @@ import os
 from typing import Mapping
 
 from triggertrade.config import AppConfig, load_config
-from triggertrade.persistence import TriggerSetStore, bootstrap_current_trigger_sets
+from triggertrade.persistence import TradingRulesStore, TriggerSetStore, bootstrap_current_trigger_sets
+from triggertrade.rules import TradingRulesService
 
 
 @dataclass(frozen=True)
@@ -17,6 +18,8 @@ class RegistryBootstrapResult:
     rules_count: int
     trigger_sets_count: int
     recommendations_count: int
+    trading_rules_versions_count: int
+    current_rules_version_id: str | None
 
 
 def load_env_file(path: str | Path = ".env") -> dict[str, str]:
@@ -59,15 +62,21 @@ def runtime_db_path(config: AppConfig, env: Mapping[str, str] | None = None) -> 
 def ensure_runtime_registry_initialized(
     db_path: str | Path,
     *,
+    config: AppConfig | None = None,
     created_at: str = "2026-09-05T00:00:00+00:00",
 ) -> RegistryBootstrapResult:
     store = TriggerSetStore(db_path)
     bootstrap_current_trigger_sets(store, created_at=created_at)
+    rules_config = config or load_config({})
+    trading_store = TradingRulesStore(db_path)
+    trading_rules = TradingRulesService(trading_store).ensure_initial_version(rules_config, created_at=created_at)
     return RegistryBootstrapResult(
         db_path=Path(db_path),
         rules_count=len(store.list_rules()),
         trigger_sets_count=len(store.list_sets()),
         recommendations_count=len(store.list_recommendations()),
+        trading_rules_versions_count=len(trading_store.list_versions()),
+        current_rules_version_id=trading_rules.rules_version_id,
     )
 
 
@@ -78,7 +87,7 @@ def ensure_runtime_registry_for_env(
 ) -> tuple[AppConfig, RegistryBootstrapResult]:
     config = load_config(env)
     db_path = runtime_db_path(config, env)
-    result = ensure_runtime_registry_initialized(db_path, created_at=created_at)
+    result = ensure_runtime_registry_initialized(db_path, config=config, created_at=created_at)
     return config, result
 
 

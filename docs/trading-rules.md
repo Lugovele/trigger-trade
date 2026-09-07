@@ -192,6 +192,16 @@ Intraday governance thresholds, such as the initial 7-day / 100-signal /
 trigger, strategy, or risk alpha semantics and must not be treated as proof of
 profitability or automatic promotion criteria.
 
+## Versioned Trading Rules Policy
+
+Runtime trading policy is stored as immutable `TradingRulesVersion` records. A rule version contains position size as a percentage of available capital, TP mode, fixed TP, minimum TP floor, SL, minimum R/R, optional minimum net edge, leverage, max capital in positions, optional max open positions, optional max positions per coin, direction mode, optional daily loss limit, coin rules and pinned cost assumptions.
+
+Changing trading rules creates a new version and moves the current pointer; it does not edit an already-used version. Every newly opened futures position pins the exact `rules_version_id` and resolved values. Positions opened under old rules retain old TP, SL, leverage, size, R/R, net-edge and coin/portfolio semantics.
+
+`FIXED` TP is executable. `DYNAMIC` TP is a declared interface value only and fails closed in production runtime until a deterministic formula receives separate review. Minimum TP is a floor: a generated TP must be greater than or equal to the configured minimum, not capped by it. Optional gates are controlled by explicit `enabled` flags; disabled gates are excluded from decision logic.
+
+Direction mode is a filter, not alpha. `LONG_ONLY` and `SHORT_ONLY` can block otherwise produced intents, but they do not create new LONG/SHORT strategy signals. Profit Factor remains an analytics metric and is not part of pre-trade Rules decisioning.
+
 ## Perpetual Futures Domain Rules
 
 The futures architecture uses explicit position actions instead of ambiguous
@@ -256,8 +266,10 @@ Futures net-edge eligibility is deterministic and fee-aware:
 expected gross price move - entry fee - exit fee - spread - slippage - funding
 ```
 
-The result must meet the configured minimum net edge. If expected move or cost
-inputs are unavailable, futures risk fails closed rather than guessing.
+When the minimum net-edge rule is enabled, the result must meet the configured
+minimum. If expected move or cost inputs are unavailable, futures risk fails
+closed rather than guessing. When the rule is disabled, it is explicitly
+excluded from decision logic and recorded as disabled evidence.
 
 Market regime is context, not a trigger or execution signal.
 `CTX-REGIME@0.1.0` classifies observed intraday state for BTCUSDT linear
@@ -367,3 +379,7 @@ Percentile rank: `count(previous_volume <= current_volume) / 60 * 100`. Ties cou
 Condition: `relative_volume >= 2.0 AND volume_percentile >= 90`. Both boundaries are inclusive, so exactly `2.0` and exactly `90` pass.
 
 Failure behavior: fewer than 60 previous completed candles, missing current volume, stale candle, incomplete current candle, wrong symbol/timeframe, or zero median returns `NOT_CONFIRMED` and cannot create an order path. Parameters `60 / 2.0 / 90` are candidate TEST values only and are not validated profitable production rules. The ACTIVE set is unchanged.
+
+In this backend unit, `daily_loss_limit_enabled=true` fails closed until an accounting-backed daily realized-loss gate is wired into entry decisions. `max_positions_per_coin`, when enabled, is constrained to `1` because the approved lifecycle invariant is still one net position per symbol; pyramiding requires a later reviewed change.
+
+When the minimum net-edge gate is disabled, the current integration strategy does not require a demo expected gross move solely for net-edge calculation; direction and trigger/regime provenance still gate intent creation.

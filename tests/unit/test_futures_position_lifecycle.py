@@ -331,6 +331,8 @@ def _intent(action, *, intent_id="intent", symbol="BTCUSDT", current=PositionSta
         take_profit=tp,
         stop_loss=sl,
         minimum_risk_reward=Decimal("1.5"),
+        rules_version_id="trules-test-v1",
+        rule_evaluation_snapshot={"rules_version_id": "trules-test-v1", "position_size_pct": "0.10"},
     )
 
 

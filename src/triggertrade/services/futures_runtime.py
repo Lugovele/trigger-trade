@@ -10,6 +10,7 @@ from typing import Callable
 
 from triggertrade.config import AppConfig, BybitEnvironment, ConfigError, ExecutionVenue, Market, TradingMode
 from triggertrade.execution import OrderStatus, OrderType
+from triggertrade.execution.service import ExecutionError
 from triggertrade.execution.bybit_futures import BybitFuturesExecutionAdapter
 from triggertrade.execution.futures import (
     FundingEstimate,
@@ -17,11 +18,12 @@ from triggertrade.execution.futures import (
     FuturesExecutionService,
     FuturesRiskManager,
     FuturesTradeIntent,
+    PositionAction,
     PositionState,
     estimate_costs,
 )
 from triggertrade.execution.position_lifecycle import build_fixed_protective_exit_plan
-from triggertrade.execution.position_lifecycle import FuturesPositionLifecycleService, PositionRiskConfig
+from triggertrade.execution.position_lifecycle import FuturesPositionLifecycleService, PositionRiskConfig, calculate_position_size
 from triggertrade.exchanges import BybitApiError, BybitDemoClient
 from triggertrade.market_data import (
     FuturesAccountState,
@@ -37,6 +39,7 @@ from triggertrade.market_data import (
 from triggertrade.market_data.futures import ContractCategory, MarketRegimeLabel
 from triggertrade.persistence import (
     FuturesExecutionStore,
+    TradingRulesStore,
     LaneCandleLifecycle,
     LaneRuntimeCheckpoint,
     OperatorStateStore,
@@ -49,6 +52,7 @@ from triggertrade.persistence.futures_position_store import FuturesPositionStore
 from triggertrade.services.futures_accounting_bridge import FuturesAccountingBridge
 from triggertrade.services.runtime import CompletedCandle, RuntimeCycleResult, RuntimeGapError, latest_completed_candle, next_completed_candle
 from triggertrade.services.test_futures_simulator import TestFuturesSimulator
+from triggertrade.rules import DirectionMode, TakeProfitMode, TradingRulesError, TradingRulesService, TradingRulesVersion, coin_rule_for
 from triggertrade.strategies import IntegrationDirectionalFuturesStrategy
 from triggertrade.trigger_sets import Lane, TriggerSetStatus, TriggerSetVersion
 from triggertrade.triggers import PercentagePriceMoveTrigger, RobustVolumeConfirmationTrigger, Signal, SignalType, VolumeConfirmationConfig, VolumeConfirmationResult
@@ -92,6 +96,9 @@ class FuturesDualLaneRuntime:
         self._trigger_set_store = trigger_set_store
         self._operator_state_store = operator_state_store
         self._position_store = position_store or FuturesPositionStore(config.futures_runtime.db_path)
+        self._trading_rules_store = TradingRulesStore(config.futures_runtime.db_path)
+        self._trading_rules_service = TradingRulesService(self._trading_rules_store)
+        self._trading_rules_service.ensure_initial_version(config)
         self._active_adapter = active_adapter or BybitFuturesExecutionAdapter(market_client)
         self._test_simulator = test_simulator or TestFuturesSimulator(
             accounting_store=accounting_store,
@@ -273,9 +280,10 @@ class FuturesDualLaneRuntime:
                 self._checkpoint_lane(lane, trigger_set, completed)
                 return RuntimeCycleResult(completed.candle_id, signal.signal_type.value, skipped_reason="volume_not_confirmed")
 
-        price = _intent_price(event.close, instrument, passive=lane is Lane.ACTIVE)
-        quantity = _intent_quantity(price, instrument, self._config.futures_runtime.max_position_notional)
-        if quantity is None:
+        rules_version = self._trading_rules_service.get_current_rules_version()
+        rules = rules_version.draft
+        rules_skip = _rules_skip_reason(rules_version, event.symbol)
+        if rules_skip is not None:
             self._save_lane_lifecycle(
                 lane,
                 trigger_set,
@@ -283,13 +291,42 @@ class FuturesDualLaneRuntime:
                 "no_intent",
                 signal_id=signal.signal_id,
                 processed_at=self._clock().isoformat(),
-                error="instrument_minimum_exceeds_configured_notional",
+                error=rules_skip,
                 regime_context=regime_context,
+                rules_version_id=rules_version.rules_version_id,
+                rules_evaluation=_rules_rejection_evidence(rules_version, rules_skip, event.symbol),
             )
             self._checkpoint_lane(lane, trigger_set, completed)
-            return RuntimeCycleResult(completed.candle_id, signal.signal_type.value, skipped_reason="instrument_minimum_exceeds_configured_notional")
+            return RuntimeCycleResult(completed.candle_id, signal.signal_type.value, skipped_reason=rules_skip)
 
+        price = _intent_price(event.close, instrument, passive=lane is Lane.ACTIVE)
         account = self._account_state(instrument, lane)
+        try:
+            position_risk = _position_risk_config_from_rules(rules_version, account)
+            sizing = calculate_position_size(
+                account=account,
+                instrument=instrument,
+                entry_price=price,
+                leverage=rules.leverage,
+                config=position_risk,
+            )
+        except ExecutionError as exc:
+            reason = str(exc)
+            self._save_lane_lifecycle(
+                lane,
+                trigger_set,
+                completed,
+                "no_intent",
+                signal_id=signal.signal_id,
+                processed_at=self._clock().isoformat(),
+                error=reason,
+                regime_context=regime_context,
+                rules_version_id=rules_version.rules_version_id,
+                rules_evaluation=_rules_rejection_evidence(rules_version, reason, event.symbol),
+            )
+            self._checkpoint_lane(lane, trigger_set, completed)
+            return RuntimeCycleResult(completed.candle_id, signal.signal_type.value, skipped_reason=reason)
+
         decision = IntegrationDirectionalFuturesStrategy().decide(
             lane=lane,
             trigger_set=trigger_set,
@@ -298,11 +335,12 @@ class FuturesDualLaneRuntime:
             volume_signal=volume_signal,
             regime_context=regime_context,
             position_state=_position_state(account),
-            quantity=quantity,
+            quantity=sizing.quantity,
             limit_price=price,
-            leverage=self._config.futures_runtime.leverage,
+            leverage=rules.leverage,
             expected_gross_move=self._config.futures_runtime.demo_expected_gross_move,
             created_at=self._clock(),
+            expected_gross_move_required=rules.minimum_net_edge_enabled,
         )
         if decision.intent is None:
             self._save_lane_lifecycle(
@@ -319,11 +357,29 @@ class FuturesDualLaneRuntime:
             return RuntimeCycleResult(completed.candle_id, signal.signal_type.value, skipped_reason=decision.reason)
 
         intent = decision.intent
+        direction_skip = _direction_skip_reason(rules_version, intent.action)
+        if direction_skip is not None:
+            self._save_lane_lifecycle(
+                lane,
+                trigger_set,
+                completed,
+                "no_intent",
+                signal_id=signal.signal_id,
+                intent_id=intent.intent_id,
+                processed_at=self._clock().isoformat(),
+                error=direction_skip,
+                regime_context=regime_context,
+                rules_version_id=rules_version.rules_version_id,
+                rules_evaluation=_rules_rejection_evidence(rules_version, direction_skip, event.symbol),
+            )
+            self._checkpoint_lane(lane, trigger_set, completed)
+            return RuntimeCycleResult(completed.candle_id, signal.signal_type.value, intent.intent_id, skipped_reason=direction_skip)
+
         take_profit, stop_loss = build_fixed_protective_exit_plan(
             action=intent.action,
             entry_price=intent.price,
-            take_profit_pct=self._config.futures_runtime.take_profit_pct,
-            stop_loss_pct=self._config.futures_runtime.stop_loss_pct,
+            take_profit_pct=_fixed_take_profit_pct(rules_version),
+            stop_loss_pct=rules.stop_loss_pct,
             price_tick=instrument.price_tick,
             calculated_at=self._clock().isoformat(),
         )
@@ -331,7 +387,9 @@ class FuturesDualLaneRuntime:
             intent,
             take_profit=take_profit,
             stop_loss=stop_loss,
-            minimum_risk_reward=self._config.futures_runtime.minimum_risk_reward,
+            minimum_risk_reward=rules.minimum_risk_reward,
+            rules_version_id=rules_version.rules_version_id,
+            rule_evaluation_snapshot=_rule_evaluation_snapshot(rules_version, sizing, account),
         )
         self._trace_store.save_futures_strategy_decision(intent, tuple(signal_ids))
         if lane is Lane.ACTIVE:
@@ -396,24 +454,24 @@ class FuturesDualLaneRuntime:
                 )
         cost = estimate_costs(
             notional=intent.quantity * intent.price,
-            maker_fee_rate=self._config.futures_runtime.maker_fee_rate,
-            taker_fee_rate=self._config.futures_runtime.taker_fee_rate,
-            spread_cost=self._config.futures_runtime.spread_cost,
-            slippage_cost=self._config.futures_runtime.slippage_cost,
-            funding_cost=self._config.futures_runtime.funding_cost,
+            maker_fee_rate=rules.maker_fee_rate,
+            taker_fee_rate=rules.taker_fee_rate,
+            spread_cost=rules.spread_cost,
+            slippage_cost=rules.slippage_cost,
+            funding_cost=rules.funding_cost,
         )
         funding = FundingEstimate(
             funding_rate=None,
             next_funding_time=None,
             expected_holding_overlap=Decimal("0"),
-            estimated_funding_impact=self._config.futures_runtime.funding_cost,
+            estimated_funding_impact=rules.funding_cost,
         )
         risk = FuturesRiskManager(
             config=_execution_config(self._config),
             store=self._futures_execution_store,
-            minimum_net_edge=self._config.futures_runtime.minimum_net_edge,
-            max_position_notional=self._config.futures_runtime.max_position_notional,
-            max_simultaneous_exposure=self._config.futures_runtime.max_position_notional,
+            minimum_net_edge=rules.minimum_net_edge_pct if rules.minimum_net_edge_enabled else None,
+            max_position_notional=position_risk.max_position_notional,
+            max_simultaneous_exposure=position_risk.max_total_position_notional,
         ).evaluate(intent=intent, instrument=instrument, account=account, cost=cost, funding=funding)
         self._trace_store.save_futures_risk_decision(risk, trigger_set_id=trigger_set.set_id, trigger_set_version=trigger_set.version)
         self._save_lane_lifecycle(
@@ -425,6 +483,8 @@ class FuturesDualLaneRuntime:
             intent_id=intent.intent_id,
             risk_decision_id=risk.risk_decision_id,
             regime_context=regime_context,
+            rules_version_id=rules_version.rules_version_id,
+            rules_evaluation=_rule_evaluation_snapshot(rules_version, sizing, account),
         )
         if not risk.approved:
             self._save_lane_lifecycle(
@@ -461,7 +521,7 @@ class FuturesDualLaneRuntime:
         try:
             lifecycle = FuturesPositionLifecycleService(
                 execution_config=_execution_config(self._config),
-                risk_config=_position_risk_config(self._config),
+                risk_config=position_risk,
                 execution_store=self._futures_execution_store,
                 position_store=self._position_store,
                 accounting_store=self._accounting_store,
@@ -470,6 +530,7 @@ class FuturesDualLaneRuntime:
                 account=account,
                 execution_lane=lane.value,
                 operator_trading_state=self._operator_state_value,
+                trading_rules_store=self._trading_rules_store,
             )
             opened = lifecycle.open_position(
                 intent=intent,
@@ -653,6 +714,8 @@ class FuturesDualLaneRuntime:
         processed_at: str | None = None,
         error: str | None = None,
         regime_context: MarketRegimeContext | None = None,
+        rules_version_id: str | None = None,
+        rules_evaluation: dict[str, str | None] | None = None,
     ) -> None:
         self._runtime_store.save_lane_lifecycle(
             LaneCandleLifecycle(
@@ -672,6 +735,8 @@ class FuturesDualLaneRuntime:
                 error=error,
                 regime_context_id=None if regime_context is None else regime_context.context_id,
                 regime_state=None if regime_context is None or regime_context.label is None else regime_context.label.value,
+                rules_version_id=rules_version_id,
+                rules_evaluation=rules_evaluation,
             )
         )
 
@@ -731,6 +796,121 @@ def _execution_config(config: AppConfig) -> FuturesExecutionConfig:
         max_configured_leverage=config.futures_runtime.leverage,
     )
 
+
+
+def _position_risk_config_from_rules(rules_version: TradingRulesVersion, account: FuturesAccountState) -> PositionRiskConfig:
+    rules = rules_version.draft
+    denominator, denominator_source = _capital_denominator(account)
+    max_total_notional = denominator * rules.max_capital_in_positions_pct * rules.leverage
+    coin = coin_rule_for(rules, account.symbol)
+    if coin is not None and coin.max_allocation_pct is not None:
+        max_total_notional = min(max_total_notional, denominator * coin.max_allocation_pct * rules.leverage)
+    return PositionRiskConfig(
+        take_profit_pct=_fixed_take_profit_pct(rules_version),
+        stop_loss_pct=rules.stop_loss_pct,
+        minimum_risk_reward=rules.minimum_risk_reward,
+        position_size_pct_of_available_capital=rules.position_size_pct,
+        max_position_notional=max_total_notional,
+        max_total_position_notional=max_total_notional,
+        max_open_positions=rules.max_open_positions if rules.max_open_positions_enabled else None,
+        denominator_source=denominator_source,
+        rules_version_id=rules_version.rules_version_id,
+    )
+
+
+def _capital_denominator(account: FuturesAccountState) -> tuple[Decimal, str]:
+    if account.equity is not None and account.equity > 0:
+        return account.equity, "equity"
+    if account.available_margin > 0:
+        return account.available_margin, "available_margin_fallback"
+    raise ExecutionError("trading rules require positive account equity or available margin")
+
+
+def _fixed_take_profit_pct(rules_version: TradingRulesVersion) -> Decimal:
+    rules = rules_version.draft
+    if rules.take_profit_mode is not TakeProfitMode.FIXED or rules.fixed_take_profit_pct is None:
+        raise ExecutionError("dynamic take-profit mode is not approved for runtime execution")
+    if rules.minimum_take_profit_pct is not None and rules.fixed_take_profit_pct < rules.minimum_take_profit_pct:
+        raise ExecutionError("fixed take-profit is below configured minimum take-profit floor")
+    return rules.fixed_take_profit_pct
+
+
+def _rules_skip_reason(rules_version: TradingRulesVersion, symbol: str) -> str | None:
+    try:
+        _fixed_take_profit_pct(rules_version)
+        coin = coin_rule_for(rules_version.draft, symbol)
+    except (ExecutionError, TradingRulesError) as exc:
+        return str(exc)
+    if rules_version.draft.daily_loss_limit_enabled:
+        return "daily_loss_limit_enabled_unsupported"
+    if coin is None:
+        return "symbol_not_present_in_current_trading_rules"
+    if not coin.enabled:
+        return "symbol_disabled_by_current_trading_rules"
+    return None
+
+
+
+def _rules_rejection_evidence(rules_version: TradingRulesVersion, reason: str, symbol: str) -> dict[str, str | None]:
+    rules = rules_version.draft
+    coin = coin_rule_for(rules, symbol)
+    return {
+        "rules_version_id": rules_version.rules_version_id,
+        "rules_version": rules_version.version,
+        "blocking_rule": reason,
+        "symbol": symbol,
+        "coin_rule_enabled": None if coin is None else str(coin.enabled),
+        "take_profit_mode": rules.take_profit_mode.value,
+        "direction_mode": rules.direction_mode.value,
+        "daily_loss_limit_enabled": str(rules.daily_loss_limit_enabled),
+        "max_positions_per_coin_enabled": str(rules.max_positions_per_coin_enabled),
+        "max_positions_per_coin": None if rules.max_positions_per_coin is None else str(rules.max_positions_per_coin),
+        "minimum_net_edge_enabled": str(rules.minimum_net_edge_enabled),
+    }
+
+
+def _direction_skip_reason(rules_version: TradingRulesVersion, action: PositionAction) -> str | None:
+    mode = rules_version.draft.direction_mode
+    if mode is DirectionMode.LONG_ONLY and action is PositionAction.OPEN_SHORT:
+        return "short_entries_disabled_by_current_trading_rules"
+    if mode is DirectionMode.SHORT_ONLY and action is PositionAction.OPEN_LONG:
+        return "long_entries_disabled_by_current_trading_rules"
+    return None
+
+
+def _rule_evaluation_snapshot(rules_version: TradingRulesVersion, sizing, account: FuturesAccountState) -> dict[str, str | None]:
+    rules = rules_version.draft
+    denominator, denominator_source = _capital_denominator(account)
+    return {
+        "rules_version_id": rules_version.rules_version_id,
+        "rules_version": rules_version.version,
+        "position_size_pct": str(rules.position_size_pct),
+        "take_profit_mode": rules.take_profit_mode.value,
+        "fixed_take_profit_pct": None if rules.fixed_take_profit_pct is None else str(rules.fixed_take_profit_pct),
+        "minimum_take_profit_pct": None if rules.minimum_take_profit_pct is None else str(rules.minimum_take_profit_pct),
+        "stop_loss_pct": str(rules.stop_loss_pct),
+        "minimum_risk_reward": str(rules.minimum_risk_reward),
+        "minimum_net_edge_enabled": str(rules.minimum_net_edge_enabled),
+        "minimum_net_edge_pct": None if rules.minimum_net_edge_pct is None else str(rules.minimum_net_edge_pct),
+        "leverage": str(rules.leverage),
+        "max_capital_in_positions_pct": str(rules.max_capital_in_positions_pct),
+        "max_open_positions_enabled": str(rules.max_open_positions_enabled),
+        "max_open_positions": None if rules.max_open_positions is None else str(rules.max_open_positions),
+        "max_positions_per_coin_enabled": str(rules.max_positions_per_coin_enabled),
+        "max_positions_per_coin": None if rules.max_positions_per_coin is None else str(rules.max_positions_per_coin),
+        "direction_mode": rules.direction_mode.value,
+        "daily_loss_limit_enabled": str(rules.daily_loss_limit_enabled),
+        "daily_loss_limit_pct": None if rules.daily_loss_limit_pct is None else str(rules.daily_loss_limit_pct),
+        "maker_fee_rate": str(rules.maker_fee_rate),
+        "taker_fee_rate": str(rules.taker_fee_rate),
+        "spread_cost": str(rules.spread_cost),
+        "slippage_cost": str(rules.slippage_cost),
+        "funding_cost": str(rules.funding_cost),
+        "capital_denominator": str(denominator),
+        "capital_denominator_source": denominator_source,
+        "sizing_quantity": str(sizing.quantity),
+        "sizing_notional": str(sizing.notional),
+    }
 
 def _position_risk_config(config: AppConfig) -> PositionRiskConfig:
     return PositionRiskConfig(

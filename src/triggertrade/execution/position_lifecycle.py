@@ -34,6 +34,8 @@ from triggertrade.persistence.futures_position_store import (
     FuturesPositionStore,
 )
 from triggertrade.services.futures_accounting_bridge import FuturesAccountingBridge
+from triggertrade.rules import TradingRulesUsage
+from triggertrade.persistence.trading_rules_store import TradingRulesStore
 
 
 PROTECTIVE_EXIT_VERSION = "protective-exit-v1"
@@ -106,7 +108,9 @@ class PositionRiskConfig:
     position_size_pct_of_available_capital: Decimal = Decimal("0.10")
     max_position_notional: Decimal = Decimal("10")
     max_total_position_notional: Decimal = Decimal("30")
-    max_open_positions: int = 3
+    max_open_positions: int | None = 3
+    denominator_source: str = "available_margin"
+    rules_version_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -273,6 +277,7 @@ class FuturesPositionLifecycleService:
         account: FuturesAccountState,
         operator_trading_state,
         execution_lane: str = "ACTIVE",
+        trading_rules_store: TradingRulesStore | None = None,
     ) -> None:
         self._execution_config = execution_config
         self._risk_config = risk_config
@@ -284,6 +289,7 @@ class FuturesPositionLifecycleService:
         self._account = account
         self._operator_trading_state = operator_trading_state
         self._execution_lane = execution_lane
+        self._trading_rules_store = trading_rules_store
 
     def open_position(
         self,
@@ -297,13 +303,15 @@ class FuturesPositionLifecycleService:
     ) -> PositionOpenResult:
         if intent.action not in {PositionAction.OPEN_LONG, PositionAction.OPEN_SHORT}:
             raise ExecutionError("open_position requires OPEN_LONG or OPEN_SHORT intent")
+        if not intent.rules_version_id:
+            raise ExecutionError("new futures positions require an immutable rules_version_id")
         validate_protective_exit_plan(action=intent.action, entry_price=intent.price, take_profit=take_profit, stop_loss=stop_loss)
         rr = evaluate_risk_reward(action=intent.action, entry_price=intent.price, take_profit=take_profit, stop_loss=stop_loss, minimum_ratio=self._risk_config.minimum_risk_reward)
         if not rr.approved:
             raise ExecutionError(rr.reason)
         if self._position_store.open_position_for_symbol(intent.symbol) is not None:
             raise ExecutionError("only one net futures position per symbol is allowed")
-        if self._position_store.open_position_count() >= self._risk_config.max_open_positions:
+        if self._risk_config.max_open_positions is not None and self._position_store.open_position_count() >= self._risk_config.max_open_positions:
             raise ExecutionError("maximum open futures positions reached")
         if self._position_store.total_open_notional() + (intent.quantity * intent.price) > self._risk_config.max_total_position_notional:
             raise ExecutionError("maximum total futures position notional exceeded")
@@ -354,10 +362,13 @@ class FuturesPositionLifecycleService:
             close_execution_id=None,
             close_reason=None,
             rule_snapshot={
+                **(intent.rule_evaluation_snapshot or {}),
+                "rules_version_id": intent.rules_version_id,
                 "position_size_pct_of_available_capital": str(self._risk_config.position_size_pct_of_available_capital),
                 "max_position_notional": str(self._risk_config.max_position_notional),
                 "max_total_position_notional": str(self._risk_config.max_total_position_notional),
-                "max_open_positions": str(self._risk_config.max_open_positions),
+                "max_open_positions": None if self._risk_config.max_open_positions is None else str(self._risk_config.max_open_positions),
+                "capital_denominator_source": self._risk_config.denominator_source,
                 "take_profit_pct": str(self._risk_config.take_profit_pct),
                 "stop_loss_pct": str(self._risk_config.stop_loss_pct),
                 "minimum_risk_reward": str(self._risk_config.minimum_risk_reward),
@@ -367,9 +378,11 @@ class FuturesPositionLifecycleService:
                 "risk_version": FUTURES_POSITION_RISK_VERSION,
             },
             updated_at=now,
+            rules_version_id=intent.rules_version_id,
         )
         self._position_store.save_open_position(position)
         self._position_store.record_event(FuturesPositionEvent(_event_id(position_id, "OPEN", record.client_order_id), position_id, "OPEN", now, "open_position", record.client_order_id, None))
+        self._record_rules_usage(intent.rules_version_id, "LIVE_POSITION", position_id, intent.trigger_set_version, now)
         if position_status is PositionStatus.CLOSED:
             self._position_store.record_event(
                 FuturesPositionEvent(
@@ -419,6 +432,7 @@ class FuturesPositionLifecycleService:
             lane=self._execution_lane,
             trigger_set_id=position.trigger_set_id,
             trigger_set_version=position.trigger_set_version,
+            rules_version_id=position.rules_version_id,
         )
         risk = FuturesRiskDecision(
             risk_decision_id=futures_risk_decision_id(intent.intent_id, ()),
@@ -533,11 +547,26 @@ class FuturesPositionLifecycleService:
             risk_rule_version=position.risk_rule_version,
             evidence_source=position.evidence_source,
             accounting_version=closed.accounting_version,
+            rules_version_id=position.rules_version_id,
         )
         self._position_store.save_closed_position(result)
+        self._record_rules_usage(position.rules_version_id, "LIVE_TRADE", position.trade_id, position.trigger_set_version, now)
         self._position_store.mark_closed(position.position_id, now)
         self._position_store.record_event(FuturesPositionEvent(_event_id(position.position_id, "CLOSE", record.client_order_id), position.position_id, "CLOSE", now, close_reason.value, record.client_order_id, None))
         return result
+
+    def _record_rules_usage(self, rules_version_id: str | None, usage_type: str, entity_id: str, entity_version: str | None, created_at: str) -> None:
+        if rules_version_id and self._trading_rules_store is not None:
+            self._trading_rules_store.record_usage(
+                TradingRulesUsage(
+                    rules_version_id=rules_version_id,
+                    usage_type=usage_type,
+                    entity_id=entity_id,
+                    entity_version=entity_version,
+                    context=self._execution_lane,
+                    created_at=created_at,
+                )
+            )
 
     def _execution_service(self, *, symbol: str | None = None) -> FuturesExecutionService:
         return FuturesExecutionService(

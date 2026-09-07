@@ -14,6 +14,7 @@ from triggertrade.market_data import ContractCategory, FuturesAccountState, Futu
 from triggertrade.market_data import FuturesMarketEvent, MarketRegimeContext, MarketRegimeLabel, RegimeCapability
 from triggertrade.persistence import (
     FuturesExecutionStore,
+    TradingRulesStore,
     FuturesExecutionRecord,
     FuturesPositionRecord,
     FuturesPositionStore,
@@ -26,6 +27,7 @@ from triggertrade.persistence import (
 )
 from triggertrade.persistence.futures_accounting_store import FuturesAccountingStore
 from triggertrade.services.futures_runtime import FuturesDualLaneRuntime, _is_futures_set
+from triggertrade.rules import DirectionMode, TakeProfitMode, TradingRulesService
 from triggertrade.services.runtime import build_runtime_from_env
 from triggertrade.execution.position_lifecycle import PositionStatus, futures_position_id
 from triggertrade.strategies import IntegrationDirectionalFuturesStrategy
@@ -74,6 +76,158 @@ def test_active_lane_creates_futures_trade_intent_and_bybit_demo_record(tmp_path
     assert trace["strategy"]["side"] == "OPEN_LONG"
     assert trace["risk"]["approved"] == 1
 
+
+
+def test_runtime_pins_current_trading_rules_version_and_resolved_snapshot(tmp_path):
+    path = tmp_path / "runtime.sqlite3"
+    config = load_config(_env(path))
+    rules = TradingRulesService(TradingRulesStore(path))
+    rules.ensure_initial_version(config)
+    current = rules.create_rules_version_from_current(
+        changes={"fixed_take_profit_pct": Decimal("0.02"), "minimum_take_profit_pct": Decimal("0.01"), "minimum_net_edge_enabled": False},
+        created_source="unit",
+        created_at="2026-09-07T01:00:00+00:00",
+    ).rules
+
+    result = _runtime(tmp_path, path=path, active_adapter=RecordingFuturesAdapter(order_status="New")).process_once()
+    active = RuntimeStore(path).get_lane_lifecycle(
+        lane="ACTIVE",
+        symbol="BTCUSDT",
+        timeframe="1m",
+        candle_id=result.candle_id,
+        trigger_set_id="triggertrade-futures-core",
+        trigger_set_version="v1",
+    )
+    position = FuturesPositionStore(path).get_position(futures_position_id(active.intent_id))
+
+    assert position.rules_version_id == current.rules_version_id
+    assert position.rule_snapshot["rules_version"] == "v2"
+    assert position.rule_snapshot["fixed_take_profit_pct"] == "0.02"
+    assert position.rule_snapshot["minimum_net_edge_enabled"] == "False"
+    assert position.rule_snapshot["capital_denominator_source"] == "equity"
+    assert TradingRulesService(TradingRulesStore(path)).get_current_rules_version().version == "v2"
+
+
+def test_runtime_direction_mode_filters_without_creating_short_alpha(tmp_path):
+    path = tmp_path / "runtime.sqlite3"
+    config = load_config(_env(path))
+    rules = TradingRulesService(TradingRulesStore(path))
+    rules.ensure_initial_version(config)
+    rules.create_rules_version_from_current(
+        changes={"direction_mode": DirectionMode.SHORT_ONLY},
+        created_source="unit",
+        created_at="2026-09-07T01:00:00+00:00",
+    )
+    adapter = RecordingFuturesAdapter(order_status="New")
+
+    result = _runtime(tmp_path, path=path, active_adapter=adapter).process_once()
+
+    assert result.active[0].skipped_reason == "long_entries_disabled_by_current_trading_rules"
+    assert adapter.create_calls == 0
+
+
+def test_runtime_dynamic_take_profit_fails_closed_until_algorithm_is_approved(tmp_path):
+    path = tmp_path / "runtime.sqlite3"
+    config = load_config(_env(path))
+    rules = TradingRulesService(TradingRulesStore(path))
+    rules.ensure_initial_version(config)
+    rules.create_rules_version_from_current(
+        changes={"take_profit_mode": TakeProfitMode.DYNAMIC, "fixed_take_profit_pct": None, "minimum_take_profit_pct": Decimal("0.01")},
+        created_source="unit",
+        created_at="2026-09-07T01:00:00+00:00",
+    )
+    adapter = RecordingFuturesAdapter(order_status="New")
+
+    result = _runtime(tmp_path, path=path, active_adapter=adapter).process_once()
+
+    assert result.active[0].skipped_reason == "dynamic take-profit mode is not approved for runtime execution"
+    assert adapter.create_calls == 0
+
+
+def test_runtime_daily_loss_enabled_fails_closed_until_accounting_gate_exists(tmp_path):
+    path = tmp_path / "runtime.sqlite3"
+    config = load_config(_env(path))
+    rules = TradingRulesService(TradingRulesStore(path))
+    rules.ensure_initial_version(config)
+    current = rules.create_rules_version_from_current(
+        changes={"daily_loss_limit_enabled": True, "daily_loss_limit_pct": Decimal("0.02")},
+        created_source="unit",
+        created_at="2026-09-07T01:00:00+00:00",
+    ).rules
+    adapter = RecordingFuturesAdapter(order_status="New")
+
+    result = _runtime(tmp_path, path=path, active_adapter=adapter).process_once()
+    active = RuntimeStore(path).get_lane_lifecycle(
+        lane="ACTIVE",
+        symbol="BTCUSDT",
+        timeframe="1m",
+        candle_id=result.candle_id,
+        trigger_set_id="triggertrade-futures-core",
+        trigger_set_version="v1",
+    )
+
+    assert result.active[0].skipped_reason == "daily_loss_limit_enabled_unsupported"
+    assert adapter.create_calls == 0
+    assert active.rules_version_id == current.rules_version_id
+    assert active.rules_evaluation["blocking_rule"] == "daily_loss_limit_enabled_unsupported"
+    assert active.rules_evaluation["daily_loss_limit_enabled"] == "True"
+
+
+def test_runtime_disabled_net_edge_excludes_expected_move_requirement(tmp_path):
+    path = tmp_path / "runtime.sqlite3"
+    config = load_config(_env(path, demo_expected_gross_move=""))
+    rules = TradingRulesService(TradingRulesStore(path))
+    rules.ensure_initial_version(config)
+    current = rules.create_rules_version_from_current(
+        changes={"minimum_net_edge_enabled": False, "minimum_net_edge_pct": None},
+        created_source="unit",
+        created_at="2026-09-07T01:00:00+00:00",
+    ).rules
+    adapter = RecordingFuturesAdapter(order_status="New")
+
+    result = _runtime(tmp_path, path=path, active_adapter=adapter).process_once()
+    active = RuntimeStore(path).get_lane_lifecycle(
+        lane="ACTIVE",
+        symbol="BTCUSDT",
+        timeframe="1m",
+        candle_id=result.candle_id,
+        trigger_set_id="triggertrade-futures-core",
+        trigger_set_version="v1",
+    )
+    position = FuturesPositionStore(path).get_position(futures_position_id(active.intent_id))
+
+    assert result.active[0].execution_status == "submitted"
+    assert adapter.create_calls == 1
+    assert position.rules_version_id == current.rules_version_id
+    assert position.rule_snapshot["minimum_net_edge_enabled"] == "False"
+    assert position.rule_snapshot["minimum_net_edge_pct"] is None
+
+
+def test_runtime_rules_rejection_persists_structured_rules_evidence(tmp_path):
+    path = tmp_path / "runtime.sqlite3"
+    config = load_config(_env(path))
+    rules = TradingRulesService(TradingRulesStore(path))
+    rules.ensure_initial_version(config)
+    current = rules.create_rules_version_from_current(
+        changes={"direction_mode": DirectionMode.SHORT_ONLY},
+        created_source="unit",
+        created_at="2026-09-07T01:00:00+00:00",
+    ).rules
+
+    result = _runtime(tmp_path, path=path, active_adapter=RecordingFuturesAdapter(order_status="New")).process_once()
+    active = RuntimeStore(path).get_lane_lifecycle(
+        lane="ACTIVE",
+        symbol="BTCUSDT",
+        timeframe="1m",
+        candle_id=result.candle_id,
+        trigger_set_id="triggertrade-futures-core",
+        trigger_set_version="v1",
+    )
+
+    assert active.rules_version_id == current.rules_version_id
+    assert active.rules_evaluation["blocking_rule"] == "long_entries_disabled_by_current_trading_rules"
+    assert active.rules_evaluation["direction_mode"] == "SHORT_ONLY"
+    assert active.rules_evaluation["symbol"] == "BTCUSDT"
 
 def test_test_lane_simulates_source_aware_closed_trade_without_private_order(tmp_path):
     path = tmp_path / "runtime.sqlite3"

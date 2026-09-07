@@ -88,8 +88,9 @@ while new futures contracts use explicit position actions: `OPEN_LONG`,
 is `1x`; leverage is treated as a risk parameter, not a profit lever.
 
 Futures risk includes Decimal-based margin, leverage, cost, funding, duplicate,
-operator-pause, and net-edge gates. If expected move or cost evidence is
-missing, the futures net-edge gate fails closed.
+operator-pause, and net-edge gates. If the minimum net-edge rule is enabled and expected move or cost evidence is
+missing, the futures net-edge gate fails closed. If disabled in the current
+TradingRulesVersion, the gate is explicitly excluded and recorded as such.
 
 Deterministic futures accounting lives behind the backend accounting boundary
 with `futures-accounting-v1`. Closed-trade gross P&L for Bybit Demo
@@ -144,6 +145,14 @@ python scripts/bybit_demo_futures_lifecycle_smoke.py
 The smoke uses sanitized output only and stops rather than forcing unsafe
 fills when a safe Demo PostOnly order does not become an actual position.
 
+## Versioned Trading Rules
+
+Trading rules are now a backend policy registry separate from Trigger Sets. A Trigger Set answers whether the current market context produced a signal; the current immutable `TradingRulesVersion` answers how a new futures position is sized and whether it may open.
+
+The shared bootstrap creates one factual `v1` from the existing futures runtime configuration on an empty runtime DB. Later changes create a new immutable version and move a small current pointer; old versions are not mutated. New ACTIVE futures positions pin the exact `rules_version_id` and resolved values for position size, fixed TP, SL, R/R, optional net edge, leverage, portfolio caps, direction mode, coin config and cost assumptions. Existing positions keep their original snapshot when the current rules version changes.
+
+`FIXED` take-profit is supported in runtime. `DYNAMIC` is represented as a contract value but fails closed until a separately reviewed deterministic algorithm exists. Minimum take-profit is a floor, not a cap. Optional rules use explicit enabled flags; disabled net edge is excluded from the gate rather than represented by magic zero/null thresholds.
+
 ## Continuous Futures Runtime
 
 `python -m triggertrade.services.runtime` now starts the continuous futures
@@ -190,3 +199,5 @@ load private credentials, submit orders, optimize parameters, auto-promote
 sets, or fabricate missing evidence. Decisions at candle `t` may only use data
 available through that completed candle; simulated fills occur no earlier than
 the next completed candle under the pinned simulator version.
+
+When the minimum net-edge gate is disabled, the current integration strategy does not require a demo expected gross move solely for net-edge calculation; direction and trigger/regime provenance still gate intent creation.

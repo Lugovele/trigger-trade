@@ -157,6 +157,12 @@ startup reconciles unresolved executions and persisted open/unknown positions
 before evaluating new entry decisions; unresolved disagreement for a symbol
 continues to fail closed instead of submitting a blind duplicate.
 
+## Trading Rules Runtime Safety
+
+Futures runtime resolves the current `TradingRulesVersion` before creating an ACTIVE opening intent. The resolved rules snapshot is persisted with the position and includes the rules version id, sizing inputs, TP/SL percentages, leverage, R/R, optional net-edge state, cost assumptions, direction mode and account-capital denominator source. New openings without a rules version fail closed.
+
+The current rules pointer is mutable; the rules version rows are not. Startup bootstrap may create the factual initial version on an empty DB, but it does not replace a later current version or silently change immutable semantics. Disabled optional gates are recorded as disabled and excluded, not represented by magic limits.
+
 ## Futures Accounting Safety
 
 Futures accounting consumes explicit execution/fill/funding/equity facts and
@@ -174,3 +180,5 @@ asset and no explicit conversion is available, accounting fails closed.
 Unrealized P&L records its valuation source. Missing or stale mark/valuation
 data is unavailable, not zero. Equity drawdown uses real persisted equity
 snapshots only; synthetic series are forbidden.
+
+In this backend unit, `daily_loss_limit_enabled=true` fails closed until an accounting-backed daily realized-loss gate is wired into entry decisions. `max_positions_per_coin`, when enabled, is constrained to `1` because the approved lifecycle invariant is still one net position per symbol; pyramiding requires a later reviewed change.

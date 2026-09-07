@@ -190,6 +190,8 @@ remains Bybit Demo linear and currently narrows market-data scope to BTCUSDT;
 multi-symbol position storage/service behavior is backend-ready and covered by
 tests for future runtime expansion.
 
+Versioned Trading Rules are in MVP backend scope. The current live rules pointer selects an immutable rules version for new futures entries, while existing positions keep their pinned snapshot. The supported MVP rules are position size, fixed TP with minimum floor, SL, R/R, optional net edge, leverage, max capital in positions, optional max open positions, optional per-coin count, direction filter, optional daily loss placeholder, coin enablement and cost assumptions. No frontend rule editing is included in this backend unit.
+
 ## Historical Replay MVP Scope
 
 In scope: a narrow internal replay engine for Bybit Demo public BTCUSDT linear

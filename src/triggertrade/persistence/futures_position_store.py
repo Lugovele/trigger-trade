@@ -43,6 +43,7 @@ class FuturesPositionRecord:
     close_reason: str | None
     rule_snapshot: dict[str, str | None]
     updated_at: str
+    rules_version_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -87,6 +88,7 @@ class FuturesClosedPositionRecord:
     risk_rule_version: str
     evidence_source: str
     accounting_version: str
+    rules_version_id: str | None = None
 
 
 class FuturesPositionStore:
@@ -303,10 +305,12 @@ class FuturesPositionStore:
                     close_execution_id TEXT,
                     close_reason TEXT,
                     rule_snapshot TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
+                    updated_at TEXT NOT NULL,
+                    rules_version_id TEXT
                 )
                 """
             )
+            _add_column_if_missing(conn, "futures_positions", "rules_version_id", "TEXT")
             conn.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_futures_one_open_per_symbol ON futures_positions(symbol) WHERE status IN ('OPEN', 'CLOSING', 'UNKNOWN')"
             )
@@ -354,10 +358,12 @@ class FuturesPositionStore:
                     strategy_rule_version TEXT NOT NULL,
                     risk_rule_version TEXT NOT NULL,
                     evidence_source TEXT NOT NULL,
-                    accounting_version TEXT NOT NULL
+                    accounting_version TEXT NOT NULL,
+                    rules_version_id TEXT
                 )
                 """
             )
+            _add_column_if_missing(conn, "futures_closed_positions", "rules_version_id", "TEXT")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS futures_close_all_operations (
@@ -396,3 +402,9 @@ def _row_to_position(row: sqlite3.Row) -> FuturesPositionRecord:
 
 def _row_to_closed(row: sqlite3.Row) -> FuturesClosedPositionRecord:
     return FuturesClosedPositionRecord(**{key: row[key] for key in _CLOSED_COLUMNS})
+
+
+def _add_column_if_missing(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+    columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in columns:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")

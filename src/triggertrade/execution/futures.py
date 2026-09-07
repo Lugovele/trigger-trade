@@ -100,6 +100,8 @@ class FuturesTradeIntent:
     take_profit: Any | None = None
     stop_loss: Any | None = None
     minimum_risk_reward: Decimal | None = None
+    rules_version_id: str | None = None
+    rule_evaluation_snapshot: dict[str, str | None] | None = None
 
 
 @dataclass(frozen=True)
@@ -159,7 +161,7 @@ class FuturesRiskManager:
         *,
         config: FuturesExecutionConfig,
         store: FuturesExecutionStore,
-        minimum_net_edge: Decimal = Decimal("0"),
+        minimum_net_edge: Decimal | None = Decimal("0"),
         max_position_notional: Decimal = Decimal("10"),
         max_simultaneous_exposure: Decimal = Decimal("10"),
         cooldown_open_intent_ids: frozenset[str] = frozenset(),
@@ -247,14 +249,25 @@ class FuturesRiskManager:
             except Exception:
                 blocking.append("FRSK-012")
 
-        net_edge = estimate_net_edge(
-            expected_gross_price_move=intent.expected_gross_price_move,
-            minimum_net_edge=self._minimum_net_edge,
-            cost=cost,
-            funding=funding,
-        )
-        if not net_edge.approved:
-            blocking.append("FRSK-010")
+        if self._minimum_net_edge is None:
+            net_edge = NetEdgeEstimate(
+                expected_gross_price_move=intent.expected_gross_price_move,
+                minimum_net_edge=Decimal("0"),
+                cost=cost,
+                funding=funding,
+                expected_net_edge=None,
+                approved=True,
+                reason="minimum net edge disabled by current trading rules",
+            )
+        else:
+            net_edge = estimate_net_edge(
+                expected_gross_price_move=intent.expected_gross_price_move,
+                minimum_net_edge=self._minimum_net_edge,
+                cost=cost,
+                funding=funding,
+            )
+            if not net_edge.approved:
+                blocking.append("FRSK-010")
 
         approved = not blocking
         return FuturesRiskDecision(

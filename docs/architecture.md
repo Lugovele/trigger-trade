@@ -286,6 +286,14 @@ If expected gross move or required cost/funding inputs are unsupported, trade
 eligibility fails closed. Dashboard views may display backend-provided futures
 fields, but they do not calculate P&L, net edge, risk, or place orders.
 
+## Versioned Trading Rules Registry
+
+`TradingRulesVersion` is the backend authority for current futures money/risk policy and is intentionally separate from `TriggerSetVersion`. Trigger Sets choose exact signal/strategy/context rule membership. Trading Rules choose resolved position sizing, fixed take-profit, stop-loss, risk/reward, optional net-edge gate, leverage, portfolio caps, direction filters, coin enablement and cost assumptions for new entries.
+
+Trading rules versions are immutable rows. The current live rules selection is a separate pointer, so creating `v2` or later does not mutate `v1`. Shared startup bootstrap creates only the factual initial `v1` when the DB has no current rules pointer; if a current pointer already exists, bootstrap leaves it unchanged. A conflicting immutable `v1` definition fails closed rather than rewriting history.
+
+Production futures runtime resolves the current rules version before sizing and risk. New positions must carry `rules_version_id` and a resolved rule snapshot. Existing positions and closed trades retain their original rules attribution even after the current pointer advances. Dashboard/read models may display those persisted facts later, but they must not compute or create trading rules.
+
 ## Futures Accounting
 
 Futures accounting is a separate backend layer between execution facts and
