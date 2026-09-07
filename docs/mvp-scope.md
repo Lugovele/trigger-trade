@@ -203,3 +203,6 @@ Out of scope: a generalized backtesting platform, optimization, parameter
 search, synthetic performance fabrication, automatic promotion, private/order
 API calls during replay, multi-symbol historical research, and any new trading
 semantics beyond the already approved rule versions.
+
+
+Bybit USDT linear perpetual instrument catalog metadata is in MVP backend scope for Rules coin validation and runtime order-parameter safety. The catalog is cached from Bybit public `category=linear` metadata with explicit refresh; it does not rank coins, select symbols dynamically, call private/order APIs, or change frontend UI.

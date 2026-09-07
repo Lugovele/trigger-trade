@@ -163,6 +163,15 @@ Futures runtime resolves the current `TradingRulesVersion` before creating an AC
 
 The current rules pointer is mutable; the rules version rows are not. Startup bootstrap may create the factual initial version on an empty DB, but it does not replace a later current version or silently change immutable semantics. Disabled optional gates are recorded as disabled and excluded, not represented by magic limits.
 
+
+## Instrument Catalog Safety
+
+Futures order parameters must be validated against the cached Bybit public USDT-linear-perpetual catalog before a new entry is submitted. The catalog source is `GET /v5/market/instruments-info` with `category=linear`; it uses no private credentials and cannot create orders.
+
+Price normalization is Decimal and purpose/direction aware. Protective rounding must not overstate reward or increase planned risk: LONG TP rounds down to tick, LONG SL rounds up, SHORT TP rounds up, and SHORT SL rounds down. Quantity normalization rounds down to `qtyStep` and rejects quantities below `minOrderQty`, above limit `maxOrderQty`, or below `minNotionalValue` when price is known. Configured leverage above exchange max is rejected; it is not clamped.
+
+Catalog refresh failures preserve the last valid cache. If no valid catalog exists, new entries fail closed. Existing positions are managed from their persisted instrument snapshot when possible, so refresh outage or later suspension blocks new entries without silently orphaning close/reconciliation paths.
+
 ## Futures Accounting Safety
 
 Futures accounting consumes explicit execution/fill/funding/equity facts and

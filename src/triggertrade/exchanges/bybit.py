@@ -88,8 +88,14 @@ class BybitDemoClient:
     def linear_instrument_metadata(self, symbol: str = "BTCUSDT") -> BybitResponse:
         return self._public_get(
             "/v5/market/instruments-info",
-            {"category": "linear", "symbol": _linear_symbol(symbol)},
+            {"category": "linear", "symbol": _linear_public_symbol(symbol)},
         )
+
+    def linear_instruments_info(self, *, cursor: str | None = None, limit: int = 1000) -> BybitResponse:
+        query = {"category": "linear", "limit": str(limit)}
+        if cursor:
+            query["cursor"] = cursor
+        return self._public_get("/v5/market/instruments-info", query)
 
     def ticker(self, symbol: str = "BTCUSDT") -> BybitResponse:
         return self._public_get(
@@ -438,6 +444,13 @@ def _spot_symbol(symbol: str) -> str:
     normalized = symbol.strip().upper()
     if normalized != "BTCUSDT":
         raise BybitApiError("this integration slice supports only spot BTCUSDT")
+    return normalized
+
+
+def _linear_public_symbol(symbol: str) -> str:
+    normalized = symbol.strip().upper()
+    if not normalized.endswith("USDT") or not normalized.removesuffix("USDT").isalnum():
+        raise BybitApiError("linear public market data requires a USDT symbol")
     return normalized
 
 

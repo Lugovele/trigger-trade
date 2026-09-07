@@ -8,7 +8,7 @@ from decimal import Decimal
 from enum import StrEnum
 from hashlib import sha256
 import json
-from typing import Mapping
+from typing import Callable, Mapping
 
 from triggertrade.config import AppConfig
 
@@ -101,8 +101,9 @@ class TradingRulesChange:
 class TradingRulesService:
     """Service boundary for immutable TradingRulesVersion lifecycle."""
 
-    def __init__(self, store) -> None:
+    def __init__(self, store, *, symbol_validator: Callable[[str], object] | None = None) -> None:
         self._store = store
+        self._symbol_validator = symbol_validator
 
     def ensure_initial_version(self, config: AppConfig, *, created_at: str = "2026-09-07T00:00:00+00:00") -> TradingRulesVersion:
         draft = build_initial_trading_rules(config)
@@ -117,7 +118,7 @@ class TradingRulesService:
     def create_rules_version_from_current(self, *, changes: Mapping[str, object], created_source: str = "service", created_at: str | None = None) -> TradingRulesChange:
         current = self.get_current_rules_version()
         draft = apply_changes(current.draft, changes)
-        validate_rules_draft(draft)
+        validate_rules_draft(draft, symbol_validator=self._symbol_validator)
         if semantic_hash(draft) == current.config_hash:
             return TradingRulesChange(False, current, "No semantic changes")
         version = self._store.create_next_version(
@@ -185,7 +186,7 @@ def apply_changes(draft: TradingRulesVersionDraft, changes: Mapping[str, object]
     return replace(draft, **converted)
 
 
-def validate_rules_draft(draft: TradingRulesVersionDraft) -> None:
+def validate_rules_draft(draft: TradingRulesVersionDraft, *, symbol_validator: Callable[[str], object] | None = None) -> None:
     if not (Decimal("0") < draft.position_size_pct <= Decimal("1")):
         raise TradingRulesError("position_size_pct must be > 0 and <= 1")
     if draft.take_profit_mode is TakeProfitMode.FIXED:
@@ -222,6 +223,11 @@ def validate_rules_draft(draft: TradingRulesVersionDraft) -> None:
     seen: set[str] = set()
     for coin in draft.coins:
         symbol = normalize_symbol(coin.symbol)
+        if coin.enabled and symbol_validator is not None:
+            try:
+                symbol_validator(symbol)
+            except Exception as exc:
+                raise TradingRulesError(f"coin {symbol} is not valid in the futures instrument catalog") from exc
         if symbol in seen:
             raise TradingRulesError("duplicate coin rule symbol")
         seen.add(symbol)

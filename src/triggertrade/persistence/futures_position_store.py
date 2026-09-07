@@ -44,6 +44,7 @@ class FuturesPositionRecord:
     rule_snapshot: dict[str, str | None]
     updated_at: str
     rules_version_id: str | None = None
+    instrument_snapshot: dict[str, str | None] | None = None
 
 
 @dataclass(frozen=True)
@@ -306,11 +307,13 @@ class FuturesPositionStore:
                     close_reason TEXT,
                     rule_snapshot TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
-                    rules_version_id TEXT
+                    rules_version_id TEXT,
+                    instrument_snapshot TEXT
                 )
                 """
             )
             _add_column_if_missing(conn, "futures_positions", "rules_version_id", "TEXT")
+            _add_column_if_missing(conn, "futures_positions", "instrument_snapshot", "TEXT")
             conn.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_futures_one_open_per_symbol ON futures_positions(symbol) WHERE status IN ('OPEN', 'CLOSING', 'UNKNOWN')"
             )
@@ -387,7 +390,15 @@ _CLOSED_COLUMNS = tuple(field.name for field in fields(FuturesClosedPositionReco
 
 
 def _position_values(record: FuturesPositionRecord) -> tuple[str | None, ...]:
-    return tuple(json.dumps(record.rule_snapshot, sort_keys=True) if key == "rule_snapshot" else getattr(record, key) for key in _POSITION_COLUMNS)
+    values = []
+    for key in _POSITION_COLUMNS:
+        if key == "rule_snapshot":
+            values.append(json.dumps(record.rule_snapshot, sort_keys=True))
+        elif key == "instrument_snapshot":
+            values.append(None if record.instrument_snapshot is None else json.dumps(record.instrument_snapshot, sort_keys=True))
+        else:
+            values.append(getattr(record, key))
+    return tuple(values)
 
 
 def _closed_values(record: FuturesClosedPositionRecord) -> tuple[str | int | None, ...]:
@@ -397,6 +408,7 @@ def _closed_values(record: FuturesClosedPositionRecord) -> tuple[str | int | Non
 def _row_to_position(row: sqlite3.Row) -> FuturesPositionRecord:
     data = {key: row[key] for key in _POSITION_COLUMNS}
     data["rule_snapshot"] = json.loads(data["rule_snapshot"])
+    data["instrument_snapshot"] = None if data.get("instrument_snapshot") in {None, ""} else json.loads(data["instrument_snapshot"])
     return FuturesPositionRecord(**data)
 
 

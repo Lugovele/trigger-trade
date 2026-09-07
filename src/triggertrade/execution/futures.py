@@ -467,6 +467,8 @@ class FuturesExecutionService:
     def _validate_precision(self, intent: FuturesTradeIntent) -> None:
         if intent.quantity < self._instrument.minimum_order_quantity:
             raise ExecutionError("futures quantity is below minimum")
+        if self._instrument.maximum_order_quantity is not None and intent.quantity > self._instrument.maximum_order_quantity:
+            raise ExecutionError("futures quantity exceeds maximum limit order quantity")
         if intent.quantity % self._instrument.quantity_step != 0:
             raise ExecutionError("futures quantity does not align with step size")
         if intent.price % self._instrument.price_tick != 0:

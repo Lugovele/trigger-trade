@@ -9,7 +9,7 @@ import pytest
 from triggertrade.config import ExecutionVenue, load_config
 from triggertrade.execution import OrderStatus, OrderType
 from triggertrade.execution.futures import FuturesTradeIntent, PositionAction, PositionState
-from triggertrade.exchanges import BybitResponse
+from triggertrade.exchanges import BybitApiError, BybitResponse
 from triggertrade.market_data import ContractCategory, FuturesAccountState, FuturesInstrumentMetadata
 from triggertrade.market_data import FuturesMarketEvent, MarketRegimeContext, MarketRegimeLabel, RegimeCapability
 from triggertrade.persistence import (
@@ -24,9 +24,11 @@ from triggertrade.persistence import (
     TriggerSetStore,
     bootstrap_current_trigger_sets,
     current_futures_active_trigger_set,
+    InstrumentCatalogStore,
 )
 from triggertrade.persistence.futures_accounting_store import FuturesAccountingStore
 from triggertrade.services.futures_runtime import FuturesDualLaneRuntime, _is_futures_set
+from triggertrade.services.instrument_catalog import InstrumentCatalogService
 from triggertrade.rules import DirectionMode, TakeProfitMode, TradingRulesService
 from triggertrade.services.runtime import build_runtime_from_env
 from triggertrade.execution.position_lifecycle import PositionStatus, futures_position_id
@@ -228,6 +230,90 @@ def test_runtime_rules_rejection_persists_structured_rules_evidence(tmp_path):
     assert active.rules_evaluation["blocking_rule"] == "long_entries_disabled_by_current_trading_rules"
     assert active.rules_evaluation["direction_mode"] == "SHORT_ONLY"
     assert active.rules_evaluation["symbol"] == "BTCUSDT"
+
+
+
+def test_stale_catalog_refresh_failure_blocks_new_entries_even_with_old_cache(tmp_path):
+    from datetime import timedelta
+
+    path = tmp_path / "runtime.sqlite3"
+    catalog = InstrumentCatalogService(
+        store=InstrumentCatalogStore(path),
+        client=LinearOnlyMarketClient(),
+        clock=lambda: datetime(2026, 9, 5, 13, 0, tzinfo=UTC),
+        stale_after=timedelta(seconds=1),
+    )
+    assert catalog.refresh_instrument_catalog().status == "OK"
+
+    class FailingCatalogClient(LinearOnlyMarketClient):
+        def linear_instruments_info(self, *, cursor=None, limit=1000):
+            raise BybitApiError("public catalog timeout")
+
+    stale_catalog = InstrumentCatalogService(
+        store=InstrumentCatalogStore(path),
+        client=FailingCatalogClient(),
+        clock=lambda: datetime(2026, 9, 5, 13, 1, tzinfo=UTC),
+        stale_after=timedelta(seconds=1),
+    )
+    adapter = RecordingFuturesAdapter(order_status="New")
+
+    result = _runtime(
+        tmp_path,
+        path=path,
+        client=FailingCatalogClient(),
+        active_adapter=adapter,
+        instrument_catalog=stale_catalog,
+    ).process_once()
+
+    assert result.skipped_reason == "market_data_unavailable"
+    assert adapter.create_calls == 0
+
+def test_invalid_catalog_instrument_blocks_new_runtime_entries(tmp_path):
+    client = LinearOnlyMarketClient()
+    original = client.linear_instruments_info
+
+    def suspended(*, cursor=None, limit=1000):
+        payload = original(cursor=cursor, limit=limit).result
+        payload["list"][0]["status"] = "PreLaunch"
+        return BybitResponse(0, "OK", payload)
+
+    client.linear_instruments_info = suspended
+
+    result = _runtime(tmp_path, client=client, active_adapter=RecordingFuturesAdapter(order_status="New")).process_once()
+
+    assert result.candle_id is None
+    assert result.skipped_reason == "market_data_unavailable"
+
+
+def test_catalog_outage_still_monitors_existing_position_from_snapshot(tmp_path):
+    path = tmp_path / "runtime.sqlite3"
+    position_store = FuturesPositionStore(path)
+    position = _position_record(open_intent_id="snapshot-open")
+    position_store.save_open_position(position)
+    client = LinearOnlyMarketClient()
+    original = client.linear_instruments_info
+
+    def suspended(*, cursor=None, limit=1000):
+        payload = original(cursor=cursor, limit=limit).result
+        payload["list"][0]["status"] = "PreLaunch"
+        return BybitResponse(0, "OK", payload)
+
+    client.linear_instruments_info = suspended
+    adapter = RecordingFuturesAdapter(order_status="New")
+
+    result = _runtime(
+        tmp_path,
+        path=path,
+        client=client,
+        active_adapter=adapter,
+        position_store=position_store,
+        account_provider=lambda instrument: _account(instrument, mark_price=Decimal("101")),
+    ).process_once()
+
+    assert result.skipped_reason == "market_data_unavailable"
+    assert adapter.create_calls == 1
+    assert adapter.created[0]["symbol"] == "BTCUSDT"
+    assert adapter.created[0]["action"] is PositionAction.CLOSE_LONG
 
 def test_test_lane_simulates_source_aware_closed_trade_without_private_order(tmp_path):
     path = tmp_path / "runtime.sqlite3"
@@ -496,6 +582,7 @@ def _runtime(
     operator_store=None,
     position_store=None,
     account_provider=None,
+    instrument_catalog=None,
     demo_expected_gross_move="1",
     market="linear",
 ):
@@ -516,6 +603,7 @@ def _runtime(
         position_store=position_store,
         active_adapter=active_adapter or RecordingFuturesAdapter(order_status="New"),
         account_provider=account_provider or (lambda _: _account(instrument)),
+        instrument_catalog=instrument_catalog,
         clock=lambda: datetime(2026, 9, 5, 13, 10, 30, tzinfo=UTC),
         logger=lambda message: None,
     )
@@ -553,6 +641,10 @@ class LinearOnlyMarketClient:
     def linear_instrument_metadata(self, symbol):
         self.linear_instrument_calls += 1
         return BybitResponse(0, "OK", _instrument_payload())
+
+    def linear_instruments_info(self, *, cursor=None, limit=1000):
+        self.linear_instrument_calls += 1
+        return BybitResponse(0, "OK", {**_instrument_payload(), "nextPageCursor": ""})
 
     def linear_recent_candles(self, symbol, interval, limit):
         self.linear_candle_calls += 1
@@ -662,10 +754,11 @@ def _instrument_payload():
             {
                 "symbol": "BTCUSDT",
                 "contractType": "LinearPerpetual",
+                "status": "Trading",
                 "quoteCoin": "USDT",
                 "settleCoin": "USDT",
                 "priceFilter": {"tickSize": "0.1"},
-                "lotSizeFilter": {"qtyStep": "0.001", "minOrderQty": "0.001", "minNotionalValue": "5"},
+                "lotSizeFilter": {"qtyStep": "0.001", "minOrderQty": "0.001", "maxOrderQty": "100", "minNotionalValue": "5"},
                 "leverageFilter": {"minLeverage": "1", "maxLeverage": "100", "leverageStep": "0.01"},
             }
         ]
@@ -737,6 +830,24 @@ def _position_record(*, open_intent_id):
         close_reason=None,
         rule_snapshot={"take_profit_pct": "0.01", "stop_loss_pct": "0.01"},
         updated_at="2026-09-05T13:00:00+00:00",
+        instrument_snapshot={
+            "symbol": "BTCUSDT",
+            "category": "linear",
+            "contract_type": "LinearPerpetual",
+            "settle_coin": "USDT",
+            "quote_coin": "USDT",
+            "tick_size": "0.1",
+            "qty_step": "0.001",
+            "min_order_qty": "0.001",
+            "max_order_qty": "100",
+            "min_notional_value": "5",
+            "min_leverage": "1",
+            "max_leverage": "100",
+            "leverage_step": "0.01",
+            "catalog_hash": "unit-catalog",
+            "source": "unit",
+            "status": "Trading",
+        },
     )
 
 

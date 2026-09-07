@@ -294,6 +294,17 @@ Trading rules versions are immutable rows. The current live rules selection is a
 
 Production futures runtime resolves the current rules version before sizing and risk. New positions must carry `rules_version_id` and a resolved rule snapshot. Existing positions and closed trades retain their original rules attribution even after the current pointer advances. Dashboard/read models may display those persisted facts later, but they must not compute or create trading rules.
 
+
+## Bybit Linear Instrument Catalog
+
+Instrument metadata is a backend catalog boundary, not dashboard logic and not strategy logic. `InstrumentCatalogService` fetches Bybit public V5 instrument pages for `category="linear"`, normalizes them into cached `FuturesInstrument` records, and persists them through `InstrumentCatalogStore` before runtime or Rules code consumes them.
+
+The product filter for tradeable symbols is intentionally strict: USDT quote/settle coin, `LinearPerpetual`, status `Trading`, positive tick size, quantity step, minimum quantity, maximum limit-order quantity, and leverage bounds. Instruments outside that product class may be retained only as rejected catalog rows with an exclusion reason; they are not valid for new entries.
+
+Refresh is all-or-nothing from the perspective of the live cache. The service fetches every paginated page, detects cursor loops, deduplicates by symbol, computes a catalog hash, and only then replaces the persisted normalized catalog. If a public refresh fails, the previous valid cache remains authoritative and staleness/error metadata is exposed.
+
+New TradingRulesVersion creation validates enabled coins through this catalog service. Historical rules versions remain immutable if an instrument later becomes unavailable. New futures entries resolve instrument metadata from the cached catalog before sizing, risk, and execution. Open positions pin an immutable instrument metadata snapshot, so close/reconcile/TP/SL management can use the snapshot even when current catalog status blocks new entries.
+
 ## Futures Accounting
 
 Futures accounting is a separate backend layer between execution facts and

@@ -40,6 +40,10 @@ class FuturesInstrumentMetadata:
     min_leverage: Decimal = Decimal("1")
     leverage_step: Decimal = Decimal("0.01")
     contract_size: Decimal | None = None
+    maximum_order_quantity: Decimal | None = None
+    max_market_order_quantity: Decimal | None = None
+    catalog_hash: str | None = None
+    catalog_source: str | None = None
 
 
 @dataclass(frozen=True)

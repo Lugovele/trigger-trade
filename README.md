@@ -153,6 +153,22 @@ The shared bootstrap creates one factual `v1` from the existing futures runtime 
 
 `FIXED` take-profit is supported in runtime. `DYNAMIC` is represented as a contract value but fails closed until a separately reviewed deterministic algorithm exists. Minimum take-profit is a floor, not a cap. Optional rules use explicit enabled flags; disabled net edge is excluded from the gate rather than represented by magic zero/null thresholds.
 
+
+## Bybit Linear Instrument Catalog
+
+TriggerTrade caches authoritative Bybit Demo public instrument metadata for USDT-settled linear perpetual futures from `GET /v5/market/instruments-info?category=linear`. The catalog is backend-only and requires no credentials, private endpoints, or order calls.
+
+The catalog exposes only TriggerTrade-compatible tradeable instruments: `LinearPerpetual`, settle coin `USDT`, exchange status `Trading`, and complete tick/quantity/leverage limits. Refresh is explicit and atomic: all paginated pages are fetched, normalized, deduplicated, hashed, then persisted; a failed refresh preserves the last valid cache.
+
+Trading Rules coin configuration and futures runtime entry validation use the same catalog service. New entries fail closed for unknown, suspended, delisted, inverse, dated, non-USDT, or incomplete instruments. Existing positions keep an immutable instrument snapshot so TP/SL, manual close, close-all, and reconciliation can continue during a catalog outage or after later symbol-status changes. Price and quantity normalization use Decimal exchange constraints; leverage is rejected if it exceeds instrument metadata rather than silently clamped.
+
+Run the public catalog smoke manually with:
+
+```powershell
+$env:RUN_TRIGGERTRADE_INSTRUMENT_CATALOG_SMOKE="1"
+python scripts/bybit_instrument_catalog_smoke.py
+```
+
 ## Continuous Futures Runtime
 
 `python -m triggertrade.services.runtime` now starts the continuous futures

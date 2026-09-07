@@ -383,3 +383,10 @@ Failure behavior: fewer than 60 previous completed candles, missing current volu
 In this backend unit, `daily_loss_limit_enabled=true` fails closed until an accounting-backed daily realized-loss gate is wired into entry decisions. `max_positions_per_coin`, when enabled, is constrained to `1` because the approved lifecycle invariant is still one net position per symbol; pyramiding requires a later reviewed change.
 
 When the minimum net-edge gate is disabled, the current integration strategy does not require a demo expected gross move solely for net-edge calculation; direction and trigger/regime provenance still gate intent creation.
+
+
+## Rules Coin Catalog Validation
+
+Enabled coin rules for new `TradingRulesVersion` records must validate against the backend Bybit USDT linear perpetual instrument catalog. A valid coin is a canonical symbol present in the local catalog as tradeable: `LinearPerpetual`, settle coin `USDT`, status `Trading`, and complete tick/quantity/leverage metadata.
+
+Disabled coin rows may remain in a rules draft for audit/configuration intent, but they are excluded from entry decisions. Historical rules versions are immutable; if a symbol is suspended or delisted after a version was created, the old version is not rewritten, while new entries for that symbol fail closed until a valid catalog state exists.

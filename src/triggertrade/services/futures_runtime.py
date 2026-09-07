@@ -23,8 +23,9 @@ from triggertrade.execution.futures import (
     estimate_costs,
 )
 from triggertrade.execution.position_lifecycle import build_fixed_protective_exit_plan
-from triggertrade.execution.position_lifecycle import FuturesPositionLifecycleService, PositionRiskConfig, calculate_position_size
+from triggertrade.execution.position_lifecycle import FuturesPositionLifecycleService, PositionRiskConfig, calculate_position_size, instrument_metadata_from_position_snapshot
 from triggertrade.exchanges import BybitApiError, BybitDemoClient
+from triggertrade.instruments import CatalogError
 from triggertrade.market_data import (
     FuturesAccountState,
     FuturesInstrumentMetadata,
@@ -39,6 +40,7 @@ from triggertrade.market_data import (
 from triggertrade.market_data.futures import ContractCategory, MarketRegimeLabel
 from triggertrade.persistence import (
     FuturesExecutionStore,
+    InstrumentCatalogStore,
     TradingRulesStore,
     LaneCandleLifecycle,
     LaneRuntimeCheckpoint,
@@ -50,6 +52,7 @@ from triggertrade.persistence import (
 from triggertrade.persistence.futures_accounting_store import FuturesAccountingStore
 from triggertrade.persistence.futures_position_store import FuturesPositionStore
 from triggertrade.services.futures_accounting_bridge import FuturesAccountingBridge
+from triggertrade.services.instrument_catalog import InstrumentCatalogService
 from triggertrade.services.runtime import CompletedCandle, RuntimeCycleResult, RuntimeGapError, latest_completed_candle, next_completed_candle
 from triggertrade.services.test_futures_simulator import TestFuturesSimulator
 from triggertrade.rules import DirectionMode, TakeProfitMode, TradingRulesError, TradingRulesService, TradingRulesVersion, coin_rule_for
@@ -84,6 +87,7 @@ class FuturesDualLaneRuntime:
         active_adapter: BybitFuturesExecutionAdapter | None = None,
         test_simulator: TestFuturesSimulator | None = None,
         account_provider: Callable[[FuturesInstrumentMetadata], FuturesAccountState] | None = None,
+        instrument_catalog: InstrumentCatalogService | None = None,
         clock: Callable[[], datetime] | None = None,
         logger: Callable[[str], None] | None = None,
     ) -> None:
@@ -96,8 +100,12 @@ class FuturesDualLaneRuntime:
         self._trigger_set_store = trigger_set_store
         self._operator_state_store = operator_state_store
         self._position_store = position_store or FuturesPositionStore(config.futures_runtime.db_path)
+        self._instrument_catalog = instrument_catalog or InstrumentCatalogService(
+            store=InstrumentCatalogStore(config.futures_runtime.db_path),
+            client=market_client,
+        )
         self._trading_rules_store = TradingRulesStore(config.futures_runtime.db_path)
-        self._trading_rules_service = TradingRulesService(self._trading_rules_store)
+        self._trading_rules_service = TradingRulesService(self._trading_rules_store, symbol_validator=self._instrument_catalog.validate_symbol)
         self._trading_rules_service.ensure_initial_version(config)
         self._active_adapter = active_adapter or BybitFuturesExecutionAdapter(market_client)
         self._test_simulator = test_simulator or TestFuturesSimulator(
@@ -112,9 +120,7 @@ class FuturesDualLaneRuntime:
     def process_once(self) -> FuturesDualLaneResult:
         self._validate_safe_config()
         try:
-            instrument = parse_linear_instrument(
-                self._market_client.linear_instrument_metadata(self._config.futures_runtime.symbol).result
-            )
+            instrument = self._resolve_runtime_instrument()
             candles = parse_spot_candles(
                 self._market_client.linear_recent_candles(
                     self._config.futures_runtime.symbol,
@@ -144,6 +150,10 @@ class FuturesDualLaneRuntime:
         except RuntimeGapError as exc:
             self._log(f"futures runtime checkpoint gap: {exc.__class__.__name__}")
             return FuturesDualLaneResult(None, (), (), "checkpoint_gap")
+        except CatalogError as exc:
+            self._recover_and_monitor_active_positions_from_snapshots()
+            self._log(f"futures instrument catalog unavailable: {exc.__class__.__name__}")
+            return FuturesDualLaneResult(None, (), (), "market_data_unavailable")
         except (BybitApiError, ValueError) as exc:
             self._log(f"futures market data unavailable: {exc.__class__.__name__}")
             return FuturesDualLaneResult(None, (), (), "market_data_unavailable")
@@ -635,6 +645,35 @@ class FuturesDualLaneRuntime:
             trigger_set_id=trigger_set.set_id,
             trigger_set_version=trigger_set.version,
         )
+
+    def _recover_and_monitor_active_positions_from_snapshots(self) -> None:
+        for position in self._position_store.list_open_positions(include_unknown=True):
+            instrument = instrument_metadata_from_position_snapshot(position)
+            if instrument is None:
+                continue
+            try:
+                account = self._account_state(instrument, Lane.ACTIVE)
+                lifecycle = FuturesPositionLifecycleService(
+                    execution_config=replace(_execution_config(self._config), symbol=instrument.symbol),
+                    risk_config=_position_risk_config(self._config),
+                    execution_store=self._futures_execution_store,
+                    position_store=self._position_store,
+                    accounting_store=self._accounting_store,
+                    adapter=self._active_adapter,
+                    instrument=instrument,
+                    account=account,
+                    execution_lane=Lane.ACTIVE.value,
+                    operator_trading_state=self._operator_state_value,
+                )
+                lifecycle.reconcile_position(position.position_id)
+                if account.mark_price is not None:
+                    lifecycle.monitor_protective_exit(position_id=position.position_id, mark_price=account.mark_price)
+            except Exception as exc:
+                self._log(f"futures snapshot recovery skipped: {exc.__class__.__name__}")
+
+    def _resolve_runtime_instrument(self) -> FuturesInstrumentMetadata:
+        self._instrument_catalog.ensure_available()
+        return self._instrument_catalog.metadata_for_symbol(self._config.futures_runtime.symbol)
 
     def _account_state(self, instrument: FuturesInstrumentMetadata, lane: Lane) -> FuturesAccountState:
         if self._account_provider is not None:

@@ -97,6 +97,9 @@ def parse_linear_instrument(result: dict[str, Any], symbol: str = "BTCUSDT") -> 
         max_leverage=Decimal(leverage_filter["maxLeverage"]),
         min_leverage=Decimal(leverage_filter.get("minLeverage") or "1"),
         leverage_step=Decimal(leverage_filter.get("leverageStep") or "0.01"),
+        maximum_order_quantity=None if lot_filter.get("maxOrderQty") in {None, ""} else Decimal(lot_filter["maxOrderQty"]),
+        max_market_order_quantity=None if lot_filter.get("maxMktOrderQty") in {None, ""} else Decimal(lot_filter["maxMktOrderQty"]),
+        catalog_source="bybit_public_v5_instruments_info_linear",
     )
 
 

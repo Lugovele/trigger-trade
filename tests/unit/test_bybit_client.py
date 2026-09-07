@@ -29,6 +29,24 @@ def test_non_btcusdt_symbol_is_rejected():
         client.ticker("ETHUSDT")
 
 
+
+def test_linear_instruments_info_uses_public_paginated_linear_catalog_query():
+    seen = []
+
+    def transport(request, timeout):
+        seen.append(request)
+        return _payload({"list": [], "nextPageCursor": ""})
+
+    client = BybitDemoClient(transport=transport)
+    client.linear_instruments_info(cursor="abc", limit=250)
+
+    request = seen[0]
+    query = parse_qs(urlparse(request.full_url).query)
+    assert request.headers == {}
+    assert query["category"] == ["linear"]
+    assert query["cursor"] == ["abc"]
+    assert query["limit"] == ["250"]
+
 def test_authenticated_wallet_request_signing_headers():
     seen = []
     credentials = ApiCredentials(api_key="unit-key", api_secret="unit-signing-value")
@@ -65,6 +83,7 @@ def test_wallet_balance_is_the_only_private_surface_on_client():
         "instrument_metadata",
         "linear_historical_candles",
         "linear_instrument_metadata",
+        "linear_instruments_info",
         "linear_recent_candles",
         "linear_position_list",
         "linear_ticker",

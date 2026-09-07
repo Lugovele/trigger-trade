@@ -2,6 +2,7 @@
 
 from .execution_store import ExecutionFill, ExecutionRecord, ExecutionStore
 from .futures_execution_store import FuturesExecutionRecord, FuturesExecutionStore
+from .instrument_catalog_store import InstrumentCatalogStore
 from .futures_position_store import FuturesClosedPositionRecord, FuturesPositionEvent, FuturesPositionRecord, FuturesPositionStore
 from .operator_state_store import OperatorStateStore, OperatorTradingState, TradingState
 from .trading_rules_store import TradingRulesStore
@@ -35,6 +36,7 @@ __all__ = [
     "ExecutionStore",
     "FuturesExecutionRecord",
     "FuturesExecutionStore",
+    "InstrumentCatalogStore",
     "FuturesClosedPositionRecord",
     "FuturesPositionEvent",
     "FuturesPositionRecord",

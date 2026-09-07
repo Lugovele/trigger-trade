@@ -152,9 +152,9 @@ def build_fixed_protective_exit_plan(
     now = calculated_at or datetime.now(UTC).isoformat()
     if action is PositionAction.OPEN_LONG:
         tp = _floor_to_step(entry_price * (Decimal("1") + take_profit_pct), price_tick)
-        sl = _floor_to_step(entry_price * (Decimal("1") - stop_loss_pct), price_tick)
+        sl = _ceil_to_step(entry_price * (Decimal("1") - stop_loss_pct), price_tick)
     else:
-        tp = _floor_to_step(entry_price * (Decimal("1") - take_profit_pct), price_tick)
+        tp = _ceil_to_step(entry_price * (Decimal("1") - take_profit_pct), price_tick)
         sl = _floor_to_step(entry_price * (Decimal("1") + stop_loss_pct), price_tick)
     inputs = {
         "entry_price": str(entry_price),
@@ -258,6 +258,8 @@ def calculate_position_size(
     notional = quantity * entry_price
     if quantity <= 0 or quantity < instrument.minimum_order_quantity or notional < instrument.minimum_notional:
         raise ExecutionError("position sizing produced an invalid exchange quantity")
+    if instrument.maximum_order_quantity is not None and quantity > instrument.maximum_order_quantity:
+        raise ExecutionError("position sizing exceeds exchange maximum limit order quantity")
     return PositionSizingPlan(quantity, notional, account.available_margin, config.position_size_pct_of_available_capital, leverage)
 
 
@@ -379,6 +381,7 @@ class FuturesPositionLifecycleService:
             },
             updated_at=now,
             rules_version_id=intent.rules_version_id,
+            instrument_snapshot=_instrument_metadata_snapshot(self._instrument),
         )
         self._position_store.save_open_position(position)
         self._position_store.record_event(FuturesPositionEvent(_event_id(position_id, "OPEN", record.client_order_id), position_id, "OPEN", now, "open_position", record.client_order_id, None))
@@ -415,7 +418,12 @@ class FuturesPositionLifecycleService:
         if position.status not in {PositionStatus.OPEN.value, PositionStatus.CLOSING.value, PositionStatus.UNKNOWN.value}:
             raise ExecutionError("only open futures positions can be closed")
         action = PositionAction.CLOSE_LONG if position.side == PositionState.LONG.value else PositionAction.CLOSE_SHORT
-        close_price = price or self._account.mark_price or Decimal(position.entry_price)
+        position_instrument = instrument_metadata_from_position_snapshot(position) or self._instrument
+        close_price = _normalize_reduce_only_close_price(
+            price or self._account.mark_price or Decimal(position.entry_price),
+            action=action,
+            price_tick=position_instrument.price_tick,
+        )
         intent = FuturesTradeIntent(
             intent_id=futures_close_intent_id(position_id, close_reason),
             symbol=position.symbol,
@@ -448,7 +456,7 @@ class FuturesPositionLifecycleService:
             lane=self._execution_lane,
         )
         closing = self._position_store.mark_closing(position_id, intent.intent_id, risk.risk_decision_id, close_reason.value)
-        service = self._execution_service(symbol=position.symbol)
+        service = self._execution_service(symbol=position.symbol, instrument=position_instrument)
         record = service.submit_approved_limit_order(intent=intent, risk_decision=risk)
         record = service.reconcile(record)
         self._position_store.attach_close_execution(position_id, record.client_order_id)
@@ -480,7 +488,8 @@ class FuturesPositionLifecycleService:
         position = self._position_store.get_position(position_id)
         if position is None or position.status == PositionStatus.CLOSED.value:
             return position
-        service = self._execution_service(symbol=position.symbol)
+        position_instrument = instrument_metadata_from_position_snapshot(position) or self._instrument
+        service = self._execution_service(symbol=position.symbol, instrument=position_instrument)
         bridge = FuturesAccountingBridge(accounting_store=self._accounting_store, adapter=self._adapter)
         if position.close_intent_id:
             close_record = self._execution_store.get_by_intent(position.close_intent_id)
@@ -568,16 +577,77 @@ class FuturesPositionLifecycleService:
                 )
             )
 
-    def _execution_service(self, *, symbol: str | None = None) -> FuturesExecutionService:
+    def _execution_service(self, *, symbol: str | None = None, instrument: FuturesInstrumentMetadata | None = None) -> FuturesExecutionService:
+        resolved_instrument = instrument or self._instrument
         return FuturesExecutionService(
             config=replace(self._execution_config, symbol=symbol or self._execution_config.symbol),
             adapter=self._adapter,
             store=self._execution_store,
-            instrument=self._instrument,
+            instrument=resolved_instrument,
             account=self._account,
             execution_lane=self._execution_lane,
             operator_trading_state=self._operator_trading_state,
         )
+
+
+
+def _instrument_metadata_snapshot(instrument: FuturesInstrumentMetadata) -> dict[str, str | None]:
+    return {
+        "symbol": instrument.symbol,
+        "category": instrument.category.value,
+        "contract_type": instrument.contract_type,
+        "settle_coin": instrument.settlement_asset,
+        "quote_coin": instrument.settlement_asset,
+        "tick_size": str(instrument.price_tick),
+        "qty_step": str(instrument.quantity_step),
+        "min_order_qty": str(instrument.minimum_order_quantity),
+        "max_order_qty": None if instrument.maximum_order_quantity is None else str(instrument.maximum_order_quantity),
+        "min_notional_value": str(instrument.minimum_notional),
+        "max_market_order_qty": None if instrument.max_market_order_quantity is None else str(instrument.max_market_order_quantity),
+        "min_leverage": str(instrument.min_leverage),
+        "max_leverage": str(instrument.max_leverage),
+        "leverage_step": str(instrument.leverage_step),
+        "catalog_hash": instrument.catalog_hash,
+        "source": instrument.catalog_source,
+        "status": "Trading",
+    }
+
+
+def instrument_metadata_from_position_snapshot(position: FuturesPositionRecord) -> FuturesInstrumentMetadata | None:
+    snapshot = position.instrument_snapshot or {}
+    required = {"symbol", "category", "contract_type", "settle_coin", "tick_size", "qty_step", "min_order_qty", "min_notional_value", "max_leverage"}
+    if not required.issubset(snapshot):
+        return None
+    max_order = snapshot.get("max_order_qty")
+    max_market = snapshot.get("max_market_order_qty")
+    return FuturesInstrumentMetadata(
+        symbol=str(snapshot["symbol"]),
+        category=ContractCategory(str(snapshot.get("category") or ContractCategory.LINEAR.value)),
+        contract_type=str(snapshot["contract_type"]),
+        settlement_asset=str(snapshot["settle_coin"]),
+        quantity_step=Decimal(str(snapshot["qty_step"])),
+        price_tick=Decimal(str(snapshot["tick_size"])),
+        minimum_order_quantity=Decimal(str(snapshot["min_order_qty"])),
+        minimum_notional=Decimal(str(snapshot["min_notional_value"])),
+        max_leverage=Decimal(str(snapshot["max_leverage"])),
+        min_leverage=Decimal(str(snapshot.get("min_leverage") or "1")),
+        leverage_step=Decimal(str(snapshot.get("leverage_step") or "0.01")),
+        maximum_order_quantity=None if max_order in {None, ""} else Decimal(str(max_order)),
+        max_market_order_quantity=None if max_market in {None, ""} else Decimal(str(max_market)),
+        catalog_hash=snapshot.get("catalog_hash"),
+        catalog_source=snapshot.get("source"),
+    )
+
+
+def _instrument_from_position_snapshot(position: FuturesPositionRecord) -> FuturesInstrumentMetadata | None:
+    return instrument_metadata_from_position_snapshot(position)
+
+def _normalize_reduce_only_close_price(price: Decimal, *, action: PositionAction, price_tick: Decimal) -> Decimal:
+    if action is PositionAction.CLOSE_LONG:
+        return _floor_to_step(price, price_tick)
+    if action is PositionAction.CLOSE_SHORT:
+        return _ceil_to_step(price, price_tick)
+    raise ExecutionError("reduce-only close price normalization requires a close action")
 
 
 def futures_position_id(intent_id: str) -> str:
@@ -638,3 +708,8 @@ def _floor_to_step(value: Decimal, step: Decimal) -> Decimal:
     if step <= 0:
         raise ExecutionError("exchange step must be positive")
     return (value // step) * step
+
+
+def _ceil_to_step(value: Decimal, step: Decimal) -> Decimal:
+    floored = _floor_to_step(value, step)
+    return floored if floored == value else floored + step

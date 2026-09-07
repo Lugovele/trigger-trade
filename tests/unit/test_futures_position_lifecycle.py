@@ -103,6 +103,41 @@ def test_open_long_and_open_short_persist_position_and_accounting(tmp_path):
     assert short_result.position.tp_price == "99.0"
 
 
+
+
+def test_close_normalizes_unaligned_reduce_only_price_to_tick(tmp_path):
+    db = tmp_path / "close-normalize.sqlite3"
+    adapter = FilledThenCloseAdapter()
+    service = _service(tmp_path, db=db, adapter=adapter)
+    opened = _open(service, PositionAction.OPEN_LONG, "close-normalize")
+
+    closed = service.close_position(position_id=opened.position.position_id, close_reason=CloseReason.MANUAL, price=Decimal("101.05"))
+
+    assert closed.reason == "closed"
+    close_call = adapter.created[-1]
+    assert close_call["action"] is PositionAction.CLOSE_LONG
+    assert close_call["price"] == Decimal("101.0")
+
+def test_position_pins_instrument_snapshot_and_close_uses_it_for_existing_exposure(tmp_path):
+    db = tmp_path / "snapshot-close.sqlite3"
+    open_service = _service(tmp_path, db=db, account=_account(symbol="ETHUSDT"), adapter=FilledThenCloseAdapter(symbol="ETHUSDT"))
+    opened = _open(open_service, PositionAction.OPEN_LONG, "eth-snapshot-open", symbol="ETHUSDT")
+
+    assert opened.position.instrument_snapshot["symbol"] == "ETHUSDT"
+    assert opened.position.instrument_snapshot["max_order_qty"] == "100"
+
+    close_service = _service(
+        tmp_path,
+        db=db,
+        account=_account(symbol="ETHUSDT"),
+        adapter=FilledThenCloseAdapter(symbol="ETHUSDT"),
+        instrument=_instrument(symbol="ETHUSDT", maximum_order_quantity=Decimal("0.0001")),
+    )
+    closed = close_service.close_position(position_id=opened.position.position_id, close_reason=CloseReason.MANUAL, price=Decimal("101"))
+
+    assert closed.reason == "closed"
+    assert closed.closed_trade is not None
+
 def test_cancelled_open_reconciliation_does_not_leave_phantom_position(tmp_path):
     db = tmp_path / "cancelled-open.sqlite3"
     service = _service(tmp_path, db=db, adapter=ScriptedLifecycleAdapter(default_open_status="Cancelled"))
@@ -293,7 +328,7 @@ def _open(service, action, intent_id, *, symbol="BTCUSDT", qty=Decimal("0.001"))
     return service.open_position(intent=intent, risk_decision=risk, take_profit=intent.take_profit, stop_loss=intent.stop_loss)
 
 
-def _service(tmp_path, *, db=None, db_name="runtime.sqlite3", adapter=None, account=None, operator=None, config=None):
+def _service(tmp_path, *, db=None, db_name="runtime.sqlite3", adapter=None, account=None, operator=None, config=None, instrument=None):
     path = db or (tmp_path / db_name)
     operator_store = operator or OperatorStateStore(path)
     return FuturesPositionLifecycleService(
@@ -303,7 +338,7 @@ def _service(tmp_path, *, db=None, db_name="runtime.sqlite3", adapter=None, acco
         position_store=FuturesPositionStore(path),
         accounting_store=FuturesAccountingStore(path),
         adapter=adapter or FilledThenCloseAdapter(),
-        instrument=_instrument(symbol=(account.symbol if account else "BTCUSDT")),
+        instrument=instrument or _instrument(symbol=(account.symbol if account else "BTCUSDT")),
         account=account or _account(),
         operator_trading_state=lambda: operator_store.get_trading_state().state.value,
     )
@@ -365,7 +400,7 @@ def _manager(tmp_path):
     return FuturesRiskManager(config=FuturesExecutionConfig(), store=FuturesExecutionStore(tmp_path / "risk.sqlite3"), minimum_net_edge=Decimal("0.01"))
 
 
-def _instrument(*, symbol="BTCUSDT"):
+def _instrument(*, symbol="BTCUSDT", maximum_order_quantity=Decimal("100")):
     return FuturesInstrumentMetadata(
         symbol=symbol,
         category=ContractCategory.LINEAR,
@@ -376,6 +411,7 @@ def _instrument(*, symbol="BTCUSDT"):
         minimum_order_quantity=Decimal("0.001"),
         minimum_notional=Decimal("0.01"),
         max_leverage=Decimal("100"),
+        maximum_order_quantity=maximum_order_quantity,
     )
 
 
