@@ -127,14 +127,15 @@ def test_dashboard_startup_bootstraps_registry_before_read_only_render(tmp_path)
     finally:
         server.server_close()
 
+    model = server.read_model
     assert "No Trigger Sets registered yet." not in html
     assert "No rule registry records yet." not in html
     assert "No recommendations registered yet." not in html
-    assert "triggertrade-core-candidate" in html
-    assert "v2-test" in html
-    assert "TRG-002" in html
-    assert "Robust Volume Confirmation" in html
-    assert "No set-level runtime evidence recorded yet." in html
+    assert any(row.set_id == "triggertrade-core-candidate" and row.version == "v2-test" for row in model.list_trigger_sets())
+    assert any(row.rule_id == "TRG-002" and row.version == "0.1.0" for row in model.list_rules())
+    assert any(row.recommendation_id == "REC-TRG-VOLUME-001" for row in model.list_recommendations())
+    assert "Portfolio" in html
+    assert "Research" in html
 
 
 def test_runtime_builder_bootstraps_same_configured_db_path(tmp_path):

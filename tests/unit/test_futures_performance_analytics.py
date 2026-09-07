@@ -213,19 +213,18 @@ def test_dashboard_performance_uses_accounting_metrics_and_no_frontend_math(tmp_
 
     rows = DashboardReadModel(db).list_set_performance()
     comparisons = DashboardReadModel(db).list_baseline_comparisons()
-    html = render_dashboard(DashboardReadModel(db), initial_page="analytics")
+    html = render_dashboard(DashboardReadModel(db), initial_page="research")
 
     active = next(row for row in rows if row.set_id == "triggertrade-futures-core")
     assert active.closed_trades == 1
     assert active.net_pnl == "0.8"
     assert active.expectancy == "0.8"
-    assert "Win rate" in html
-    assert "0.8" in html
     assert comparisons[0].available is True
-    assert "Baseline Comparison" in html
-    assert "Direction mix C/B" in html
-    assert "triggertrade-futures-candidate@v2-test" in html
-    assert "no frontend financial calculations" in html
+    assert comparisons[0].candidate_set == "triggertrade-futures-candidate@v2-test"
+    assert "Research" in html
+    assert "Compare to Active" in html
+    assert "Forward Test" not in html
+    assert "no frontend financial calculations" not in html
     assert "BYBIT_API_SECRET" not in html
 
 

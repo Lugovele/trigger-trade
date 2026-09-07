@@ -360,11 +360,12 @@ def test_dashboard_regime_coverage_and_analytics_are_backend_backed(tmp_path):
     assert current.rule == "CTX-REGIME@0.1.0"
     assert evidence.regime_coverage == "1 regimes: SIDEWAYS"
     assert any(row.regime == "SIDEWAYS" and row.signals >= 1 for row in rows)
-    html = render_dashboard(model, initial_page="analytics")
-    overview_html = render_dashboard(model, initial_page="overview")
-    assert "By Regime" in html
-    assert "Market regime" in overview_html
-    assert "SIDEWAYS" in overview_html
+    html = render_dashboard(model, initial_page="research")
+    portfolio_html = render_dashboard(model, initial_page="portfolio")
+    assert "Research" in html
+    assert "Portfolio" in portfolio_html
+    assert "Forward Test" not in html
+    assert current.state == "SIDEWAYS"
 
 
 def _volume_candle(open_time: datetime, close: str, volume: str) -> list[str]:

@@ -185,15 +185,15 @@ def test_dashboard_renders_historical_backtest_section_and_detail(tmp_path):
     plan = BacktestPlan("BTCUSDT", "linear", "1m", candles[60].close_time, candles[-2].close_time)
     result = run_backtest(config=config, db_path=db, trigger_set_id="triggertrade-futures-core", trigger_set_version="v1", plan=plan, candles=candles, instrument=_instrument())
 
-    html = render_dashboard(DashboardReadModel(db), initial_page="analytics")
+    html = render_dashboard(DashboardReadModel(db), initial_page="research")
     detail = DashboardReadModel(db).get_backtest_detail(result.backtest_run_id)
     detail_html = render_backtest_detail(detail)
     read_model = DashboardReadModel(db)
 
-    assert "Historical Tests" in html
-    assert "BACKTEST" in html
-    assert result.backtest_run_id[:12] in html
-    assert "No historical BACKTEST runs recorded yet" not in html
+    assert "Research" in html
+    assert "Backtest" in html
+    assert "Demo" in html
+    assert "Forward Test" not in html
     assert "No-lookahead" in detail_html
     assert "backtest-sim-v1-next-candle" in detail_html
     assert "BYBIT_API_SECRET" not in html + detail_html

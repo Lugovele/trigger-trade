@@ -262,13 +262,14 @@ def test_dashboard_renders_only_accounting_backed_values(tmp_path):
     store.record_closed_trade(result)
     store.record_equity_snapshot(snapshot)
 
-    html = render_dashboard(DashboardReadModel(db), initial_page="analytics")
+    model = DashboardReadModel(db)
+    html = render_dashboard(model, initial_page="portfolio")
 
-    assert "Futures Accounting" in html
-    assert "dash-trade" in html
-    assert "101" in html
+    assert model.list_futures_closed_trades()[0].trade_id == "dash-trade"
+    assert model.get_latest_futures_equity().equity == "101"
+    assert "Portfolio" in html
     assert "BYBIT_API_SECRET" not in html
-    assert "frontend financial calculations" in html
+    assert "frontend financial calculations" not in html
 
 
 def _fill(

@@ -40,13 +40,33 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
-        if parsed.path in {"/", "/rules", "/analytics"}:
-            selected_set = parse_qs(parsed.query).get("set", [""])[0]
-            initial_page = parsed.path.strip("/") or "overview"
-            self._send_html(render_dashboard(self.server.read_model, selected_set, initial_page))
+        product_pages = {
+            "/": "portfolio",
+            "/portfolio": "portfolio",
+            "/sets": "sets",
+            "/trigger-catalog": "trigger-catalog",
+            "/trigger-detail": "trigger-detail",
+            "/rules": "rules",
+            "/rules-version": "rules-version",
+            "/research": "research",
+            "/research-detail": "research-detail",
+            "/messages": "messages",
+            "/analytics": "research",
+        }
+        if parsed.path in product_pages:
+            self._send_html(render_dashboard(self.server.read_model, initial_page=product_pages[parsed.path]))
             return
         if parsed.path.startswith("/set/"):
-            self._send_html(render_dashboard(self.server.read_model, unquote(parsed.path.removeprefix("/set/"))))
+            self._send_html(render_dashboard(self.server.read_model, initial_page="sets"))
+            return
+        if parsed.path.startswith("/triggers/"):
+            self._send_html(render_dashboard(self.server.read_model, initial_page="trigger-detail"))
+            return
+        if parsed.path.startswith("/rules-version/"):
+            self._send_html(render_dashboard(self.server.read_model, initial_page="rules-version"))
+            return
+        if parsed.path.startswith("/research/"):
+            self._send_html(render_dashboard(self.server.read_model, initial_page="research-detail"))
             return
         if parsed.path.startswith("/rules/"):
             parts = [unquote(part) for part in parsed.path.strip("/").split("/")]
@@ -100,7 +120,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_html(render_not_found("operator confirmation required"), HTTPStatus.BAD_REQUEST)
                 return
             if parsed.path.endswith("/pause"):
-                self.server.operator_store.pause(reason="confirmed local STOP TRADING")
+                self.server.operator_store.pause(reason="confirmed local Pause Entries")
             else:
                 self.server.operator_store.resume(reason="confirmed local Resume")
             self.send_response(HTTPStatus.SEE_OTHER)
@@ -131,73 +151,23 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
 
-def render_dashboard(read_model: DashboardReadModel, selected_set: str = "", initial_page: str = "overview") -> str:
-    if initial_page not in {"overview", "rules", "analytics", "logs", "settings"}:
-        initial_page = "overview"
-    live = read_model.get_live_overview()
-    test = read_model.get_test_overview()
-    trigger_sets = read_model.list_trigger_sets()
-    rules = read_model.list_rules()
-    futures_trades = getattr(read_model, "list_recent_futures_trades", lambda: ())()
-    logs = read_model.list_logs()
-    health = read_model.get_api_health()
+def render_dashboard(read_model: DashboardReadModel, selected_set: str = "", initial_page: str = "portfolio") -> str:
+    from triggertrade.dashboard.product_ui import render_product_dashboard
+
     operator_state = getattr(read_model, "get_operator_trading_state", lambda: None)()
-    operator_token = getattr(read_model, "operator_control_token", "")
-    recommendations = getattr(read_model, "list_recommendations", lambda: ())()
-    performance = getattr(read_model, "list_set_performance", lambda: ())()
-    test_evidence = getattr(read_model, "list_test_set_evidence", lambda: ())()
-    futures_closed_trades = getattr(read_model, "list_futures_closed_trades", lambda: ())()
-    live_closed_trades = getattr(read_model, "list_closed_trades_by_source", lambda source: ())("exchange")
-    test_closed_trades = getattr(read_model, "list_closed_trades_by_source", lambda source: ())("test_simulation")
-    futures_equity = getattr(read_model, "get_latest_futures_equity", lambda: None)()
-    futures_position = getattr(read_model, "get_current_futures_position", lambda: None)()
-    baseline_comparisons = getattr(read_model, "list_baseline_comparisons", lambda: ())()
-    current_regime = getattr(read_model, "get_current_market_regime", lambda: None)()
-    regime_analytics = getattr(read_model, "list_regime_analytics", lambda: ())()
-    backtest_runs = getattr(read_model, "list_backtest_runs", lambda: ())()
-    live_trace = read_model.get_latest_lane_trace("ACTIVE")
-    test_trace = read_model.get_latest_lane_trace("TEST")
-    return _page(
-        title="TriggerTrade v6",
-        body=f"""
-<div class="app">
-<main class="main">
-  <div class="toolbar"><div class="container toolbar-inner">
-    <div class="brand-top">TriggerTrade</div>
-    <div class="utility-actions">
-      {_operator_controls(operator_state, operator_token)}
-      <button class="utility-btn" onclick="showPage('logs')">Logs</button>
-      <button class="utility-btn" onclick="showPage('settings')">Settings</button>
-      <button class="utility-btn" onclick="copyData()">Copy</button>
-    </div>
-  </div></div>
-  <div class="tabsbar"><div class="container tabsbar-inner"><div class="tabs"><button class="tabbtn {_active_tab(initial_page, 'overview')}" data-page="overview">Overview</button><button class="tabbtn {_active_tab(initial_page, 'rules')}" data-page="rules">Rules</button><button class="tabbtn {_active_tab(initial_page, 'analytics')}" data-page="analytics">Analytics</button></div></div></div>
-  <div class="content container">
-    <section class="page {_active_page(initial_page, 'overview')}" id="overview">
-      <div style="display:flex;justify-content:flex-end;margin-bottom:8px"><div class="env-switch" id="envSwitch"{_env_switch_style(initial_page)}><button id="liveBtn" class="active live" onclick="setEnv('live')">LIVE</button><button id="testBtn" onclick="setEnv('test')">TEST</button></div></div>
-      {_overview_section("liveOverview", live, futures_trades, live_closed_trades, live_trace, True, current_regime, futures_equity, futures_position, operator_state)}
-      {_overview_section("testOverview", test, (), test_closed_trades, test_trace, False, current_regime, None, None, operator_state)}
-    </section>
-    <section class="page {_active_page(initial_page, 'rules')}" id="rules">{_trigger_sets_panel(trigger_sets)}{_rules_panel(rules)}</section>
-    <section class="page {_active_page(initial_page, 'analytics')}" id="analytics">{_historical_tests_panel(backtest_runs)}{_test_evidence_panel(test_evidence)}{_regime_analytics_panel(regime_analytics)}{_futures_accounting_panel(futures_equity, futures_closed_trades)}{_futures_panel(futures_trades)}{_performance_panel(performance)}{_baseline_comparison_panel(baseline_comparisons)}{_recommendations_panel(recommendations)}</section>
-    <section class="page {_active_page(initial_page, 'logs')}" id="logs"><div class="panel"><div class="activity">{_logs(logs)}</div></div></section>
-    <section class="page {_active_page(initial_page, 'settings')}" id="settings">{_health_panel(health)}<div class="panel"><div class="panel-head"><div class="panel-title">Connection events</div></div><div class="activity">{_logs(logs[:5])}</div></div></section>
-  </div>
-</main>
-</div>
-{_drawer()}
-{_modal()}
-<script>
-let env='live';
-const setData={_script_json(_set_data(trigger_sets))};
-{_script()}
-</script>
-""",
+    operator_control_token = getattr(read_model, "operator_control_token", "")
+    return render_product_dashboard(
+        initial_page=initial_page,
+        operator_state=operator_state,
+        operator_control_token=operator_control_token,
     )
 
 
+
 def render_not_found(value: str) -> str:
-    return _page("Not Found", f"<div class='content'><div class='panel'><div class='panel-head'><div class='panel-title'>Not Found</div></div><div class='activity'>{_h(value)}</div></div></div>")
+    from triggertrade.dashboard.product_ui import render_product_not_found
+
+    return render_product_not_found(value)
 
 
 def create_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, db_path: str | Path = "runtime/triggertrade_paper.sqlite3") -> DashboardServer:
@@ -240,121 +210,6 @@ def main() -> int:
         server.server_close()
     return 0
 
-def _active_page(current: str, expected: str) -> str:
-    return "active" if current == expected else ""
-
-
-def _active_tab(current: str, expected: str) -> str:
-    return "active" if current == expected else ""
-
-
-def _env_switch_style(current: str) -> str:
-    return "" if current == "overview" else " style=\"display:none\""
-
-def _overview_section(element_id, overview, open_orders, closed_trades, trace, is_live: bool, current_regime=None, equity=None, position=None, operator_state=None) -> str:
-    style = "" if is_live else ' style="display:none"'
-    lane = "LIVE" if is_live else "TEST"
-    lane_sub = "ACTIVE Bybit Demo Linear Perpetual" if is_live else "Local Futures Simulation"
-    rule_label = "ACTIVE Set" if is_live else "Testing Set"
-    regime_value = "unavailable" if current_regime is None else current_regime.state
-    operator_value = "UNKNOWN" if operator_state is None else operator_state.state.replace("TRADING_", "")
-    return (
-        f"<div id=\"{element_id}\"{style}>"
-        f"<div class=\"context-strip\"><span class=\"badge {'live' if is_live else 'test'}\">{lane}</span>"
-        f"<span>Bybit Demo</span><span>Linear Perpetual</span><span>BTCUSDT</span><span>1m</span>"
-        f"<span>{_h(rule_label)}: {_h(overview.rule_set)}</span><span>Regime: {_h(regime_value)}</span></div>"
-        f"<div class=\"cards kpi-scroll\">{_account_cards(equity, closed_trades, open_orders, is_live, operator_value)}</div>"
-        f"{_lane_summary_panel(overview, lane_sub, operator_value, current_regime)}"
-        f"{_market_regime_panel(current_regime)}"
-        f"{_positions_panel(position, is_live)}"
-        f"{_closed_trades_panel(closed_trades, is_live)}"
-        f"{_open_futures_orders_panel(open_orders) if is_live else ''}"
-        f"{_trace_panel(trace, is_live)}"
-        "</div>"
-    )
-
-
-def _account_cards(equity, closed_trades, open_orders, is_live: bool, operator_value: str) -> str:
-    if equity is None:
-        values = {
-            "Balance": "unavailable",
-            "Equity": "unavailable",
-            "Available margin": "unavailable",
-            "Open exposure": "unavailable",
-            "Realized P&L": "unavailable",
-            "Unrealized P&L": "unavailable",
-            "Fees": _sum_closed_fees(closed_trades),
-            "Funding": _sum_closed_field(closed_trades, "funding"),
-            "Max drawdown": "unavailable",
-        }
-        source = "No authoritative equity snapshot" if is_live else "TEST simulation evidence only"
-    else:
-        values = {
-            "Balance": equity.wallet_balance,
-            "Equity": equity.equity,
-            "Available margin": equity.available_margin,
-            "Open exposure": equity.used_margin,
-            "Realized P&L": equity.realized_pnl,
-            "Unrealized P&L": equity.unrealized_pnl,
-            "Fees": _sum_closed_fees(closed_trades),
-            "Funding": _sum_closed_field(closed_trades, "funding"),
-            "Max drawdown": equity.max_drawdown,
-        }
-        source = f"{equity.source} | Accounting v1"
-    cards = [
-        f"<div class='card'><div class='label'>{_h(label)}</div><div class='value'>{_h(value)}</div><div class='sub'>{_h(source if label in {'Balance','Equity'} else ('ACTIVE executions blocked' if operator_value == 'PAUSED' and is_live else 'backend fact or unavailable'))}</div></div>"
-        for label, value in values.items()
-    ]
-    return "".join(cards)
-
-
-def _sum_closed_field(rows, field: str) -> str:
-    if not rows:
-        return "unavailable"
-    try:
-        from decimal import Decimal
-
-        return str(sum((Decimal(str(getattr(row, field))) for row in rows), Decimal("0")))
-    except Exception:
-        return "unavailable"
-
-
-def _sum_closed_fees(rows) -> str:
-    if not rows:
-        return "unavailable"
-    return "accounting fact"
-
-
-def _lane_summary_panel(overview, lane_sub: str, operator_value: str, current_regime) -> str:
-    regime = "unavailable" if current_regime is None else current_regime.state
-    return (
-        "<div class='panel'><div class='panel-head'><div><div class='panel-title'>Runtime Summary</div>"
-        f"<div class='panel-meta'>{_h(lane_sub)} | read-only dashboard</div></div>{_status_badge(operator_value)}</div>"
-        "<div class='activity'>"
-        f"{_trace_row('Rule set', overview.rule_set, str(overview.rules_count) + ' rules')}"
-        f"{_trace_row('Last candle', overview.latest_candle, 'completed candle checkpoint')}"
-        f"{_trace_row('Last signal', overview.latest_signal, 'NO_SIGNAL is normal')}"
-        f"{_trace_row('Last execution', overview.last_execution, str(overview.trades_count) + ' visible records')}"
-        f"{_trace_row('Market regime', regime, 'CTX-REGIME@0.1.0')}"
-        "</div></div>"
-    )
-def _market_regime_panel(current_regime) -> str:
-    if current_regime is None:
-        return "<div class='panel'><div class='panel-head'><div><div class='panel-title'>Market regime</div><div class='panel-meta'>CTX-REGIME@0.1.0 context, read-only</div></div><span class='badge gray'>unavailable</span></div></div>"
-    return (
-        "<div class='panel'><div class='panel-head'><div>"
-        "<div class='panel-title'>Market regime</div>"
-        f"<div class='panel-meta'>{_h(current_regime.rule)} | {_h(current_regime.symbol)} {_h(current_regime.timeframe)} | {_h(current_regime.observed_at)}</div>"
-        "</div>"
-        f"{_status_badge(current_regime.state)}</div>"
-        "<div class='activity'>"
-        f"{_trace_row('window_return_pct', current_regime.window_return_pct, current_regime.reason)}"
-        f"{_trace_row('normalized_trend', current_regime.normalized_trend, 'volatility-normalized')}"
-        f"{_trace_row('directional_persistence', current_regime.directional_persistence, 'flat steps counted')}"
-        "</div></div>"
-    )
-
-
 def _operator_controls(state, token: str = "") -> str:
     if state is None:
         state = type("OperatorState", (), {"state": "TRADING_ENABLED"})()
@@ -368,10 +223,10 @@ def _operator_controls(state, token: str = "") -> str:
             "</form><span class='badge amber'>PAUSED</span>"
         )
     return (
-        "<form method='post' action='/operator/pause' onsubmit=\"return confirmStopTrading()\">"
+        "<form method='post' action='/operator/pause' onsubmit=\"return confirmPauseEntries()\">"
         "<input type='hidden' name='confirm' value='yes'>"
         f"{token_input}"
-        "<button class='utility-btn stop-btn' type='submit'>STOP TRADING</button>"
+        "<button class='utility-btn stop-btn' type='submit'>Pause Entries</button>"
         "</form><span class='badge green'>ENABLED</span>"
     )
 
@@ -474,8 +329,8 @@ def render_rule_detail(detail) -> str:
     return _page(
         f"{rule.get('rule_id')} {rule.get('version')}",
         f"""
-<div class="app"><main class="main"><div class="toolbar"><div class="container toolbar-inner"><a class="brand-top" href="/">TriggerTrade</a><div class="utility-actions"><a class="utility-btn" href="/">Overview</a></div></div></div>
-<div class="tabsbar"><div class="container tabsbar-inner"><div class="tabs"><a class="tabbtn active" href="/rules/{_h(rule.get('rule_id'))}/{_h(rule.get('version'))}">Rule Detail</a><a class="tabbtn" href="/">Registry</a></div></div></div>
+<div class="app"><main class="main"><div class="toolbar"><div class="container toolbar-inner"><a class="brand-top" href="/">TriggerTrade</a><div class="utility-actions"><a class="utility-btn" href="/portfolio">Portfolio</a></div></div></div>
+<div class="tabsbar"><div class="container tabsbar-inner"><div class="tabs"><a class="tabbtn active" href="/rules/{_h(rule.get('rule_id'))}/{_h(rule.get('version'))}">Rule Detail</a><a class="tabbtn" href="/trigger-catalog">Trigger Catalog</a></div></div></div>
 <div class="content container">
   <section class="panel"><div class="panel-head"><div><div class="panel-title">{_h(rule.get('name'))}</div><div class="panel-meta mono">{_h(rule.get('rule_id'))} @ {_h(rule.get('version'))}</div></div>{_status_badge(str(rule.get('status')))}</div><div class="section"><div class="set-detail">{_kv('Rule ID', rule.get('rule_id'))}{_kv('Version', rule.get('version'))}{_kv('Type', rule.get('rule_type'))}{_kv('Scope', rule.get('asset_scope'))}{_kv('Created', _compact(rule.get('created_at')))}{_kv('Provenance', rule.get('provenance'))}</div></div></section>
   {_definition_panel('Purpose', rule.get('condition'))}
@@ -501,8 +356,8 @@ def render_trade_detail(detail: dict) -> str:
     return _page(
         f"Trade {_short(detail.get('trade_id'))}",
         f"""
-<div class="app"><main class="main"><div class="toolbar"><div class="container toolbar-inner"><a class="brand-top" href="/">TriggerTrade</a><div class="utility-actions"><a class="utility-btn" href="/">Overview</a><a class="utility-btn" href="/analytics">Analytics</a></div></div></div>
-<div class="tabsbar"><div class="container tabsbar-inner"><div class="tabs"><a class="tabbtn active" href="/trades/{_h(detail.get('trade_id'))}">Trade Detail</a><a class="tabbtn" href="/">Dashboard</a></div></div></div>
+<div class="app"><main class="main"><div class="toolbar"><div class="container toolbar-inner"><a class="brand-top" href="/">TriggerTrade</a><div class="utility-actions"><a class="utility-btn" href="/portfolio">Portfolio</a><a class="utility-btn" href="/research">Research</a></div></div></div>
+<div class="tabsbar"><div class="container tabsbar-inner"><div class="tabs"><a class="tabbtn active" href="/trades/{_h(detail.get('trade_id'))}">Trade Detail</a><a class="tabbtn" href="/portfolio">Portfolio</a></div></div></div>
 <div class="content container">
   <section class="panel"><div class="panel-head"><div><div class="panel-title">{_h(detail.get('symbol'))} {_h(detail.get('direction'))}</div><div class="panel-meta mono">{_h(detail.get('trade_id'))}</div></div>{_status_badge(detail.get('evidence_source') or 'unknown')}</div><div class="section"><div class="set-detail">{_kv('Opened', _compact(detail.get('opened_at')))}{_kv('Closed', _compact(detail.get('closed_at')))}{_kv('Duration', str(detail.get('duration_seconds')) + 's')}{_kv('Quantity', detail.get('quantity'))}{_kv('Leverage', str(detail.get('leverage')) + 'x')}{_kv('Trigger Set', detail.get('trigger_set'))}{_kv('Regime', detail.get('regime_label') or 'unavailable')}{_kv('Simulation model', detail.get('simulation_model_version') or '-')}</div></div></section>
   <section class="panel"><div class="panel-head"><div><div class="panel-title">Accounting</div><div class="panel-meta">Backend accounting facts only; no frontend P&amp;L calculations.</div></div></div><div class="section"><div class="set-detail">{_kv('Entry VWAP', detail.get('entry_vwap'))}{_kv('Exit VWAP', detail.get('exit_vwap'))}{_kv('Gross P&L', detail.get('gross_pnl'))}{_kv('Fees', detail.get('fees'))}{_kv('Funding', detail.get('funding'))}{_kv('Net P&L', detail.get('net_pnl'))}{_kv('Entry slippage', detail.get('entry_slippage_cost') or 'unavailable')}{_kv('Exit slippage', detail.get('exit_slippage_cost') or 'unavailable')}{_kv('Accounting version', detail.get('accounting_version'))}</div></div></section>
@@ -518,8 +373,8 @@ def render_recommendation_detail(detail) -> str:
     return _page(
         str(rec.get("title", "Recommendation")),
         f"""
-<div class="app"><main class="main"><div class="toolbar"><div class="container toolbar-inner"><a class="brand-top" href="/">TriggerTrade</a><div class="utility-actions"><a class="utility-btn" href="/">Analytics</a></div></div></div>
-<div class="tabsbar"><div class="container tabsbar-inner"><div class="tabs"><a class="tabbtn active" href="/recommendations/{_h(rec.get('recommendation_id'))}">Recommendation</a><a class="tabbtn" href="/">Overview</a></div></div></div>
+<div class="app"><main class="main"><div class="toolbar"><div class="container toolbar-inner"><a class="brand-top" href="/">TriggerTrade</a><div class="utility-actions"><a class="utility-btn" href="/research">Research</a></div></div></div>
+<div class="tabsbar"><div class="container tabsbar-inner"><div class="tabs"><a class="tabbtn active" href="/recommendations/{_h(rec.get('recommendation_id'))}">Recommendation</a><a class="tabbtn" href="/portfolio">Portfolio</a></div></div></div>
 <div class="content container">
   <section class="panel"><div class="panel-head"><div><div class="panel-title">{_h(rec.get('title'))}</div><div class="panel-meta mono">{_h(rec.get('recommendation_id'))}</div></div>{_status_badge(str(rec.get('status')))}</div><div class="section"><div class="set-detail">{_kv('Created', _compact(rec.get('created_at')))}{_kv('Resulting test set', linked)}{_kv('Decision', rec.get('decision') or '-')}</div></div></section>
   {_definition_panel('Observation', rec.get('observation'))}
@@ -529,7 +384,7 @@ def render_recommendation_detail(detail) -> str:
   {_definition_panel('Proposed Rule Version', rec.get('proposed_rule_changes'))}
   {_definition_panel('Proposed Trigger Set', rec.get('proposed_trigger_set_definition'))}
   {_definition_panel('Test Requirements', {'minimum_test_duration': rec.get('minimum_test_duration'), 'minimum_sample_size': rec.get('minimum_sample_size')})}
-  {_definition_panel('Evaluation', rec.get('evaluation_summary') or 'Pending forward evidence.')}
+  {_definition_panel('Evaluation', rec.get('evaluation_summary') or 'Pending Demo evidence.')}
 </div></main></div>
 """,
     )
@@ -542,8 +397,8 @@ def render_backtest_detail(detail: dict) -> str:
     return _page(
         f"Backtest {_short(detail.get('run_id'))}",
         f"""
-<div class="app"><main class="main"><div class="toolbar"><div class="container toolbar-inner"><a class="brand-top" href="/">TriggerTrade</a><div class="utility-actions"><a class="utility-btn" href="/analytics">Analytics</a></div></div></div>
-<div class="tabsbar"><div class="container tabsbar-inner"><div class="tabs"><a class="tabbtn active" href="/backtests/{_h(detail.get('run_id'))}">Backtest Detail</a><a class="tabbtn" href="/analytics">Historical Tests</a></div></div></div>
+<div class="app"><main class="main"><div class="toolbar"><div class="container toolbar-inner"><a class="brand-top" href="/">TriggerTrade</a><div class="utility-actions"><a class="utility-btn" href="/research">Research</a></div></div></div>
+<div class="tabsbar"><div class="container tabsbar-inner"><div class="tabs"><a class="tabbtn active" href="/backtests/{_h(detail.get('run_id'))}">Backtest Detail</a><a class="tabbtn" href="/research">Research</a></div></div></div>
 <div class="content container">
   <section class="panel"><div class="panel-head"><div><div class="panel-title">Historical Replay Detail</div><div class="panel-meta">Read-only BACKTEST evidence; no private/order API calls and no auto-promotion.</div></div>{_status_badge(str(detail.get('status', 'UNKNOWN')))}</div><div class="section"><div class="set-detail">{_kv('Run', detail.get('run_id'))}{_kv('Set', str(run.get('trigger_set_id', '-')) + '@' + str(run.get('trigger_set_version', '-')))}{_kv('Period', str(run.get('period_start', '-')) + ' -> ' + str(run.get('period_end', '-')))}{_kv('Warmup', str(run.get('warmup_start', '-')) + ' -> ' + str(run.get('evaluation_start', '-')))}{_kv('Rules', rules)}{_kv('Strategy', run.get('strategy_version'))}{_kv('Regime', run.get('regime_version'))}{_kv('Risk', run.get('risk_profile_version'))}{_kv('Simulator', run.get('simulation_model_version'))}{_kv('Cost model', run.get('cost_model_version'))}{_kv('Funding model', run.get('funding_model_version'))}{_kv('Accounting', run.get('accounting_version'))}{_kv('Data source', run.get('data_source_version'))}{_kv('Cache hash', run.get('data_cache_hash'))}{_kv('No-lookahead', 'decision after candle t; earliest fill on candle t+1')}</div></div></section>
   <section class="panel"><div class="panel-head"><div><div class="panel-title">Result Summary</div><div class="panel-meta">Backend replay/accounting/performance facts only.</div></div></div><div class="section"><div class="set-detail">{_kv('Candles processed', result.get('candles_processed'))}{_kv('Signals', result.get('signals'))}{_kv('Intents', result.get('intents'))}{_kv('Closed trades', result.get('closed_trades'))}{_kv('Net P&L', result.get('net_pnl'))}{_kv('Expectancy', result.get('expectancy'))}{_kv('Profit factor', result.get('profit_factor'))}{_kv('Fees', result.get('fees'))}{_kv('Funding', result.get('funding'))}{_kv('LONG / SHORT', str(result.get('long_trades', 0)) + ' / ' + str(result.get('short_trades', 0)))}{_kv('Technical failures', result.get('technical_failures'))}</div></div></section>
@@ -689,7 +544,7 @@ def _set_data(rows) -> dict[str, dict[str, object]]:
 
 
 def _script() -> str:
-    return r"""const envPages=new Set(['overview']);function showPage(id){document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));document.getElementById(id).classList.add('active');document.querySelectorAll('.tabbtn').forEach(x=>x.classList.toggle('active',x.dataset.page===id));document.getElementById('envSwitch').style.display=envPages.has(id)?'inline-flex':'none';renderEnv()}document.querySelectorAll('.tabbtn').forEach(b=>b.addEventListener('click',()=>showPage(b.dataset.page)));function setEnv(next){env=next;liveBtn.className=next==='live'?'active live':'';testBtn.className=next==='test'?'active test':'';renderEnv()}function renderEnv(){document.getElementById('liveOverview').style.display=env==='live'?'block':'none';document.getElementById('testOverview').style.display=env==='test'?'block':'none'}function filterRules(){const q=ruleSearch.value.toLowerCase(),s=statusFilter.value;document.querySelectorAll('#rulesTable tbody tr').forEach(tr=>{tr.style.display=(tr.innerText.toLowerCase().includes(q)&&(s==='all'||tr.dataset.status===s))?'':'none'})}function filterSets(){const s=document.getElementById('setStatusFilter').value;document.querySelectorAll('#setsTable tbody tr,#setsMobile .mcard').forEach(tr=>{tr.style.display=(s==='all'||tr.dataset.status===s)?'':'none'})}function toggleEvidence(key){document.querySelectorAll('[data-evidence="'+key+'"]').forEach(row=>row.classList.toggle('open'))}function confirmStopTrading(){return confirm('Stop new trades?\n\nNew ACTIVE executions will be blocked.\nTesting, analytics and reconciliation will continue.')}function confirmResumeTrading(){return confirm('Resume new ACTIVE executions?\n\nTesting, analytics and reconciliation will continue.')}async function copyData(){const txt=document.body.innerText;try{await navigator.clipboard.writeText(txt);alert('Copied')}catch(e){prompt('Copy:',txt)}}function openSet(name){const s=setData[name];if(!s)return;setTitle.textContent=s.version;setBadge.textContent=s.status;setBadge.className='badge '+s.cls;setVersion.textContent=s.version;setCount.textContent=s.count;setPurpose.textContent=s.purpose;setCreated.textContent=s.created;setRules.replaceChildren(...(s.rules.length?s.rules.map(r=>{const d=document.createElement('div');d.className='set-rule';const id=document.createElement('span');id.className='mono';id.textContent=r[0];const condition=document.createElement('span');condition.textContent=r[1];d.append(id,condition);return d;}):[Object.assign(document.createElement('div'),{className:'muted',textContent:'No rules recorded'})]));setDrawerBg.classList.add('open')}function closeSetDrawer(){setDrawerBg.classList.remove('open')}function openFullList(kind){modalTitle.textContent=kind==='trades'?'Trades':'Positions';listModalBg.classList.add('open')}function closeModal(){listModalBg.classList.remove('open')}renderEnv();"""
+    return r"""const envPages=new Set(['overview']);function showPage(id){document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));document.getElementById(id).classList.add('active');document.querySelectorAll('.tabbtn').forEach(x=>x.classList.toggle('active',x.dataset.page===id));document.getElementById('envSwitch').style.display=envPages.has(id)?'inline-flex':'none';renderEnv()}document.querySelectorAll('.tabbtn').forEach(b=>b.addEventListener('click',()=>showPage(b.dataset.page)));function setEnv(next){env=next;liveBtn.className=next==='live'?'active live':'';testBtn.className=next==='test'?'active test':'';renderEnv()}function renderEnv(){document.getElementById('liveOverview').style.display=env==='live'?'block':'none';document.getElementById('testOverview').style.display=env==='test'?'block':'none'}function filterRules(){const q=ruleSearch.value.toLowerCase(),s=statusFilter.value;document.querySelectorAll('#rulesTable tbody tr').forEach(tr=>{tr.style.display=(tr.innerText.toLowerCase().includes(q)&&(s==='all'||tr.dataset.status===s))?'':'none'})}function filterSets(){const s=document.getElementById('setStatusFilter').value;document.querySelectorAll('#setsTable tbody tr,#setsMobile .mcard').forEach(tr=>{tr.style.display=(s==='all'||tr.dataset.status===s)?'':'none'})}function toggleEvidence(key){document.querySelectorAll('[data-evidence="'+key+'"]').forEach(row=>row.classList.toggle('open'))}function confirmPauseEntries(){return confirm('Pause new entries?\n\nNew ACTIVE executions will be blocked.\nTesting, analytics and reconciliation will continue.')}function confirmResumeTrading(){return confirm('Resume new ACTIVE executions?\n\nTesting, analytics and reconciliation will continue.')}async function copyData(){const txt=document.body.innerText;try{await navigator.clipboard.writeText(txt);alert('Copied')}catch(e){prompt('Copy:',txt)}}function openSet(name){const s=setData[name];if(!s)return;setTitle.textContent=s.version;setBadge.textContent=s.status;setBadge.className='badge '+s.cls;setVersion.textContent=s.version;setCount.textContent=s.count;setPurpose.textContent=s.purpose;setCreated.textContent=s.created;setRules.replaceChildren(...(s.rules.length?s.rules.map(r=>{const d=document.createElement('div');d.className='set-rule';const id=document.createElement('span');id.className='mono';id.textContent=r[0];const condition=document.createElement('span');condition.textContent=r[1];d.append(id,condition);return d;}):[Object.assign(document.createElement('div'),{className:'muted',textContent:'No rules recorded'})]));setDrawerBg.classList.add('open')}function closeSetDrawer(){setDrawerBg.classList.remove('open')}function openFullList(kind){modalTitle.textContent=kind==='trades'?'Trades':'Positions';listModalBg.classList.add('open')}function closeModal(){listModalBg.classList.remove('open')}renderEnv();"""
 
 
 def _status_badge(status: str) -> str:
@@ -742,6 +597,7 @@ def _h(value: object) -> str:
     if any(token in lower for token in ("bybit_api_secret", "bybit_api_key", "authorization:", "x-bapi-api-key", "paste_your")):
         return "[redacted]"
     return escape(text, quote=True)
+
 
 
 if __name__ == "__main__":

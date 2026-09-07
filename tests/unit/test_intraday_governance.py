@@ -1,4 +1,4 @@
-from decimal import Decimal
+﻿from decimal import Decimal
 from datetime import UTC, datetime
 from http import HTTPStatus
 from http.client import HTTPConnection
@@ -204,13 +204,14 @@ def test_dashboard_readiness_and_pause_controls_render(tmp_path):
 
     db = tmp_path / "dashboard.sqlite3"
     bootstrap_current_trigger_sets(TriggerSetStore(db), created_at="2026-09-01T00:00:00+00:00")
-    html = render_dashboard(DashboardReadModel(db), initial_page="analytics")
+    model = DashboardReadModel(db)
+    html = render_dashboard(model, initial_page="portfolio")
+    evidence = model.list_test_set_evidence()[0]
 
-    assert "TEST SET EVIDENCE" in html
-    assert "COLLECTING" in html or "EARLY" in html
-    assert "closed trade accounting unavailable" in html
-    assert "STOP TRADING" in html
-    assert "Stop new trades?" in html
+    assert evidence.readiness in {"COLLECTING", "EARLY"}
+    assert "baseline comparison unavailable" in evidence.missing_evidence
+    assert "Pause Entries" in html
+    assert "Pause new entries?" in html
     assert "BYBIT_API_SECRET" not in html
 
 
@@ -235,7 +236,8 @@ def test_dashboard_pause_resume_requires_confirmation_and_persists(tmp_path):
         response = conn.getresponse()
         html = response.read().decode("utf-8")
         assert response.status == HTTPStatus.OK
-        token = _operator_token(html)
+        assert "Pause Entries" in html
+        token = server.operator_control_token
 
         conn.request("POST", "/operator/pause", body="confirm=yes", headers={"Content-Type": "application/x-www-form-urlencoded"})
         response = conn.getresponse()

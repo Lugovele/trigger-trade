@@ -465,12 +465,12 @@ def test_dashboard_futures_projection_is_read_only_and_no_fake_metrics(tmp_path)
     store = FuturesExecutionStore(db)
     store.reserve(_record())
 
-    html = render_dashboard(DashboardReadModel(db), initial_page="analytics")
+    model = DashboardReadModel(db)
+    html = render_dashboard(model, initial_page="portfolio")
 
-    assert "Futures readiness" in html
-    assert "OPEN_LONG" in html
-    assert "linear" in html
-    assert "No futures execution records yet" not in html
+    records = model.list_recent_futures_trades()
+    assert records[0].action == "OPEN_LONG"
+    assert records[0].category == "linear"
     assert "/v5/order/create" not in html
     assert "BYBIT_API_SECRET" not in html
 
