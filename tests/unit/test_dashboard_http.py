@@ -258,6 +258,46 @@ def test_detail_routes_remain_available_for_existing_read_model_pages(tmp_path):
         thread.join(timeout=2)
 
 
+def test_trigger_registry_routes_use_exact_identity_and_no_fixture_fallback(tmp_path):
+    from triggertrade.persistence import TriggerSetStore, bootstrap_current_trigger_sets
+
+    db = tmp_path / "dashboard.sqlite3"
+    bootstrap_current_trigger_sets(TriggerSetStore(db), created_at="2026-09-05T00:00:00+00:00")
+    server = create_server(port=0, db_path=db)
+    host, port = server.server_address
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection(host, port, timeout=2)
+        conn.request("GET", "/triggers/TRG-002/0.2.0")
+        response = conn.getresponse()
+        detail = response.read().decode("utf-8")
+        assert response.status == 200
+        assert "Robust Volume Confirmation" in detail
+        assert "Version 0.2.0" in detail
+        assert "triggertrade-futures-candidate" in detail
+        assert "Set 1" not in _section(detail, 'id="trigger-detail"', 'id="rules"')
+
+        conn.request("GET", "/triggers/TRG-002/9.9.9")
+        missing = conn.getresponse()
+        body = missing.read().decode("utf-8")
+        assert missing.status == 404
+        assert "Traceback" not in body
+
+        conn.request("GET", "/set/triggertrade-futures-core/v1")
+        set_response = conn.getresponse()
+        assert set_response.status == 200
+
+        conn.request("GET", "/set/triggertrade-futures-core/v9")
+        missing_set = conn.getresponse()
+        missing_set.read()
+        assert missing_set.status == 404
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
 def test_dashboard_missing_detail_ids_are_safe_404(tmp_path):
     from triggertrade.persistence import TriggerSetStore, bootstrap_current_trigger_sets
 
@@ -311,8 +351,9 @@ def test_dashboard_routes_render_bootstrapped_registry_under_new_ia(tmp_path):
         sets = conn.getresponse()
         sets_html = sets.read().decode("utf-8")
         assert sets.status == 200
-        assert "Set 1" in sets_html
-        assert "Set 2" in sets_html
+        assert "Set 1" not in _section(sets_html, 'id="sets"', 'id="trigger-catalog"')
+        assert "triggertrade-futures-core" in sets_html
+        assert "triggertrade-futures-candidate" in sets_html
         assert "TRG-001" in sets_html
         assert "TRG-002" in sets_html
 
@@ -328,3 +369,9 @@ def test_dashboard_routes_render_bootstrapped_registry_under_new_ia(tmp_path):
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
+
+
+def _section(html: str, start: str, end: str) -> str:
+    start_index = html.index(start)
+    end_index = html.index(end, start_index + len(start))
+    return html[start_index:end_index]

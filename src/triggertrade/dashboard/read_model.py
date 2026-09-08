@@ -94,6 +94,52 @@ class TriggerSetRow:
 
 
 @dataclass(frozen=True)
+class TriggerSetMembershipView:
+    trigger_id: str
+    display_name: str
+    version: str
+
+
+@dataclass(frozen=True)
+class SetSummaryView:
+    set_id: str
+    display_name: str
+    version: str
+    status: str
+    trigger_versions: tuple[TriggerSetMembershipView, ...]
+    created_at: str | None
+    updated_at: str | None
+    is_active: bool
+    symbol: str
+    timeframe: str
+    integrity_errors: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class TriggerCatalogRow:
+    trigger_id: str
+    display_name: str
+    version: str
+    what_it_checks: str
+    created_at: str | None
+    immutable: bool
+
+
+@dataclass(frozen=True)
+class TriggerDetailView:
+    trigger_id: str
+    display_name: str
+    version: str
+    how_it_works: str
+    formula_text: str
+    parameters: tuple[dict[str, str], ...]
+    used_in: tuple[dict[str, str], ...]
+    version_history: tuple[dict[str, str], ...]
+    immutable: bool
+    unavailable_reason: str | None = None
+
+
+@dataclass(frozen=True)
 class RuleRow:
     rule_id: str
     name: str
@@ -782,6 +828,139 @@ class DashboardReadModel:
 
     def get_test_overview(self) -> OverviewView:
         return self._overview("TEST")
+
+    def list_set_summaries(self) -> tuple[SetSummaryView, ...]:
+        if not self.db_path.exists():
+            return ()
+        try:
+            with self._connect() as conn:
+                if not _registry_tables_present(conn):
+                    return ()
+                integrity = _active_integrity_errors(conn)
+                rows = conn.execute(
+                    """
+                    SELECT set_id, version, purpose, status, symbol, timeframe, created_at
+                    FROM trigger_set_versions
+                    ORDER BY
+                      CASE status
+                        WHEN 'ACTIVE' THEN 0
+                        WHEN 'TESTING' THEN 1
+                        WHEN 'DRAFT' THEN 2
+                        WHEN 'ARCHIVE' THEN 3
+                        WHEN 'ARCHIVED' THEN 3
+                        ELSE 4
+                      END,
+                      created_at DESC,
+                      set_id,
+                      version
+                    """
+                ).fetchall()
+                return tuple(
+                    SetSummaryView(
+                        set_id=row["set_id"],
+                        display_name=row["set_id"],
+                        version=row["version"],
+                        status=row["status"],
+                        trigger_versions=_trigger_memberships_for_set(conn, row["set_id"], row["version"]),
+                        created_at=row["created_at"],
+                        updated_at=None,
+                        is_active=row["status"] == "ACTIVE",
+                        symbol=row["symbol"],
+                        timeframe=row["timeframe"],
+                        integrity_errors=integrity,
+                    )
+                    for row in rows
+                )
+        except sqlite3.Error:
+            return ()
+
+    def list_trigger_catalog(self) -> tuple[TriggerCatalogRow, ...]:
+        if not self.db_path.exists():
+            return ()
+        try:
+            with self._connect() as conn:
+                if not _registry_tables_present(conn):
+                    return ()
+                rows = conn.execute(
+                    """
+                    SELECT rule_id, version, name, condition, created_at
+                    FROM rule_definitions
+                    WHERE rule_type = 'trigger'
+                    ORDER BY rule_id, version
+                    """
+                ).fetchall()
+                return tuple(
+                    TriggerCatalogRow(
+                        trigger_id=row["rule_id"],
+                        display_name=row["name"],
+                        version=row["version"],
+                        what_it_checks=row["condition"],
+                        created_at=row["created_at"],
+                        immutable=_trigger_version_is_used(conn, row["rule_id"], row["version"]),
+                    )
+                    for row in rows
+                )
+        except sqlite3.Error:
+            return ()
+
+    def get_trigger_detail(self, trigger_id: str, version: str | None = None) -> TriggerDetailView | None:
+        if not trigger_id or len(trigger_id) > 80 or (version is not None and len(version) > 40):
+            return None
+        if not self.db_path.exists():
+            return None
+        try:
+            with self._connect() as conn:
+                if not _registry_tables_present(conn):
+                    return None
+                if version is None:
+                    row = _fetch_optional(
+                        conn,
+                        """
+                        SELECT rule_id, version, name, condition, definition, created_at, updated_at, provenance
+                        FROM rule_definitions
+                        WHERE rule_id = ? AND rule_type = 'trigger'
+                        ORDER BY created_at DESC, version DESC
+                        LIMIT 1
+                        """,
+                        (trigger_id,),
+                    )
+                else:
+                    row = _fetch_optional(
+                        conn,
+                        """
+                        SELECT rule_id, version, name, condition, definition, created_at, updated_at, provenance
+                        FROM rule_definitions
+                        WHERE rule_id = ? AND version = ? AND rule_type = 'trigger'
+                        """,
+                        (trigger_id, version),
+                    )
+                if row is None:
+                    return None
+                definition = _json_dict(row["definition"])
+                return TriggerDetailView(
+                    trigger_id=row["rule_id"],
+                    display_name=row["name"],
+                    version=row["version"],
+                    how_it_works=_trigger_how_it_works(row, definition),
+                    formula_text=_trigger_formula_text(row, definition),
+                    parameters=_trigger_parameters(definition),
+                    used_in=_trigger_used_in(conn, row["rule_id"], row["version"]),
+                    version_history=_trigger_version_history(conn, row["rule_id"]),
+                    immutable=_trigger_version_is_used(conn, row["rule_id"], row["version"]),
+                )
+        except sqlite3.Error:
+            return None
+
+    def get_registry_integrity_errors(self) -> tuple[str, ...]:
+        if not self.db_path.exists():
+            return ()
+        try:
+            with self._connect() as conn:
+                if not _registry_tables_present(conn):
+                    return ()
+                return _active_integrity_errors(conn)
+        except sqlite3.Error:
+            return ("registry unavailable",)
 
     def list_trigger_sets(self) -> tuple[TriggerSetRow, ...]:
         if not self.db_path.exists():
@@ -1952,6 +2131,226 @@ def _decode_rule_row(row: sqlite3.Row) -> dict[str, Any]:
     value = _safe_dict(dict(row))
     value["definition"] = _json_value(value.get("definition"))
     return value
+
+
+def _registry_tables_present(conn: sqlite3.Connection) -> bool:
+    return _has_table(conn, "rule_definitions") and _has_table(conn, "trigger_set_versions") and _has_table(conn, "trigger_set_memberships")
+
+
+def _active_integrity_errors(conn: sqlite3.Connection) -> tuple[str, ...]:
+    rows = conn.execute(
+        """
+        SELECT symbol, timeframe, COUNT(*) AS active_count
+        FROM trigger_set_versions
+        WHERE status = 'ACTIVE'
+        GROUP BY symbol, timeframe
+        HAVING COUNT(*) > 1
+        ORDER BY symbol, timeframe
+        """
+    ).fetchall()
+    return tuple(
+        f"multiple ACTIVE trigger sets for {row['symbol']} {row['timeframe']}: {row['active_count']}"
+        for row in rows
+    )
+
+
+def _trigger_memberships_for_set(conn: sqlite3.Connection, set_id: str, version: str) -> tuple[TriggerSetMembershipView, ...]:
+    rows = conn.execute(
+        """
+        SELECT m.rule_id, m.rule_version, r.name, r.rule_type
+        FROM trigger_set_memberships m
+        LEFT JOIN rule_definitions r
+          ON r.rule_id = m.rule_id AND r.version = m.rule_version
+        WHERE m.set_id = ? AND m.set_version = ? AND COALESCE(r.rule_type, 'trigger') = 'trigger'
+        ORDER BY m.position
+        """,
+        (set_id, version),
+    ).fetchall()
+    return tuple(
+        TriggerSetMembershipView(
+            trigger_id=row["rule_id"],
+            display_name=row["name"] or row["rule_id"],
+            version=row["rule_version"],
+        )
+        for row in rows
+    )
+
+
+def _trigger_version_is_used(conn: sqlite3.Connection, trigger_id: str, version: str) -> bool:
+    row = _fetch_optional(
+        conn,
+        """
+        SELECT 1
+        FROM trigger_set_memberships
+        WHERE rule_id = ? AND rule_version = ?
+        LIMIT 1
+        """,
+        (trigger_id, version),
+    )
+    return row is not None
+
+
+def _trigger_used_in(conn: sqlite3.Connection, trigger_id: str, version: str) -> tuple[dict[str, str], ...]:
+    rows = conn.execute(
+        """
+        SELECT s.set_id, s.version, s.status, s.purpose
+        FROM trigger_set_memberships m
+        JOIN trigger_set_versions s
+          ON s.set_id = m.set_id AND s.version = m.set_version
+        WHERE m.rule_id = ? AND m.rule_version = ?
+        ORDER BY
+          CASE s.status
+            WHEN 'ACTIVE' THEN 0
+            WHEN 'TESTING' THEN 1
+            WHEN 'DRAFT' THEN 2
+            WHEN 'ARCHIVE' THEN 3
+            WHEN 'ARCHIVED' THEN 3
+            ELSE 4
+          END,
+          s.created_at DESC,
+          s.set_id,
+          s.version
+        """,
+        (trigger_id, version),
+    ).fetchall()
+    return tuple(
+        _safe_dict(
+            {
+                "set_id": row["set_id"],
+                "set_name": row["set_id"],
+                "set_version": row["version"],
+                "set_status": row["status"],
+                "purpose": row["purpose"],
+            }
+        )
+        for row in rows
+    )
+
+
+def _trigger_version_history(conn: sqlite3.Connection, trigger_id: str) -> tuple[dict[str, str], ...]:
+    rows = conn.execute(
+        """
+        SELECT version, created_at, condition, definition, provenance
+        FROM rule_definitions
+        WHERE rule_id = ? AND rule_type = 'trigger'
+        ORDER BY created_at DESC, version DESC
+        """,
+        (trigger_id,),
+    ).fetchall()
+    history: list[dict[str, str]] = []
+    for row in rows:
+        definition = _json_dict(row["definition"])
+        metadata = definition.get("_version_metadata") if isinstance(definition.get("_version_metadata"), dict) else {}
+        change = metadata.get("change_summary") or definition.get("change_summary") or row["condition"] or row["provenance"] or "unavailable"
+        history.append(
+            _safe_dict(
+                {
+                    "version": row["version"],
+                    "created_at": row["created_at"] or "unavailable",
+                    "change_summary": _human_text(change),
+                }
+            )
+        )
+    return tuple(history)
+
+
+def _trigger_how_it_works(row: sqlite3.Row, definition: dict[str, Any]) -> str:
+    metadata = definition.get("_version_metadata") if isinstance(definition.get("_version_metadata"), dict) else {}
+    return _human_text(
+        metadata.get("description")
+        or definition.get("description")
+        or definition.get("input_contract")
+        or row["condition"]
+        or "unavailable"
+    )
+
+
+def _trigger_formula_text(row: sqlite3.Row, definition: dict[str, Any]) -> str:
+    metadata = definition.get("_version_metadata") if isinstance(definition.get("_version_metadata"), dict) else {}
+    explicit = metadata.get("formula") or definition.get("formula")
+    if explicit:
+        return _human_text(explicit)
+    formula_keys = (
+        "condition",
+        "window_return_pct",
+        "avg_abs_step_return_pct",
+        "normalized_trend",
+        "directional_persistence",
+        "relative_volume",
+        "percentile_rank",
+        "median",
+        "boundary",
+        "missing_data",
+        "stale_data",
+    )
+    lines = [f"{key}: {_human_text(definition[key])}" for key in formula_keys if key in definition]
+    if lines:
+        return "\n".join(lines)
+    return _human_text(row["condition"] or "unavailable")
+
+
+def _trigger_parameters(definition: dict[str, Any]) -> tuple[dict[str, str], ...]:
+    metadata = definition.get("_version_metadata") if isinstance(definition.get("_version_metadata"), dict) else {}
+    snapshot = metadata.get("parameter_snapshot") or definition.get("parameter_snapshot")
+    if isinstance(snapshot, dict):
+        return tuple(
+            {"name": str(key), "value": _human_text(value), "meaning": "versioned parameter"}
+            for key, value in sorted(snapshot.items())
+        )
+    parameter_keys = (
+        "lookback_window",
+        "lookback_completed_candles",
+        "threshold_source",
+        "boundary",
+        "volume_unit",
+        "candidate_only",
+        "demo_only",
+        "open_long_regimes",
+        "open_short",
+        "timeframe",
+        "strong_uptrend",
+        "uptrend",
+        "strong_downtrend",
+        "downtrend",
+        "sideways",
+    )
+    rows = [
+        {"name": key, "value": _human_text(definition[key]), "meaning": _parameter_meaning(key)}
+        for key in parameter_keys
+        if key in definition
+    ]
+    return tuple(rows)
+
+
+def _parameter_meaning(key: str) -> str:
+    meanings = {
+        "lookback_window": "observation window",
+        "lookback_completed_candles": "completed candles required",
+        "threshold_source": "runtime configuration source",
+        "boundary": "inclusive/exclusive threshold behavior",
+        "volume_unit": "exchange volume unit",
+        "candidate_only": "candidate/test-only marker",
+        "demo_only": "demo-only marker",
+        "open_long_regimes": "strategy context accepted for long entries",
+        "open_short": "short-entry support status",
+        "timeframe": "evaluation timeframe",
+        "strong_uptrend": "regime threshold",
+        "uptrend": "regime threshold",
+        "strong_downtrend": "regime threshold",
+        "downtrend": "regime threshold",
+        "sideways": "fallback valid-window regime",
+    }
+    return meanings.get(key, "versioned definition field")
+
+
+def _human_text(value: Any) -> str:
+    if isinstance(value, dict):
+        return "; ".join(f"{key}={_human_text(item)}" for key, item in value.items()) or "unavailable"
+    if isinstance(value, (list, tuple)):
+        return ", ".join(_human_text(item) for item in value) or "unavailable"
+    if value is None or value == "":
+        return "unavailable"
+    return str(value)
 
 
 def _recommendation_row(row: sqlite3.Row) -> RecommendationRow:

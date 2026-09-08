@@ -128,7 +128,8 @@ def test_dashboard_startup_bootstraps_registry_before_read_only_render(tmp_path)
         server.server_close()
 
     model = server.read_model
-    assert "No Trigger Sets registered yet." not in html
+    sets_section = _html_section(html, 'id="sets"', 'id="trigger-catalog"')
+    assert "No Trigger Sets registered yet." not in sets_section
     assert "No rule registry records yet." not in html
     assert "No recommendations registered yet." not in html
     assert any(row.set_id == "triggertrade-core-candidate" and row.version == "v2-test" for row in model.list_trigger_sets())
@@ -173,6 +174,12 @@ def test_bootstrap_fails_closed_on_existing_candidate_set_semantic_mismatch(tmp_
 
     with pytest.raises(TriggerSetStoreError, match="immutable"):
         ensure_runtime_registry_initialized(db)
+
+
+def _html_section(html: str, start: str, end: str) -> str:
+    start_index = html.index(start)
+    end_index = html.index(end, start_index + len(start))
+    return html[start_index:end_index]
 
 
 def test_bootstrap_fails_closed_on_existing_recommendation_payload_mismatch(tmp_path):

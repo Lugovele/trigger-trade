@@ -116,6 +116,43 @@ def test_sets_catalog_and_trigger_detail_are_present_and_read_only(tmp_path):
     assert 'Testing</span>' not in html
 
 
+def test_sets_and_trigger_catalog_render_backend_registry_not_set_fixtures(tmp_path):
+    html = _html(tmp_path, initial_page="sets")
+    sets_section = _section(html, 'id="sets"', 'id="trigger-catalog"')
+    catalog_section = _section(html, 'id="trigger-catalog"', 'id="trigger-detail"')
+
+    assert "Set 1" not in sets_section
+    assert "Set 2" not in sets_section
+    assert "triggertrade-futures-core" in html
+    assert "triggertrade-futures-candidate" in html
+    assert "TRG-001" in html
+    assert "TRG-002" in html
+    assert "STR-FUT" not in catalog_section
+    assert "RSK-FUTURES" not in catalog_section
+    assert "TRG-003" not in catalog_section
+    assert "Trigger Catalog" in sets_section
+
+
+def test_trigger_detail_renders_backend_formula_used_in_and_history(tmp_path):
+    html = render_dashboard(
+        DashboardReadModel(_empty_db(tmp_path)),
+        initial_page="trigger-detail",
+        selected_trigger_id="TRG-002",
+        selected_trigger_version="0.2.0",
+    )
+    detail_section = _section(html, 'id="trigger-detail"', 'id="rules"')
+
+    assert "Robust Volume Confirmation" in detail_section
+    assert "Version 0.2.0" in detail_section
+    assert "linear relative_volume &gt;= 2.0 AND volume_percentile &gt;= 90" in detail_section
+    assert "lookback_completed_candles" in detail_section
+    assert "triggertrade-futures-candidate" in detail_section
+    assert "0.1.0" in detail_section
+    assert "0.2.0" in detail_section
+    assert "Set 1" not in detail_section
+    assert "TRG-003" not in detail_section
+
+
 def test_rules_current_history_and_read_only_version_detail(tmp_path):
     html = _html(tmp_path, initial_page="rules")
 
@@ -227,3 +264,9 @@ def test_operator_state_is_allowlisted_before_js_injection():
 
     assert 'TRADING_PAUSED";alert(1);//' not in html
     assert 'const operatorState = "TRADING_ENABLED";' in html
+
+
+def _section(html: str, start: str, end: str) -> str:
+    start_index = html.index(start)
+    end_index = html.index(end, start_index + len(start))
+    return html[start_index:end_index]

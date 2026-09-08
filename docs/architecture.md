@@ -181,6 +181,20 @@ Analytics facts must preserve evidence source. Exchange-derived accounting and
 TEST-lane simulation facts are not interchangeable; baseline comparisons are
 available only for like-for-like accounting samples.
 
+The production Sets and Trigger Catalog UI is backed by a registry read model
+over `rule_definitions`, `trigger_set_versions`, and
+`trigger_set_memberships`. The projection exposes exact Set Version identity,
+exact Trigger Version membership, trigger parameters, readable factual
+formula/logic metadata, exact Used In relationships, and factual version
+history. Trigger Catalog includes only records whose canonical rule type is
+`trigger`; strategy, risk, and context components remain members of Set
+Versions but are not presented as independent trigger catalog rows. Multiple
+ACTIVE sets for the same symbol/timeframe are reported as an integrity error
+rather than silently collapsed to one winner. Legacy or incomplete registry
+metadata is surfaced as unavailable/unknown, not replaced by dashboard
+fixtures. Used Trigger Versions remain immutable/read-only and the dashboard
+does not expose edit APIs.
+
 Portfolio is a read model over ACTIVE/live Demo portfolio state, not a second
 portfolio engine. It reads persisted account equity snapshots, futures position
 records, closed-position accounting records, and local operator state. `Total`

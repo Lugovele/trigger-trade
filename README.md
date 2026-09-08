@@ -59,7 +59,9 @@ process has no attached futures lifecycle execution bridge.
 
 The runtime now bootstraps versioned trigger sets and evaluates the current ACTIVE set alongside TESTING sets over the same completed candle. ACTIVE remains the only lane connected to paper execution. TEST lanes are persisted for comparison and dashboard visibility only; they do not submit Bybit orders or change trading configuration.
 
-Dashboard views show ACTIVE/TEST lane summaries, trigger set versions, rule registry details, runtime logs, and local-only read models. The interface intentionally keeps promotion and rule editing out of the UI. Financial values are displayed only when persisted by backend accounting.
+Dashboard Sets, Trigger Catalog, and Trigger Detail views are read-only projections over the canonical registry tables. They render exact `set_id + version` and `trigger_id + version` identities, trigger membership, Used In relationships, and factual version history from backend read models rather than frontend fixture rows. Trigger lifecycle status is not separate; lifecycle status belongs to Trigger Set versions. If registry metadata is missing or unavailable, the dashboard shows an explicit unavailable/empty state instead of fabricating a trigger version or historical usage.
+
+The interface intentionally keeps promotion, trigger editing, and rule editing out of the Sets/Trigger surfaces. Financial values are displayed only when persisted by backend accounting.
 
 ## Rule Analytics and Recommendations
 

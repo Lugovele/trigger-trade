@@ -59,10 +59,29 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._send_html(render_dashboard(self.server.read_model, initial_page=product_pages[parsed.path]))
             return
         if parsed.path.startswith("/set/"):
+            parts = [unquote(part) for part in parsed.path.strip("/").split("/")]
+            set_id = parts[1] if len(parts) > 1 else ""
+            version = parts[2] if len(parts) > 2 else ""
+            if not set_id or not version or self.server.read_model.get_trigger_set(set_id, version) is None:
+                self._send_html(render_not_found(parsed.path), HTTPStatus.NOT_FOUND)
+                return
             self._send_html(render_dashboard(self.server.read_model, initial_page="sets"))
             return
         if parsed.path.startswith("/triggers/"):
-            self._send_html(render_dashboard(self.server.read_model, initial_page="trigger-detail"))
+            parts = [unquote(part) for part in parsed.path.strip("/").split("/")]
+            trigger_id = parts[1] if len(parts) > 1 else ""
+            version = parts[2] if len(parts) > 2 else None
+            if self.server.read_model.get_trigger_detail(trigger_id, version) is None:
+                self._send_html(render_not_found(parsed.path), HTTPStatus.NOT_FOUND)
+                return
+            self._send_html(
+                render_dashboard(
+                    self.server.read_model,
+                    initial_page="trigger-detail",
+                    selected_trigger_id=trigger_id,
+                    selected_trigger_version=version,
+                )
+            )
             return
         if parsed.path.startswith("/rules-version/"):
             self._send_html(render_dashboard(self.server.read_model, initial_page="rules-version"))
@@ -247,7 +266,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
 
-def render_dashboard(read_model: DashboardReadModel, selected_set: str = "", initial_page: str = "portfolio") -> str:
+def render_dashboard(
+    read_model: DashboardReadModel,
+    selected_set: str = "",
+    initial_page: str = "portfolio",
+    *,
+    selected_trigger_id: str | None = None,
+    selected_trigger_version: str | None = None,
+) -> str:
     from triggertrade.dashboard.product_ui import render_product_dashboard
 
     operator_state = getattr(read_model, "get_operator_trading_state", lambda: None)()
@@ -267,11 +293,20 @@ def render_dashboard(read_model: DashboardReadModel, selected_set: str = "", ini
             ),
         },
     }
+    registry = {
+        "sets": read_model.list_set_summaries(),
+        "triggers": read_model.list_trigger_catalog(),
+        "selected_trigger": read_model.get_trigger_detail(selected_trigger_id, selected_trigger_version)
+        if selected_trigger_id
+        else None,
+        "integrity_errors": read_model.get_registry_integrity_errors(),
+    }
     return render_product_dashboard(
         initial_page=initial_page,
         operator_state=operator_state,
         operator_control_token=operator_control_token,
         portfolio=portfolio,
+        registry=registry,
     )
 
 

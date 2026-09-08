@@ -450,6 +450,108 @@ def test_rule_detail_and_recommendations_read_model(tmp_path):
     assert transitioned_rule.recommendations[0]["status"] == "EVALUATED"
 
 
+def test_set_summaries_are_backend_backed_with_exact_trigger_versions(tmp_path):
+    db = tmp_path / "read_model.sqlite3"
+    bootstrap_current_trigger_sets(TriggerSetStore(db), created_at="2026-09-05T00:00:00+00:00")
+    model = DashboardReadModel(db)
+
+    sets = model.list_set_summaries()
+    futures_active = next(row for row in sets if row.set_id == "triggertrade-futures-core" and row.version == "v1")
+    futures_candidate = next(row for row in sets if row.set_id == "triggertrade-futures-candidate" and row.version == "v2-test")
+
+    assert sets[0].status == "ACTIVE"
+    assert futures_active.is_active is True
+    assert tuple((row.trigger_id, row.display_name, row.version) for row in futures_active.trigger_versions) == (
+        ("TRG-001", "Percentage price move", "0.2.0"),
+    )
+    assert ("TRG-002", "0.2.0") in tuple((row.trigger_id, row.version) for row in futures_candidate.trigger_versions)
+    assert ("TRG-002", "0.1.0") not in tuple((row.trigger_id, row.version) for row in futures_candidate.trigger_versions)
+    assert not futures_active.integrity_errors
+
+
+def test_trigger_catalog_and_detail_are_exact_trigger_only_read_models(tmp_path):
+    db = tmp_path / "read_model.sqlite3"
+    bootstrap_current_trigger_sets(TriggerSetStore(db), created_at="2026-09-05T00:00:00+00:00")
+    model = DashboardReadModel(db)
+
+    catalog = model.list_trigger_catalog()
+    identities = {(row.trigger_id, row.version) for row in catalog}
+    detail_spot = model.get_trigger_detail("TRG-002", "0.1.0")
+    detail_futures = model.get_trigger_detail("TRG-002", "0.2.0")
+
+    assert ("TRG-001", "0.1.0") in identities
+    assert ("TRG-001", "0.2.0") in identities
+    assert ("TRG-002", "0.1.0") in identities
+    assert ("TRG-002", "0.2.0") in identities
+    assert all(not row.trigger_id.startswith("STR-") and not row.trigger_id.startswith("RSK-") for row in catalog)
+    assert detail_spot is not None
+    assert detail_futures is not None
+    assert detail_spot.version == "0.1.0"
+    assert detail_futures.version == "0.2.0"
+    assert detail_spot.used_in[0]["set_id"] == "triggertrade-core-candidate"
+    assert detail_futures.used_in[0]["set_id"] == "triggertrade-futures-candidate"
+    assert {row["version"] for row in detail_futures.version_history} == {"0.1.0", "0.2.0"}
+    assert detail_futures.immutable is True
+    assert any(row["name"] == "lookback_completed_candles" and row["value"] == "60" for row in detail_futures.parameters)
+
+
+def test_trigger_detail_missing_exact_version_does_not_fall_back_to_latest(tmp_path):
+    db = tmp_path / "read_model.sqlite3"
+    bootstrap_current_trigger_sets(TriggerSetStore(db), created_at="2026-09-05T00:00:00+00:00")
+
+    assert DashboardReadModel(db).get_trigger_detail("TRG-002", "9.9.9") is None
+
+
+def test_registry_integrity_reports_multiple_active_without_silent_winner(tmp_path):
+    db = tmp_path / "bad_registry.sqlite3"
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            """
+            CREATE TABLE rule_definitions (
+                rule_id TEXT, version TEXT, name TEXT, status TEXT, asset_scope TEXT,
+                rule_type TEXT, condition TEXT, definition TEXT, created_at TEXT,
+                updated_at TEXT, provenance TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE trigger_set_versions (
+                set_id TEXT, version TEXT, purpose TEXT, status TEXT, symbol TEXT,
+                timeframe TEXT, strategy_version TEXT, risk_profile_version TEXT,
+                config_snapshot TEXT, semantic_hash TEXT, created_at TEXT, provenance TEXT
+            )
+            """
+        )
+        conn.execute(
+            "CREATE TABLE trigger_set_memberships (set_id TEXT, set_version TEXT, rule_id TEXT, rule_version TEXT, position INTEGER)"
+        )
+        conn.executemany(
+            """
+            INSERT INTO trigger_set_versions (
+                set_id, version, purpose, status, symbol, timeframe, strategy_version,
+                risk_profile_version, config_snapshot, semantic_hash, created_at, provenance
+            ) VALUES (?, ?, ?, 'ACTIVE', 'BTCUSDT', '1m', 'STR@1', 'RSK@1', '{}', ?, '2026-09-05T00:00:00+00:00', 'unit')
+            """,
+            (("set-a", "v1", "first", "a"), ("set-b", "v1", "second", "b")),
+        )
+
+    rows = DashboardReadModel(db).list_set_summaries()
+
+    assert rows
+    assert rows[0].integrity_errors == ("multiple ACTIVE trigger sets for BTCUSDT 1m: 2",)
+
+
+def test_registry_read_models_are_empty_without_registry_tables(tmp_path):
+    db = tmp_path / "empty.sqlite3"
+    sqlite3.connect(db).close()
+    model = DashboardReadModel(db)
+
+    assert model.list_set_summaries() == ()
+    assert model.list_trigger_catalog() == ()
+    assert model.get_trigger_detail("TRG-001", "0.1.0") is None
+
+
 def test_set_performance_uses_supported_counts_only(tmp_path):
     db = tmp_path / "read_model.sqlite3"
     bootstrap_current_trigger_sets(TriggerSetStore(db), created_at="2026-09-05T00:00:00+00:00")
