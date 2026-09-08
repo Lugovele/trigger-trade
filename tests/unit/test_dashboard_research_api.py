@@ -1,4 +1,6 @@
 from http import HTTPStatus
+from decimal import Decimal
+import sqlite3
 
 from triggertrade.dashboard.__main__ import create_server, render_dashboard
 from triggertrade.dashboard.read_model import DashboardReadModel
@@ -142,6 +144,86 @@ def test_research_api_use_selection_updates_backend_summary_metrics(tmp_path):
         assert listed["selected_demo_trades"] == 5
         assert detail["backtests"][0]["selected_for_use"] is True
         assert detail["demos"][0]["selected_for_use"] is True
+    finally:
+        _stop(server, thread)
+
+
+def test_research_api_make_active_uses_backend_confirmed_exact_pair(tmp_path):
+    db, rules = _research_db(tmp_path)
+    current = rules.get_current_rules_version()
+    candidate_rules = rules.create_rules_version_from_current(
+        changes={"fixed_take_profit_pct": Decimal("0.016")},
+        created_source="unit",
+    ).rules
+    research, _created = ResearchStore(db).create_research(
+        set_id="triggertrade-futures-candidate",
+        set_version="v2-test",
+        rules_version_id=candidate_rules.rules_version_id,
+        rules_display_version=candidate_rules.version,
+        created_source="unit",
+    )
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "UPDATE trading_rules_current SET rules_version_id = ?, updated_at = ? WHERE scope = ?",
+            (current.rules_version_id, "2026-09-08T12:00:00+00:00", "LIVE"),
+        )
+    server = create_server(port=0, db_path=db)
+    host, port = server.server_address
+    thread = _start(server)
+    try:
+        result = _json_request(
+            host,
+            port,
+            "POST",
+            f"/api/research/{research.research_id}/decision/make-active",
+            {"token": server.operator_control_token},
+        )
+        detail = _json_request(host, port, "GET", f"/api/research/{research.research_id}")["research"]
+
+        assert result["blocked"] is False
+        assert result["research"]["decision"] == "MADE_ACTIVE"
+        assert result["research"]["promoted_set_version"] == "v2-test"
+        assert result["research"]["promoted_rules_version_id"] == candidate_rules.rules_version_id
+        assert detail["made_active_at"] is not None
+    finally:
+        _stop(server, thread)
+
+
+def test_research_api_make_active_blocked_state_is_factual(tmp_path):
+    db, rules = _research_db(tmp_path)
+    current = rules.get_current_rules_version()
+    research, _created = ResearchStore(db).create_research(
+        set_id="triggertrade-futures-candidate",
+        set_version="v2-test",
+        rules_version_id=current.rules_version_id,
+        rules_display_version=current.version,
+        created_source="unit",
+    )
+    demo = ResearchStore(db).add_demo_run(
+        research_id=research.research_id,
+        status=ResearchDemoStatus.RUNNING,
+        started_at="2026-09-08T12:00:00+00:00",
+        execution_scope_id="research-safe",
+        account_scope="research-account",
+    )
+    server = create_server(port=0, db_path=db)
+    host, port = server.server_address
+    thread = _start(server)
+    try:
+        result = _json_request(
+            host,
+            port,
+            "POST",
+            f"/api/research/{research.research_id}/decision/make-active",
+            {"token": server.operator_control_token},
+            expected=HTTPStatus.CONFLICT,
+        )
+
+        assert demo.status.value == "RUNNING"
+        assert result["blocked"] is True
+        assert result["research"]["decision"] == "MAKE_ACTIVE_BLOCKED"
+        assert result["research"]["made_active_at"] is None
+        assert result["research"]["promotion_result_metadata"] == {}
     finally:
         _stop(server, thread)
 

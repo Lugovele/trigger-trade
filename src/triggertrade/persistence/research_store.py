@@ -35,6 +35,7 @@ class ResearchDecision(StrEnum):
     NONE = "NONE"
     ARCHIVE = "ARCHIVE"
     MAKE_ACTIVE_BLOCKED = "MAKE_ACTIVE_BLOCKED"
+    MADE_ACTIVE = "MADE_ACTIVE"
 
 
 class ResearchBacktestStatus(StrEnum):
@@ -67,6 +68,13 @@ class ResearchRecord:
     decision_at: str | None
     archived_at: str | None
     made_active_at: str | None
+    promoted_set_id: str | None
+    promoted_set_version: str | None
+    promoted_rules_version_id: str | None
+    previous_active_set_id: str | None
+    previous_active_set_version: str | None
+    previous_rules_version_id: str | None
+    promotion_result_metadata: dict[str, Any]
     created_source: str
     schema_version: str
 
@@ -475,6 +483,13 @@ class ResearchStore:
                     decision_at TEXT,
                     archived_at TEXT,
                     made_active_at TEXT,
+                    promoted_set_id TEXT,
+                    promoted_set_version TEXT,
+                    promoted_rules_version_id TEXT,
+                    previous_active_set_id TEXT,
+                    previous_active_set_version TEXT,
+                    previous_rules_version_id TEXT,
+                    promotion_result_metadata TEXT NOT NULL DEFAULT '{}',
                     created_source TEXT NOT NULL,
                     schema_version TEXT NOT NULL,
                     UNIQUE(set_id, set_version, rules_version_id)
@@ -535,6 +550,13 @@ class ResearchStore:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_research_updated ON research_entities(updated_at DESC)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_research_backtests_created ON research_backtest_runs(created_at DESC)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_research_demo_created ON research_demo_runs(created_at DESC)")
+            _ensure_column(conn, "research_entities", "promoted_set_id", "TEXT")
+            _ensure_column(conn, "research_entities", "promoted_set_version", "TEXT")
+            _ensure_column(conn, "research_entities", "promoted_rules_version_id", "TEXT")
+            _ensure_column(conn, "research_entities", "previous_active_set_id", "TEXT")
+            _ensure_column(conn, "research_entities", "previous_active_set_version", "TEXT")
+            _ensure_column(conn, "research_entities", "previous_rules_version_id", "TEXT")
+            _ensure_column(conn, "research_entities", "promotion_result_metadata", "TEXT NOT NULL DEFAULT '{}'")
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path)
@@ -558,6 +580,13 @@ def _research_from_row(row: sqlite3.Row) -> ResearchRecord:
         decision_at=row["decision_at"],
         archived_at=row["archived_at"],
         made_active_at=row["made_active_at"],
+        promoted_set_id=row["promoted_set_id"],
+        promoted_set_version=row["promoted_set_version"],
+        promoted_rules_version_id=row["promoted_rules_version_id"],
+        previous_active_set_id=row["previous_active_set_id"],
+        previous_active_set_version=row["previous_active_set_version"],
+        previous_rules_version_id=row["previous_rules_version_id"],
+        promotion_result_metadata=_json_dict(row["promotion_result_metadata"]),
         created_source=row["created_source"],
         schema_version=row["schema_version"],
     )
@@ -660,6 +689,12 @@ def _jsonable(value: Any) -> Any:
     if value.__class__.__name__ == "Decimal":
         return str(value)
     return value
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+    columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in columns:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
 def _now() -> str:

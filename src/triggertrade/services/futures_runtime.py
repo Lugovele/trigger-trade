@@ -136,7 +136,8 @@ class FuturesDualLaneRuntime:
                     limit=70,
                 ).result
             )
-            active_set = self._trigger_set_store.get_active_set(self._config.futures_runtime.symbol, "1m")
+            active_pair = self._trigger_set_store.get_active_trading_pair(self._config.futures_runtime.symbol, "1m")
+            active_set = active_pair.trigger_set if active_pair is not None else None
             if active_set is not None:
                 self._recover_active_unresolved(instrument)
                 self._monitor_active_positions(instrument)
@@ -200,6 +201,7 @@ class FuturesDualLaneRuntime:
                     instrument=instrument,
                     candles=candles,
                     regime_context=regime_context,
+                    rules_version=active_pair.rules_version if active_pair is not None else None,
                 ),
             )
         test_results = tuple(
@@ -245,6 +247,7 @@ class FuturesDualLaneRuntime:
         instrument: FuturesInstrumentMetadata,
         candles,
         regime_context: MarketRegimeContext,
+        rules_version: TradingRulesVersion | None = None,
     ) -> RuntimeCycleResult:
         if trigger_set.status not in {TriggerSetStatus.ACTIVE, TriggerSetStatus.TESTING}:
             return RuntimeCycleResult(completed.candle_id, None, skipped_reason="set_not_eligible")
@@ -305,7 +308,7 @@ class FuturesDualLaneRuntime:
                 self._checkpoint_lane(lane, trigger_set, completed)
                 return RuntimeCycleResult(completed.candle_id, signal.signal_type.value, skipped_reason="volume_not_confirmed")
 
-        rules_version = self._trading_rules_service.get_current_rules_version()
+        rules_version = rules_version or self._trading_rules_service.get_current_rules_version()
         rules = rules_version.draft
         rules_skip = _rules_skip_reason(rules_version, event.symbol)
         if rules_skip is not None:
@@ -519,6 +522,7 @@ class FuturesDualLaneRuntime:
             expected_holding_overlap=Decimal("0"),
             estimated_funding_impact=rules.funding_cost,
         )
+        rules_evaluation = _rule_evaluation_snapshot(rules_version, sizing, account, daily_loss=daily_loss)
         risk = FuturesRiskManager(
             config=_execution_config(self._config),
             store=self._futures_execution_store,
@@ -537,7 +541,7 @@ class FuturesDualLaneRuntime:
             risk_decision_id=risk.risk_decision_id,
             regime_context=regime_context,
             rules_version_id=rules_version.rules_version_id,
-            rules_evaluation=_rule_evaluation_snapshot(rules_version, sizing, account, daily_loss=daily_loss),
+            rules_evaluation=rules_evaluation,
         )
         if not risk.approved:
             self._save_lane_lifecycle(
@@ -550,6 +554,8 @@ class FuturesDualLaneRuntime:
                 risk_decision_id=risk.risk_decision_id,
                 processed_at=self._clock().isoformat(),
                 regime_context=regime_context,
+                rules_version_id=rules_version.rules_version_id,
+                rules_evaluation=rules_evaluation,
             )
             self._checkpoint_lane(lane, trigger_set, completed)
             return RuntimeCycleResult(completed.candle_id, signal.signal_type.value, intent.intent_id, risk.risk_decision_id, False)
@@ -567,6 +573,8 @@ class FuturesDualLaneRuntime:
                 execution_intent_id=result.trade_id,
                 processed_at=self._clock().isoformat(),
                 regime_context=regime_context,
+                rules_version_id=rules_version.rules_version_id,
+                rules_evaluation=rules_evaluation,
             )
             self._checkpoint_lane(lane, trigger_set, completed)
             return RuntimeCycleResult(completed.candle_id, signal.signal_type.value, intent.intent_id, risk.risk_decision_id, True, "test_simulated")
@@ -605,6 +613,8 @@ class FuturesDualLaneRuntime:
                 processed_at=self._clock().isoformat() if status == "active_execution_paused" else None,
                 error=exc.__class__.__name__ if status != "active_execution_paused" else "operator_paused",
                 regime_context=regime_context,
+                rules_version_id=rules_version.rules_version_id,
+                rules_evaluation=rules_evaluation,
             )
             if status == "active_execution_paused":
                 self._checkpoint_lane(lane, trigger_set, completed)
@@ -622,6 +632,8 @@ class FuturesDualLaneRuntime:
                 execution_intent_id=record.intent_id,
                 error="execution_reconciliation_unknown",
                 regime_context=regime_context,
+                rules_version_id=rules_version.rules_version_id,
+                rules_evaluation=rules_evaluation,
             )
             return RuntimeCycleResult(completed.candle_id, signal.signal_type.value, intent.intent_id, risk.risk_decision_id, True, record.status.value, "execution_unknown")
 
@@ -636,6 +648,8 @@ class FuturesDualLaneRuntime:
             execution_intent_id=record.intent_id,
             processed_at=self._clock().isoformat(),
             regime_context=regime_context,
+            rules_version_id=rules_version.rules_version_id,
+            rules_evaluation=rules_evaluation,
         )
         self._checkpoint_lane(lane, trigger_set, completed)
         return RuntimeCycleResult(completed.candle_id, signal.signal_type.value, intent.intent_id, risk.risk_decision_id, True, None if record is None else record.status.value)

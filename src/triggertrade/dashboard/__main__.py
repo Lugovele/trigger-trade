@@ -267,14 +267,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     return
                 if len(parts) == 5 and parts[:2] == ["api", "research"] and parts[3] == "decision" and parts[4] == "make-active":
                     record = self.server.research_service.request_make_active(parts[2])
-                    self._send_json(
-                        {
-                            "research": _research_record_payload(record),
-                            "blocked": True,
-                            "reason": "make_active_activation_semantics_unapproved",
-                        },
-                        HTTPStatus.CONFLICT,
-                    )
+                    blocked = record.decision.value == "MAKE_ACTIVE_BLOCKED"
+                    self._send_json({"research": _research_record_payload(record), "blocked": blocked}, HTTPStatus.CONFLICT if blocked else HTTPStatus.OK)
                     return
             except (ResearchServiceError, ResearchStoreError, ValueError) as exc:
                 self._send_json({"error": _safe_public_error(exc)}, HTTPStatus.BAD_REQUEST)
@@ -764,6 +758,13 @@ def _research_record_payload(record) -> dict[str, object]:
         "decision_at": record.decision_at,
         "archived_at": record.archived_at,
         "made_active_at": record.made_active_at,
+        "promoted_set_id": record.promoted_set_id,
+        "promoted_set_version": record.promoted_set_version,
+        "promoted_rules_version_id": record.promoted_rules_version_id,
+        "previous_active_set_id": record.previous_active_set_id,
+        "previous_active_set_version": record.previous_active_set_version,
+        "previous_rules_version_id": record.previous_rules_version_id,
+        "promotion_result_metadata": record.promotion_result_metadata,
         "created_source": record.created_source,
         "schema_version": record.schema_version,
     }

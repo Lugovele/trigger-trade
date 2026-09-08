@@ -52,11 +52,13 @@ class SystemHistoryExporter:
         state = _call(self.read_model, "get_latest_runtime_state")
         operator = _call(self.read_model, "get_operator_trading_state")
         readiness = _call(self.read_model, "get_demo_readiness")
+        active_pair = _call(self.read_model, "get_active_trading_pair_payload")
         heartbeats = _call(self.read_model, "list_runtime_heartbeats") or ()
         lines = [
             f"generated_at: {_safe(generated_at)}",
             f"runtime_state: {_one_line(state)}",
             f"operator_state: {_one_line(operator)}",
+            f"active_pair: {_one_line(active_pair)}",
             f"demo_readiness: status={_safe(getattr(readiness, 'status', None))}",
         ]
         lines.extend(_row_lines("readiness_check", getattr(readiness, "checks", ()) or (), EXPORT_LIMITS["readiness_checks"]))

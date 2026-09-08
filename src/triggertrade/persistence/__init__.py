@@ -31,6 +31,7 @@ from .runtime_store import (
 )
 from .trace_store import TraceStore
 from .trigger_set_store import (
+    ActiveTradingPair,
     TriggerSetStore,
     TriggerSetStoreError,
     bootstrap_current_trigger_sets,
@@ -83,6 +84,7 @@ __all__ = [
     "TraceStore",
     "TradingRulesStore",
     "TradingState",
+    "ActiveTradingPair",
     "TriggerSetStore",
     "TriggerSetStoreError",
     "bootstrap_current_trigger_sets",

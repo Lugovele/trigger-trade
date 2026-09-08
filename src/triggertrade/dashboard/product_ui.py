@@ -1295,13 +1295,18 @@ def _research_wiring_script(research: dict[str, Any] | None, token: str) -> str:
   window.makeResearchActive = async function(){{
     if(!currentResearch?.research?.research_id)return;
     const id=currentResearch.research.research_id;
-    const res=await fetch(`/api/research/${{encodeURIComponent(id)}}/decision/make-active`, {{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{token}})}});
-    const data=await res.json().catch(()=>({{}}));
-    const label=document.getElementById("decisionStateInline");
-    if(label)label.textContent=data?.research?.decision || (data?.blocked ? "MAKE_ACTIVE_BLOCKED" : "Decision unavailable");
-    const pinned=document.getElementById("researchPinnedBody");
-    if(pinned && data?.reason)pinned.innerHTML += `<br>Make Active: ${{html(data.reason)}}`;
-    await refreshSummaries();
+    try{{
+      const data=await postJson(`/api/research/${{encodeURIComponent(id)}}/decision/make-active`, {{token}});
+      const label=document.getElementById("decisionStateInline");
+      if(label)label.textContent=data?.research?.decision || "Decision unavailable";
+      await refreshAndOpen(id);
+    }}catch(e){{
+      const label=document.getElementById("decisionStateInline");
+      if(label)label.textContent="MAKE_ACTIVE_BLOCKED";
+      const pinned=document.getElementById("researchPinnedBody");
+      if(pinned)pinned.innerHTML += `<br>Make Active: ${{html(e.message || "Promotion unavailable")}}`;
+      await refreshSummaries();
+    }}
   }};
 }})();
 </script>

@@ -96,17 +96,20 @@ def test_system_history_export_includes_bounded_factual_research(tmp_path):
         message_store=MessageStore(db),
     )
     record = service.create_research(
-        set_id="triggertrade-futures-core",
-        set_version="v1",
+        set_id="triggertrade-futures-candidate",
+        set_version="v2-test",
         rules_version_id=current.rules_version_id,
         created_at="2026-09-08T12:00:00+00:00",
     )
+    service.request_make_active(record.research_id)
 
     text = SystemHistoryExporter(read_model=DashboardReadModel(db)).build_export()
 
     assert "RESEARCH" in text
     assert record.research_id in text
-    assert "triggertrade-futures-core" in text
+    assert "triggertrade-futures-candidate" in text
+    assert "active_pair:" in text
+    assert "source_research_id" in text
     assert current.rules_version_id in text
     assert "Research backend" not in text
 

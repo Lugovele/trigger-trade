@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from hashlib import sha256
 import json
@@ -20,10 +21,19 @@ from triggertrade.trigger_sets import (
     TriggerSetStatus,
     TriggerSetVersion,
 )
+from triggertrade.rules.trading import TRADING_RULES_SCOPE_LIVE, TradingRulesVersion, draft_from_json
 
 
 class TriggerSetStoreError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class ActiveTradingPair:
+    trigger_set: TriggerSetVersion
+    rules_version: TradingRulesVersion
+    activated_at: str | None
+    source_research_id: str | None
 
 
 _RECOMMENDATION_TRANSITIONS = {
@@ -285,6 +295,60 @@ class TriggerSetStore:
             """,
             (symbol, timeframe, TriggerSetStatus.ACTIVE.value),
             conn,
+        )
+
+    def get_active_trading_pair(self, symbol: str, timeframe: str) -> ActiveTradingPair | None:
+        with self._connect() as conn:
+            conn.execute("BEGIN")
+            set_row = conn.execute(
+                """
+                SELECT set_id, version, purpose, status, symbol, timeframe,
+                       strategy_version, risk_profile_version, config_snapshot,
+                       created_at, provenance
+                FROM trigger_set_versions
+                WHERE symbol = ? AND timeframe = ? AND status = ?
+                """,
+                (symbol, timeframe, TriggerSetStatus.ACTIVE.value),
+            ).fetchone()
+            current_row = conn.execute(
+                """
+                SELECT c.rules_version_id, c.updated_at, v.*
+                FROM trading_rules_current c
+                JOIN trading_rules_versions v ON v.rules_version_id = c.rules_version_id
+                WHERE c.scope = ?
+                """,
+                (TRADING_RULES_SCOPE_LIVE,),
+            ).fetchone()
+            promotion = None
+            if set_row is not None and current_row is not None:
+                has_research = conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'research_entities'"
+                ).fetchone()
+                if has_research is not None:
+                    promotion = conn.execute(
+                        """
+                        SELECT research_id, made_active_at
+                        FROM research_entities
+                        WHERE promoted_set_id = ?
+                          AND promoted_set_version = ?
+                          AND promoted_rules_version_id = ?
+                          AND decision = 'MADE_ACTIVE'
+                        ORDER BY made_active_at DESC, research_id DESC
+                        LIMIT 1
+                        """,
+                        (set_row["set_id"], set_row["version"], current_row["rules_version_id"]),
+                    ).fetchone()
+            if set_row is None or current_row is None:
+                conn.execute("COMMIT")
+                return None
+            trigger_set = self._row_to_set(set_row, conn)
+            rules_version = _rules_from_row(current_row, current_row["rules_version_id"])
+            conn.execute("COMMIT")
+        return ActiveTradingPair(
+            trigger_set=trigger_set,
+            rules_version=rules_version,
+            activated_at=None if promotion is None else promotion["made_active_at"],
+            source_research_id=None if promotion is None else promotion["research_id"],
         )
 
     def list_testing_sets(self, symbol: str, timeframe: str) -> tuple[TriggerSetVersion, ...]:
@@ -1053,6 +1117,21 @@ def _insert_transition(
         ) VALUES (?, ?, ?, ?, ?, ?)
         """,
         (trigger_set.set_id, trigger_set.version, trigger_set.status.value, to_status.value, changed_at, reason),
+    )
+
+
+def _rules_from_row(row: sqlite3.Row, current_id: str | None) -> TradingRulesVersion:
+    return TradingRulesVersion(
+        rules_version_id=row["rules_version_id"],
+        version=row["version"],
+        created_at=row["created_at"],
+        created_from_version_id=row["created_from_version_id"],
+        created_source=row["created_source"],
+        change_summary=row["change_summary"],
+        config_hash=row["config_hash"],
+        schema_version=row["schema_version"],
+        draft=draft_from_json(row["payload"]),
+        is_current=row["rules_version_id"] == current_id,
     )
 
 

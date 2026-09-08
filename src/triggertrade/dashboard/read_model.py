@@ -1949,6 +1949,25 @@ class DashboardReadModel:
             "active_benchmark": result.active_benchmark,
             "difference": result.difference,
         }
+
+    def get_active_trading_pair_payload(self) -> dict[str, Any]:
+        try:
+            from triggertrade.persistence import TriggerSetStore
+
+            pair = TriggerSetStore(self.db_path).get_active_trading_pair("BTCUSDT", "1m")
+        except Exception:
+            pair = None
+        if pair is None:
+            return {"available": False}
+        return {
+            "available": True,
+            "active_set_id": pair.trigger_set.set_id,
+            "active_set_version": pair.trigger_set.version,
+            "active_rules_version_id": pair.rules_version.rules_version_id,
+            "active_rules_display_version": pair.rules_version.version,
+            "activated_at": pair.activated_at,
+            "source_research_id": pair.source_research_id,
+        }
     def get_latest_futures_equity(self) -> FuturesEquityRow | None:
         if not self.db_path.exists():
             return None

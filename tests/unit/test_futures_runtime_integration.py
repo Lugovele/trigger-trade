@@ -3,6 +3,7 @@
 from datetime import UTC, datetime, timedelta
 from dataclasses import replace
 from decimal import Decimal
+import sqlite3
 
 import pytest
 
@@ -16,6 +17,7 @@ from triggertrade.market_data import FuturesMarketEvent, MarketRegimeContext, Ma
 from triggertrade.persistence import (
     FuturesExecutionStore,
     MessageStore,
+    ResearchStore,
     TradingRulesStore,
     FuturesExecutionRecord,
     FuturesPositionRecord,
@@ -31,6 +33,7 @@ from triggertrade.persistence import (
 from triggertrade.persistence.futures_accounting_store import FuturesAccountingStore
 from triggertrade.services.futures_runtime import FuturesDualLaneRuntime, _is_futures_set
 from triggertrade.services.instrument_catalog import InstrumentCatalogService
+from triggertrade.services.research import ResearchService
 from triggertrade.rules import DirectionMode, TakeProfitMode, TradingRulesService
 from triggertrade.services.runtime import build_runtime_from_env
 from triggertrade.execution.position_lifecycle import PositionStatus, futures_position_id
@@ -110,6 +113,54 @@ def test_runtime_pins_current_trading_rules_version_and_resolved_snapshot(tmp_pa
     assert position.rule_snapshot["minimum_net_edge_enabled"] == "False"
     assert position.rule_snapshot["capital_denominator_source"] == "equity"
     assert TradingRulesService(TradingRulesStore(path)).get_current_rules_version().version == "v2"
+
+
+def test_runtime_new_active_entries_use_promoted_research_set_and_rules_pair(tmp_path):
+    path = tmp_path / "runtime.sqlite3"
+    config = load_config(_env(path))
+    bootstrap_current_trigger_sets(TriggerSetStore(path))
+    rules = TradingRulesService(TradingRulesStore(path))
+    original = rules.ensure_initial_version(config)
+    candidate_rules = rules.create_rules_version_from_current(
+        changes={"fixed_take_profit_pct": Decimal("0.026"), "minimum_take_profit_pct": Decimal("0.01"), "minimum_net_edge_enabled": False},
+        created_source="unit",
+    ).rules
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "UPDATE trading_rules_current SET rules_version_id = ?, updated_at = ? WHERE scope = ?",
+            (original.rules_version_id, "2026-09-08T12:00:00+00:00", "LIVE"),
+        )
+    research_service = ResearchService(
+        store=ResearchStore(path),
+        trigger_set_store=TriggerSetStore(path),
+        trading_rules_store=TradingRulesStore(path),
+        message_store=MessageStore(path),
+    )
+    research = research_service.create_research(
+        set_id="triggertrade-futures-candidate",
+        set_version="v2-test",
+        rules_version_id=candidate_rules.rules_version_id,
+    )
+    research_service.request_make_active(research.research_id)
+    adapter = RecordingFuturesAdapter(order_status="New")
+
+    result = _runtime(tmp_path, path=path, active_adapter=adapter).process_once()
+    active = RuntimeStore(path).get_lane_lifecycle(
+        lane="ACTIVE",
+        symbol="BTCUSDT",
+        timeframe="1m",
+        candle_id=result.candle_id,
+        trigger_set_id="triggertrade-futures-candidate",
+        trigger_set_version="v2-test",
+    )
+    position = FuturesPositionStore(path).get_position(futures_position_id(active.intent_id))
+
+    assert result.active[0].execution_status == "submitted"
+    assert active.rules_version_id == candidate_rules.rules_version_id
+    assert position.trigger_set_id == "triggertrade-futures-candidate"
+    assert position.trigger_set_version == "v2-test"
+    assert position.rules_version_id == candidate_rules.rules_version_id
+    assert position.rule_snapshot["fixed_take_profit_pct"] == "0.026"
 
 
 def test_runtime_direction_mode_filters_without_creating_short_alpha(tmp_path):

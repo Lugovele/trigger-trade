@@ -1,5 +1,8 @@
+from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
+import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -9,9 +12,13 @@ from triggertrade.persistence import (
     ResearchStore,
     ResearchStoreError,
     ResearchDemoStatus,
+    ResearchDecision,
+    FuturesPositionRecord,
+    FuturesPositionStore,
     TradingRulesStore,
     TriggerSetStore,
     bootstrap_current_trigger_sets,
+    current_futures_testing_trigger_set,
 )
 from triggertrade.persistence.futures_accounting_store import FuturesAccountingStore
 from triggertrade.persistence.futures_execution_store import FuturesExecutionStore
@@ -193,13 +200,19 @@ def test_dynamic_tp_and_daily_loss_rules_block_research_demo_start(tmp_path):
     assert daily_demo.blocked_reason == "research_daily_loss_accounting_isolation_unavailable"
 
 
-def test_research_demo_stop_select_compare_and_make_active_fail_closed(tmp_path):
+def test_research_demo_stop_select_compare_and_make_active_promotes_exact_pair(tmp_path):
     db, rules = _research_db(tmp_path)
     service = _service(db, demo_isolation=ResearchDemoIsolation(available=True, execution_scope_id="research-safe", account_scope="research-account"))
+    pinned_rules = rules.create_rules_version_from_current(
+        changes={"fixed_take_profit_pct": Decimal("0.017")},
+        created_source="unit",
+    ).rules
+    previous_rules = pinned_rules.created_from_version_id
+    _set_current_rules(db, previous_rules)
     research = service.create_research(
-        set_id="triggertrade-futures-core",
-        set_version="v1",
-        rules_version_id=rules.get_current_rules_version().rules_version_id,
+        set_id="triggertrade-futures-candidate",
+        set_version="v2-test",
+        rules_version_id=pinned_rules.rules_version_id,
     )
 
     running = service.start_demo_run(research.research_id, created_at="2026-09-08T12:00:00+00:00")
@@ -207,15 +220,299 @@ def test_research_demo_stop_select_compare_and_make_active_fail_closed(tmp_path)
     stopped_again = service.stop_demo_run(research.research_id, running.run_id, stopped_at="2026-09-08T14:00:00+00:00")
     selected = service.select_demo_run(research.research_id, running.run_id)
     compare = service.compare(research.research_id)
-    blocked = service.request_make_active(research.research_id)
+    promoted = service.request_make_active(research.research_id)
+    pair = TriggerSetStore(db).get_active_trading_pair("BTCUSDT", "1m")
+    idempotent = service.request_make_active(research.research_id)
+    promotion_message = next(message for message in MessageStore(db).list_messages() if message.dedupe_key == f"research:{research.research_id}:made_active")
 
     assert stopped.status.value == "STOPPED"
     assert stopped_again.stopped_at == "2026-09-08T13:00:00+00:00"
     assert selected.selected_demo_run_id == running.run_id
     assert compare.available is False
     assert compare.reason == "selected Research Demo metrics unavailable"
-    assert blocked.decision.value == "MAKE_ACTIVE_BLOCKED"
+    assert promoted.decision is ResearchDecision.MADE_ACTIVE
+    assert promoted.promoted_set_id == "triggertrade-futures-candidate"
+    assert promoted.promoted_set_version == "v2-test"
+    assert promoted.promoted_rules_version_id == pinned_rules.rules_version_id
+    assert promoted.previous_active_set_id == "triggertrade-futures-core"
+    assert promoted.previous_active_set_version == "v1"
+    assert promoted.previous_rules_version_id == previous_rules
+    assert pair is not None
+    assert pair.trigger_set.set_id == "triggertrade-futures-candidate"
+    assert pair.trigger_set.version == "v2-test"
+    assert pair.rules_version.rules_version_id == pinned_rules.rules_version_id
+    assert TriggerSetStore(db).get_set("triggertrade-futures-core", "v1").status.value == "ARCHIVE"
+    assert idempotent.made_active_at == promoted.made_active_at
+    assert idempotent.promoted_set_id == promoted.promoted_set_id
+    assert idempotent.promoted_set_version == promoted.promoted_set_version
+    assert idempotent.promoted_rules_version_id == promoted.promoted_rules_version_id
+    assert idempotent.previous_active_set_id == promoted.previous_active_set_id
+    assert idempotent.previous_active_set_version == promoted.previous_active_set_version
+    assert idempotent.previous_rules_version_id == promoted.previous_rules_version_id
+    assert idempotent.promotion_result_metadata == promoted.promotion_result_metadata
+    assert MessageStore(db).get_unread_message_count() == 2
+    assert promotion_message.severity.value == "ATTENTION"
+    assert promotion_message.title == "Research promoted"
+    assert research.research_id in promotion_message.body
+    assert promotion_message.entity_type == "research"
+    assert promotion_message.entity_id == research.research_id
+    assert promotion_message.source == "research_service"
+    assert promotion_message.metadata == {
+        "set_id": "triggertrade-futures-candidate",
+        "set_version": "v2-test",
+        "rules_version_id": pinned_rules.rules_version_id,
+    }
+
+
+def test_make_active_blocks_running_demo_without_changing_pair(tmp_path):
+    db, rules = _research_db(tmp_path)
+    service = _service(db, demo_isolation=ResearchDemoIsolation(available=True, execution_scope_id="research-safe", account_scope="research-account"))
+    original_rules = rules.get_current_rules_version()
+    new_rules = rules.create_rules_version_from_current(changes={"fixed_take_profit_pct": Decimal("0.018")}, created_source="unit").rules
+    _set_current_rules(db, original_rules.rules_version_id)
+    research = service.create_research(
+        set_id="triggertrade-futures-candidate",
+        set_version="v2-test",
+        rules_version_id=new_rules.rules_version_id,
+    )
+    service.start_demo_run(research.research_id, created_at="2026-09-08T12:00:00+00:00")
+
+    blocked = service.request_make_active(research.research_id)
+    pair = TriggerSetStore(db).get_active_trading_pair("BTCUSDT", "1m")
+    blocked_message = next(
+        message
+        for message in MessageStore(db).list_messages()
+        if message.dedupe_key == f"research:{research.research_id}:make_active_blocked:research_demo_must_be_stopped_before_promotion"
+    )
+
+    assert blocked.decision is ResearchDecision.MAKE_ACTIVE_BLOCKED
     assert blocked.made_active_at is None
+    assert blocked_message.severity.value == "WARNING"
+    assert blocked_message.title == "Research promotion blocked"
+    assert "did not change the active configuration" in blocked_message.body
+    assert blocked_message.entity_type == "research"
+    assert blocked_message.entity_id == research.research_id
+    assert blocked_message.source == "research_service"
+    assert blocked_message.metadata == {"reason": "research_demo_must_be_stopped_before_promotion"}
+    assert pair is not None
+    assert pair.trigger_set.set_id == "triggertrade-futures-core"
+    assert pair.trigger_set.version == "v1"
+    assert pair.rules_version.rules_version_id == original_rules.rules_version_id
+
+
+def test_make_active_rolls_back_if_promotion_fails_mid_transaction(tmp_path):
+    db, rules = _research_db(tmp_path)
+    service = _service(db)
+    original_rules = rules.get_current_rules_version()
+    new_rules = rules.create_rules_version_from_current(changes={"fixed_take_profit_pct": Decimal("0.019")}, created_source="unit").rules
+    _set_current_rules(db, original_rules.rules_version_id)
+    research = service.create_research(
+        set_id="triggertrade-futures-candidate",
+        set_version="v2-test",
+        rules_version_id=new_rules.rules_version_id,
+    )
+
+    with pytest.raises(ResearchServiceError, match="injected promotion failure"):
+        service.make_active(research.research_id, _fault_after="rules")
+
+    pair = TriggerSetStore(db).get_active_trading_pair("BTCUSDT", "1m")
+    reloaded = ResearchStore(db).get_research(research.research_id)
+
+    assert pair is not None
+    assert pair.trigger_set.set_id == "triggertrade-futures-core"
+    assert pair.trigger_set.version == "v1"
+    assert pair.rules_version.rules_version_id == original_rules.rules_version_id
+    assert TriggerSetStore(db).get_set("triggertrade-futures-candidate", "v2-test").status.value == "TESTING"
+    assert reloaded.decision is ResearchDecision.NONE
+
+
+def test_make_active_rolls_back_if_set_update_fails_mid_transaction(tmp_path):
+    db, rules = _research_db(tmp_path)
+    service = _service(db)
+    original_rules = rules.get_current_rules_version()
+    candidate_rules = rules.create_rules_version_from_current(changes={"fixed_take_profit_pct": Decimal("0.020")}, created_source="unit").rules
+    _set_current_rules(db, original_rules.rules_version_id)
+    research = service.create_research(
+        set_id="triggertrade-futures-candidate",
+        set_version="v2-test",
+        rules_version_id=candidate_rules.rules_version_id,
+    )
+
+    with pytest.raises(ResearchServiceError, match="injected promotion failure"):
+        service.make_active(research.research_id, _fault_after="set")
+
+    pair = TriggerSetStore(db).get_active_trading_pair("BTCUSDT", "1m")
+    reloaded = ResearchStore(db).get_research(research.research_id)
+
+    assert pair is not None
+    assert pair.trigger_set.set_id == "triggertrade-futures-core"
+    assert pair.trigger_set.version == "v1"
+    assert pair.rules_version.rules_version_id == original_rules.rules_version_id
+    assert TriggerSetStore(db).get_set("triggertrade-futures-candidate", "v2-test").status.value == "TESTING"
+    assert reloaded.decision is ResearchDecision.NONE
+
+
+def test_make_active_does_not_rewrite_existing_open_positions(tmp_path):
+    db, rules = _research_db(tmp_path)
+    original_rules = rules.get_current_rules_version()
+    position = FuturesPositionRecord(
+        position_id="pos-existing",
+        trade_id="trade-existing",
+        symbol="BTCUSDT",
+        side="LONG",
+        status="OPEN",
+        opened_at="2026-09-08T11:00:00+00:00",
+        closed_at=None,
+        entry_price="100",
+        current_qty="0.01",
+        initial_qty="0.01",
+        leverage="1",
+        position_value="1",
+        tp_price="101",
+        tp_pct="0.01",
+        sl_price="99",
+        sl_pct="0.01",
+        trigger_set_id="triggertrade-futures-core",
+        trigger_set_version="v1",
+        strategy_rule_id="STR-FUT-001",
+        strategy_rule_version="0.1.0",
+        risk_rule_version="0.1.0",
+        protective_exit_version="protective-exit-v1",
+        evidence_source="ACTIVE",
+        open_intent_id="intent-existing",
+        open_risk_decision_id="risk-existing",
+        open_execution_id="exec-existing",
+        close_intent_id=None,
+        close_risk_decision_id=None,
+        close_execution_id=None,
+        close_reason=None,
+        rule_snapshot={"rules_version_id": original_rules.rules_version_id},
+        updated_at="2026-09-08T11:00:00+00:00",
+        rules_version_id=original_rules.rules_version_id,
+    )
+    FuturesPositionStore(db).save_open_position(position)
+    candidate_rules = rules.create_rules_version_from_current(changes={"fixed_take_profit_pct": Decimal("0.022")}, created_source="unit").rules
+    _set_current_rules(db, original_rules.rules_version_id)
+    research = _service(db).create_research(
+        set_id="triggertrade-futures-candidate",
+        set_version="v2-test",
+        rules_version_id=candidate_rules.rules_version_id,
+    )
+
+    _service(db).request_make_active(research.research_id)
+    reloaded = FuturesPositionStore(db).get_position("pos-existing")
+
+    assert reloaded.trigger_set_id == "triggertrade-futures-core"
+    assert reloaded.trigger_set_version == "v1"
+    assert reloaded.rules_version_id == original_rules.rules_version_id
+    assert reloaded.tp_price == "101"
+    assert reloaded.sl_price == "99"
+
+
+def test_make_active_survives_restart_and_blocks_unknown_or_unsupported_rules(tmp_path):
+    db, rules = _research_db(tmp_path)
+    original_rules = rules.get_current_rules_version()
+    candidate_rules = rules.create_rules_version_from_current(changes={"fixed_take_profit_pct": Decimal("0.023")}, created_source="unit").rules
+    dynamic_rules = rules.create_rules_version_from_current(
+        changes={"take_profit_mode": TakeProfitMode.DYNAMIC, "fixed_take_profit_pct": None},
+        created_source="unit",
+    ).rules
+    _set_current_rules(db, original_rules.rules_version_id)
+    service = _service(db)
+    with pytest.raises(ResearchServiceError, match="research id not found"):
+        service.request_make_active("res-unknown")
+    dynamic_research = service.create_research(
+        set_id="triggertrade-futures-candidate",
+        set_version="v2-test",
+        rules_version_id=dynamic_rules.rules_version_id,
+    )
+    blocked = service.request_make_active(dynamic_research.research_id)
+    research = service.create_research(
+        set_id="triggertrade-futures-candidate",
+        set_version="v2-test",
+        rules_version_id=candidate_rules.rules_version_id,
+    )
+
+    promoted = service.request_make_active(research.research_id)
+    restarted_pair = TriggerSetStore(db).get_active_trading_pair("BTCUSDT", "1m")
+    restarted_research = ResearchStore(db).get_research(research.research_id)
+
+    assert blocked.decision is ResearchDecision.MAKE_ACTIVE_BLOCKED
+    assert blocked.made_active_at is None
+    assert blocked.promotion_result_metadata == {}
+    assert promoted.decision is ResearchDecision.MADE_ACTIVE
+    assert restarted_pair is not None
+    assert restarted_pair.trigger_set.version == "v2-test"
+    assert restarted_pair.rules_version.rules_version_id == candidate_rules.rules_version_id
+    assert restarted_pair.source_research_id == research.research_id
+    assert restarted_research.made_active_at == promoted.made_active_at
+
+
+def test_concurrent_make_active_requests_leave_one_coherent_pair(tmp_path):
+    db, rules = _research_db(tmp_path)
+    original_rules = rules.get_current_rules_version()
+    candidate_rules = rules.create_rules_version_from_current(changes={"fixed_take_profit_pct": Decimal("0.021")}, created_source="unit").rules
+    _set_current_rules(db, original_rules.rules_version_id)
+    research = _service(db).create_research(
+        set_id="triggertrade-futures-candidate",
+        set_version="v2-test",
+        rules_version_id=candidate_rules.rules_version_id,
+    )
+
+    def promote():
+        return _service(db).request_make_active(research.research_id).decision.value
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        decisions = tuple(pool.map(lambda _: promote(), range(2)))
+
+    pair = TriggerSetStore(db).get_active_trading_pair("BTCUSDT", "1m")
+    messages = MessageStore(db).list_messages()
+
+    assert decisions == ("MADE_ACTIVE", "MADE_ACTIVE")
+    assert pair is not None
+    assert pair.trigger_set.set_id == "triggertrade-futures-candidate"
+    assert pair.trigger_set.version == "v2-test"
+    assert pair.rules_version.rules_version_id == candidate_rules.rules_version_id
+    assert sum(1 for message in messages if message.dedupe_key == f"research:{research.research_id}:made_active") == 1
+
+
+def test_concurrent_different_research_promotions_leave_one_exact_pair(tmp_path):
+    db, rules = _research_db(tmp_path)
+    store = TriggerSetStore(db)
+    alt = replace(current_futures_testing_trigger_set(created_at="2026-09-08T12:00:00+00:00"), set_id="triggertrade-futures-alt", version="v3-test")
+    store.create_set(alt)
+    original_rules = rules.get_current_rules_version()
+    first_rules = rules.create_rules_version_from_current(changes={"fixed_take_profit_pct": Decimal("0.024")}, created_source="unit").rules
+    second_rules = rules.create_rules_version_from_current(changes={"fixed_take_profit_pct": Decimal("0.025")}, created_source="unit").rules
+    _set_current_rules(db, original_rules.rules_version_id)
+    first = _service(db).create_research(
+        set_id="triggertrade-futures-candidate",
+        set_version="v2-test",
+        rules_version_id=first_rules.rules_version_id,
+    )
+    second = _service(db).create_research(
+        set_id=alt.set_id,
+        set_version=alt.version,
+        rules_version_id=second_rules.rules_version_id,
+    )
+
+    def promote(research_id):
+        return _service(db).request_make_active(research_id).decision.value
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        decisions = tuple(pool.map(promote, (first.research_id, second.research_id)))
+
+    pair = TriggerSetStore(db).get_active_trading_pair("BTCUSDT", "1m")
+    active_sets = [item for item in TriggerSetStore(db).list_sets() if item.status.value == "ACTIVE" and item.symbol == "BTCUSDT"]
+    valid_pairs = {
+        ("triggertrade-futures-candidate", "v2-test", first_rules.rules_version_id),
+        (alt.set_id, alt.version, second_rules.rules_version_id),
+    }
+
+    assert decisions == ("MADE_ACTIVE", "MADE_ACTIVE")
+    assert pair is not None
+    assert (pair.trigger_set.set_id, pair.trigger_set.version, pair.rules_version.rules_version_id) in valid_pairs
+    assert len(active_sets) == 1
 
 
 def test_research_compare_available_for_selected_demo_and_active_overlap(tmp_path):
@@ -335,3 +632,11 @@ def _service(db, *, with_backtest_runtime=False, demo_isolation=None, backtest_r
         demo_isolation=demo_isolation,
         backtest_runner=backtest_runner,
     )
+
+
+def _set_current_rules(db, rules_version_id: str) -> None:
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "UPDATE trading_rules_current SET rules_version_id = ?, updated_at = ? WHERE scope = ?",
+            (rules_version_id, "2026-09-08T12:30:00+00:00", "LIVE"),
+        )

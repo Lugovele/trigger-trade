@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from decimal import Decimal
+import json
 import sqlite3
 from typing import Any, Callable
 
@@ -16,13 +17,17 @@ from triggertrade.persistence import MessageStore, TradingRulesStore, TriggerSet
 from triggertrade.persistence.research_store import (
     ResearchBacktestRunRecord,
     ResearchBacktestStatus,
+    ResearchDecision,
     ResearchDemoRunRecord,
     ResearchDemoStatus,
     ResearchRecord,
+    ResearchStatus,
     ResearchStore,
     ResearchStoreError,
 )
+from triggertrade.rules.trading import TRADING_RULES_SCOPE_LIVE, draft_from_json
 from triggertrade.rules import DirectionMode, TakeProfitMode, TradingRulesVersion
+from triggertrade.trigger_sets import TriggerSetStatus, TriggerSetVersion
 
 
 class ResearchServiceError(ValueError):
@@ -203,10 +208,221 @@ class ResearchService:
         return self._store.archive_research(research_id)
 
     def request_make_active(self, research_id: str) -> ResearchRecord:
-        return self._store.record_make_active_blocked(
-            research_id,
-            reason="make_active_activation_semantics_unapproved",
-        )
+        return self.make_active(research_id)
+
+    def make_active(
+        self,
+        research_id: str,
+        *,
+        decided_at: str | None = None,
+        _fault_after: str | None = None,
+    ) -> ResearchRecord:
+        decided_at = decided_at or datetime.now(UTC).isoformat()
+        research = self._required_research(research_id)
+        self._exact_trigger_set(research.set_id, research.set_version)
+        self._exact_rules_version(research.rules_version_id)
+        blocked_reason = None
+
+        with sqlite3.connect(self._store.path) as conn:
+            conn.row_factory = sqlite3.Row
+            conn.execute("BEGIN IMMEDIATE")
+            current_research = conn.execute("SELECT * FROM research_entities WHERE research_id = ?", (research.research_id,)).fetchone()
+            if current_research is None:
+                raise ResearchServiceError("research id not found")
+            if current_research["status"] == ResearchStatus.ARCHIVED.value:
+                raise ResearchStoreError("archived research is immutable")
+            current_set = conn.execute(
+                """
+                SELECT set_id, version, status, symbol, timeframe
+                FROM trigger_set_versions
+                WHERE set_id = ? AND version = ?
+                """,
+                (research.set_id, research.set_version),
+            ).fetchone()
+            current_rules = conn.execute(
+                "SELECT rules_version_id, version, payload FROM trading_rules_versions WHERE rules_version_id = ?",
+                (research.rules_version_id,),
+            ).fetchone()
+            if current_set is None:
+                raise ResearchServiceError("exact trigger set version not found")
+            if current_rules is None:
+                raise ResearchServiceError("exact trading rules version not found")
+            active_set = conn.execute(
+                """
+                SELECT set_id, version, status
+                FROM trigger_set_versions
+                WHERE symbol = ? AND timeframe = ? AND status = ?
+                """,
+                (current_set["symbol"], current_set["timeframe"], TriggerSetStatus.ACTIVE.value),
+            ).fetchone()
+            previous_rules = conn.execute(
+                "SELECT rules_version_id FROM trading_rules_current WHERE scope = ?",
+                (TRADING_RULES_SCOPE_LIVE,),
+            ).fetchone()
+            previous_set_id = None if active_set is None else active_set["set_id"]
+            previous_set_version = None if active_set is None else active_set["version"]
+            previous_rules_id = None if previous_rules is None else previous_rules["rules_version_id"]
+            blocked_reason = _locked_promotion_block_reason(
+                research_status=current_research["status"],
+                set_status=current_set["status"],
+                set_symbol=current_set["symbol"],
+                rules_payload=current_rules["payload"],
+                conn=conn,
+                research_id=research.research_id,
+            )
+            if blocked_reason is not None:
+                conn.execute(
+                    """
+                    UPDATE research_entities
+                    SET decision = ?, decision_at = ?, updated_at = ?
+                    WHERE research_id = ?
+                    """,
+                    (ResearchDecision.MAKE_ACTIVE_BLOCKED.value, decided_at, decided_at, research.research_id),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO research_decision_events(research_id, event_at, decision, reason)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (research.research_id, decided_at, ResearchDecision.MAKE_ACTIVE_BLOCKED.value, blocked_reason),
+                )
+                conn.execute("COMMIT")
+                already_active = False
+            else:
+                already_active = (
+                    previous_set_id == research.set_id
+                    and previous_set_version == research.set_version
+                    and previous_rules_id == research.rules_version_id
+                    and current_research["decision"] == ResearchDecision.MADE_ACTIVE.value
+                )
+                if not already_active:
+                    if active_set is not None and (active_set["set_id"], active_set["version"]) != (research.set_id, research.set_version):
+                        conn.execute(
+                            "UPDATE trigger_set_versions SET status = ? WHERE set_id = ? AND version = ?",
+                            (TriggerSetStatus.ARCHIVE.value, active_set["set_id"], active_set["version"]),
+                        )
+                        conn.execute(
+                            """
+                            INSERT INTO trigger_set_transitions (
+                                set_id, set_version, from_status, to_status, changed_at, reason
+                            ) VALUES (?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                active_set["set_id"],
+                                active_set["version"],
+                                active_set["status"],
+                                TriggerSetStatus.ARCHIVE.value,
+                                decided_at,
+                                "archived by Research Make Active promotion",
+                            ),
+                        )
+                    if _fault_after == "set":
+                        raise ResearchServiceError("injected promotion failure after set update")
+                    if current_set["status"] != TriggerSetStatus.ACTIVE.value:
+                        conn.execute(
+                            "UPDATE trigger_set_versions SET status = ? WHERE set_id = ? AND version = ?",
+                            (TriggerSetStatus.ACTIVE.value, research.set_id, research.set_version),
+                        )
+                        conn.execute(
+                            """
+                            INSERT INTO trigger_set_transitions (
+                                set_id, set_version, from_status, to_status, changed_at, reason
+                            ) VALUES (?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                research.set_id,
+                                research.set_version,
+                                current_set["status"],
+                                TriggerSetStatus.ACTIVE.value,
+                                decided_at,
+                                "Research Make Active promoted exact tested Set Version",
+                            ),
+                        )
+                    conn.execute(
+                        """
+                        INSERT INTO trading_rules_current(scope, rules_version_id, updated_at)
+                        VALUES (?, ?, ?)
+                        ON CONFLICT(scope) DO UPDATE SET rules_version_id = excluded.rules_version_id, updated_at = excluded.updated_at
+                        """,
+                        (TRADING_RULES_SCOPE_LIVE, research.rules_version_id, decided_at),
+                    )
+                    if _fault_after == "rules":
+                        raise ResearchServiceError("injected promotion failure after rules update")
+                    metadata = {
+                        "result": "promoted",
+                        "promoted_set": f"{research.set_id}@{research.set_version}",
+                        "promoted_rules_version_id": research.rules_version_id,
+                        "previous_set": None if previous_set_id is None else f"{previous_set_id}@{previous_set_version}",
+                        "previous_rules_version_id": previous_rules_id,
+                    }
+                    conn.execute(
+                        """
+                        UPDATE research_entities
+                        SET status = ?, decision = ?, decision_at = COALESCE(decision_at, ?),
+                            made_active_at = COALESCE(made_active_at, ?), updated_at = ?,
+                            promoted_set_id = ?, promoted_set_version = ?,
+                            promoted_rules_version_id = ?, previous_active_set_id = ?,
+                            previous_active_set_version = ?, previous_rules_version_id = ?,
+                            promotion_result_metadata = ?
+                        WHERE research_id = ?
+                        """,
+                        (
+                            ResearchStatus.DECISION_NEEDED.value,
+                            ResearchDecision.MADE_ACTIVE.value,
+                            decided_at,
+                            decided_at,
+                            decided_at,
+                            research.set_id,
+                            research.set_version,
+                            research.rules_version_id,
+                            previous_set_id,
+                            previous_set_version,
+                            previous_rules_id,
+                            json.dumps(metadata, sort_keys=True),
+                            research.research_id,
+                        ),
+                    )
+                    conn.execute(
+                        """
+                        INSERT INTO research_decision_events(research_id, event_at, decision, reason)
+                        VALUES (?, ?, ?, ?)
+                        """,
+                        (research.research_id, decided_at, ResearchDecision.MADE_ACTIVE.value, json.dumps(metadata, sort_keys=True)),
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE research_entities SET updated_at = ? WHERE research_id = ?",
+                        (decided_at, research.research_id),
+                    )
+                conn.execute("COMMIT")
+        record = self._store.get_research(research.research_id)
+        if record is None:
+            raise ResearchServiceError("research id not found after promotion")
+        if blocked_reason is not None:
+            self._message(
+                severity="WARNING",
+                title="Research promotion blocked",
+                body="Research Make Active did not change the active configuration.",
+                entity_type="research",
+                entity_id=record.research_id,
+                dedupe_key=f"research:{record.research_id}:make_active_blocked:{blocked_reason}",
+                metadata={"reason": blocked_reason},
+            )
+        elif not already_active:
+            self._message(
+                severity="ATTENTION",
+                title="Research promoted",
+                body=f"Research {record.research_id} promoted. Active configuration is now {record.set_id} {record.set_version} + Rules {record.rules_display_version}.",
+                entity_type="research",
+                entity_id=record.research_id,
+                dedupe_key=f"research:{record.research_id}:made_active",
+                metadata={
+                    "set_id": record.set_id,
+                    "set_version": record.set_version,
+                    "rules_version_id": record.rules_version_id,
+                },
+            )
+        return record
 
     def compare(self, research_id: str) -> ResearchCompareResult:
         research = self._required_research(research_id)
@@ -322,6 +538,14 @@ class ResearchService:
             raise ResearchServiceError("research id not found")
         return record
 
+    def _exact_trigger_set(self, set_id: str, set_version: str) -> TriggerSetVersion:
+        trigger_set = self._trigger_set_store.get_set(set_id, set_version)
+        if trigger_set is None:
+            raise ResearchServiceError("exact trigger set version not found")
+        for rule_id, version in trigger_set.rule_versions:
+            self._trigger_set_store.get_exact_rule(rule_id, version)
+        return trigger_set
+
     def _exact_rules_version(self, rules_version_id: str) -> TradingRulesVersion:
         rules = self._trading_rules_store.get_version(rules_version_id)
         if rules is None or rules.rules_version_id != rules_version_id:
@@ -335,6 +559,38 @@ class ResearchService:
             self._message_store.create_message(source="research_service", **kwargs)
         except Exception:
             return
+
+
+def _locked_promotion_block_reason(
+    *,
+    research_status: str,
+    set_status: str,
+    set_symbol: str,
+    rules_payload: str,
+    conn: sqlite3.Connection,
+    research_id: str,
+) -> str | None:
+    if research_status == ResearchStatus.ARCHIVED.value:
+        return "archived_research_cannot_be_promoted"
+    if set_status not in {TriggerSetStatus.TESTING.value, TriggerSetStatus.ACTIVE.value}:
+        return "trigger_set_version_not_promotion_eligible"
+    draft = draft_from_json(rules_payload)
+    if not any(coin.enabled and coin.symbol == set_symbol for coin in draft.coins):
+        return "rules_version_does_not_enable_research_set_symbol"
+    if draft.take_profit_mode is TakeProfitMode.DYNAMIC:
+        return "dynamic_take_profit_is_not_supported_for_active_promotion"
+    running_demo = conn.execute(
+        """
+        SELECT 1
+        FROM research_demo_runs
+        WHERE research_id = ? AND status = ?
+        LIMIT 1
+        """,
+        (research_id, ResearchDemoStatus.RUNNING.value),
+    ).fetchone()
+    if running_demo is not None:
+        return "research_demo_must_be_stopped_before_promotion"
+    return None
 
 
 def _backtest_metrics(result: BacktestResult) -> dict[str, Any]:
