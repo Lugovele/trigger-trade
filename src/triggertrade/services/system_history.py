@@ -18,6 +18,8 @@ EXPORT_LIMITS = {
     "triggers": 20,
     "messages": 30,
     "research": 20,
+    "readiness_checks": 20,
+    "heartbeats": 20,
 }
 
 _SECRET_RE = re.compile(
@@ -49,11 +51,17 @@ class SystemHistoryExporter:
     def _system_lines(self, generated_at: str) -> list[str]:
         state = _call(self.read_model, "get_latest_runtime_state")
         operator = _call(self.read_model, "get_operator_trading_state")
-        return [
+        readiness = _call(self.read_model, "get_demo_readiness")
+        heartbeats = _call(self.read_model, "list_runtime_heartbeats") or ()
+        lines = [
             f"generated_at: {_safe(generated_at)}",
             f"runtime_state: {_one_line(state)}",
             f"operator_state: {_one_line(operator)}",
+            f"demo_readiness: status={_safe(getattr(readiness, 'status', None))}",
         ]
+        lines.extend(_row_lines("readiness_check", getattr(readiness, "checks", ()) or (), EXPORT_LIMITS["readiness_checks"]))
+        lines.extend(_row_lines("runtime_heartbeat", heartbeats, EXPORT_LIMITS["heartbeats"]))
+        return lines
 
     def _portfolio_lines(self) -> list[str]:
         snapshot = _call(self.read_model, "get_portfolio_snapshot")

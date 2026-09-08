@@ -95,6 +95,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
             except Exception as exc:  # noqa: BLE001 - API returns unavailable instead of fake zero.
                 self._send_json({"available": False, "error": _safe_public_error(exc)}, HTTPStatus.SERVICE_UNAVAILABLE)
             return
+        if parsed.path == "/api/readiness":
+            self._send_json(_readiness_payload(self.server.read_model))
+            return
         if parsed.path == "/api/research":
             self._send_json({"research": [_research_summary_payload(row) for row in self.server.read_model.list_research_summaries(limit=50)]})
             return
@@ -852,6 +855,22 @@ def _catalog_state_payload(read_model: DashboardReadModel) -> dict[str, object]:
         "is_stale": state.is_stale,
         "tradeable_count": state.tradeable_count,
         "error": state.error,
+    }
+
+
+def _readiness_payload(read_model: DashboardReadModel) -> dict[str, object]:
+    readiness = read_model.get_demo_readiness()
+    return {
+        "status": readiness.status,
+        "checks": [
+            {
+                "name": check.name,
+                "status": check.status,
+                "detail": check.detail,
+                "observed_at": check.observed_at,
+            }
+            for check in readiness.checks
+        ],
     }
 
 

@@ -47,6 +47,7 @@ from triggertrade.persistence import (
     LaneRuntimeCheckpoint,
     MessageStore,
     OperatorStateStore,
+    RuntimeHeartbeat,
     RuntimeStore,
     TraceStore,
     TriggerSetStore,
@@ -218,8 +219,15 @@ class FuturesDualLaneRuntime:
     def run_forever(self, max_cycles: int | None = None) -> None:
         cycles = 0
         while not self._stop_requested:
-            self.process_once()
+            self._record_heartbeat("RUNNING", "cycle starting")
+            try:
+                result = self.process_once()
+            except Exception as exc:
+                self._record_heartbeat("BLOCKED", exc.__class__.__name__)
+                raise
             cycles += 1
+            status, detail = _heartbeat_outcome(result)
+            self._record_heartbeat(status, detail)
             if max_cycles is not None and cycles >= max_cycles:
                 break
             time.sleep(self._config.futures_runtime.poll_interval_seconds)
@@ -859,6 +867,23 @@ class FuturesDualLaneRuntime:
     def _log(self, message: str) -> None:
         self._logger(f"triggertrade futures runtime: {message}")
 
+    def _record_heartbeat(self, status: str, detail: str) -> None:
+        try:
+            self._runtime_store.record_heartbeat(
+                RuntimeHeartbeat(
+                    component="futures_runtime",
+                    status=status,
+                    observed_at=self._clock().isoformat(),
+                    detail=detail,
+                    metadata={
+                        "symbol": self._config.futures_runtime.symbol,
+                        "timeframe": self._config.futures_runtime.candle_interval,
+                    },
+                )
+            )
+        except Exception:  # noqa: BLE001 - heartbeat observability must not change trading behavior.
+            self._log("runtime heartbeat unavailable")
+
 
 def _execution_config(config: AppConfig) -> FuturesExecutionConfig:
     return FuturesExecutionConfig(
@@ -871,6 +896,23 @@ def _execution_config(config: AppConfig) -> FuturesExecutionConfig:
         default_leverage=config.futures_runtime.leverage,
         max_configured_leverage=config.futures_runtime.leverage,
     )
+
+
+def _heartbeat_outcome(result: FuturesDualLaneResult) -> tuple[str, str]:
+    if result.skipped_reason in {"market_data_unavailable", "checkpoint_gap"}:
+        return "DEGRADED", result.skipped_reason
+    if result.skipped_reason is not None:
+        return "RUNNING", result.skipped_reason
+    lane_results = result.active + result.test
+    lane_reasons = {lane.skipped_reason for lane in lane_results}
+    lane_statuses = {lane.execution_status for lane in lane_results}
+    if "execution_unknown" in lane_reasons or OrderStatus.UNKNOWN.value in lane_statuses:
+        return "BLOCKED", "execution_unknown"
+    if "execution_error" in lane_reasons:
+        return "BLOCKED", "execution_error"
+    if "active_execution_paused" in lane_reasons:
+        return "BLOCKED", "active_execution_paused"
+    return "RUNNING", "cycle completed"
 
 
 

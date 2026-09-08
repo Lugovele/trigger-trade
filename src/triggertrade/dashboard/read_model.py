@@ -31,6 +31,29 @@ class RuntimeStateView:
 
 
 @dataclass(frozen=True)
+class RuntimeHeartbeatView:
+    component: str
+    status: str
+    observed_at: str
+    is_stale: bool
+    detail: str
+
+
+@dataclass(frozen=True)
+class ReadinessCheckView:
+    name: str
+    status: str
+    detail: str
+    observed_at: str | None = None
+
+
+@dataclass(frozen=True)
+class DemoReadinessView:
+    status: str
+    checks: tuple[ReadinessCheckView, ...]
+
+
+@dataclass(frozen=True)
 class DecisionView:
     candle_id: str | None
     candle_open_time: str | None
@@ -534,6 +557,78 @@ class DashboardReadModel:
             last_processed_at=row["last_processed_at"],
             db_health="OK",
         )
+
+    def list_runtime_heartbeats(self) -> tuple[RuntimeHeartbeatView, ...]:
+        if not self.db_path.exists():
+            return ()
+        try:
+            with self._connect() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT component, status, observed_at, detail
+                    FROM runtime_heartbeats
+                    ORDER BY component
+                    """
+                ).fetchall()
+        except sqlite3.Error:
+            return ()
+        values: list[RuntimeHeartbeatView] = []
+        for row in rows:
+            values.append(
+                RuntimeHeartbeatView(
+                    component=row["component"],
+                    status=row["status"],
+                    observed_at=row["observed_at"],
+                    is_stale=_timestamp_is_stale(row["observed_at"], timedelta(minutes=5)),
+                    detail=row["detail"] or "-",
+                )
+            )
+        return tuple(values)
+
+    def get_demo_readiness(self) -> DemoReadinessView:
+        if not self.db_path.exists():
+            return DemoReadinessView(
+                "UNAVAILABLE",
+                (ReadinessCheckView("database", "UNAVAILABLE", "runtime database is unavailable"),),
+            )
+        checks: list[ReadinessCheckView] = [ReadinessCheckView("database", "RUNNING", "runtime database readable")]
+        runtime_state = self.get_latest_runtime_state()
+        if runtime_state.db_health in {"missing_db", "db_unavailable"}:
+            checks[0] = ReadinessCheckView("database", "UNAVAILABLE", runtime_state.db_health)
+        heartbeats = self.list_runtime_heartbeats()
+        if heartbeats:
+            for heartbeat in heartbeats:
+                status = "DEGRADED" if heartbeat.is_stale and heartbeat.status == "RUNNING" else heartbeat.status
+                detail = "heartbeat is stale" if heartbeat.is_stale else heartbeat.detail
+                checks.append(ReadinessCheckView(f"heartbeat:{heartbeat.component}", status, detail, heartbeat.observed_at))
+        else:
+            checks.append(ReadinessCheckView("heartbeat", "DEGRADED", "no runtime heartbeat recorded"))
+
+        if runtime_state.last_processed_at:
+            status = "DEGRADED" if _timestamp_is_stale(runtime_state.last_processed_at, timedelta(minutes=5)) else "RUNNING"
+            checks.append(ReadinessCheckView("market_data", status, f"last processed {runtime_state.last_processed_at}", runtime_state.last_processed_at))
+        else:
+            checks.append(ReadinessCheckView("market_data", "DEGRADED", "no processed market candle recorded"))
+
+        catalog = self.get_rules_catalog_state()
+        if catalog.status == "UNAVAILABLE":
+            checks.append(ReadinessCheckView("instrument_catalog", "UNAVAILABLE", catalog.error or "catalog unavailable", catalog.updated_at))
+        elif catalog.is_stale:
+            checks.append(ReadinessCheckView("instrument_catalog", "DEGRADED", catalog.error or "catalog stale", catalog.updated_at))
+        elif catalog.status != "OK":
+            checks.append(ReadinessCheckView("instrument_catalog", "DEGRADED", catalog.error or f"catalog status {catalog.status}", catalog.updated_at))
+        else:
+            checks.append(ReadinessCheckView("instrument_catalog", "RUNNING", f"{catalog.tradeable_count} tradeable symbols", catalog.updated_at))
+
+        operator = self.get_operator_trading_state()
+        if operator.state == "TRADING_PAUSED":
+            checks.append(ReadinessCheckView("operator", "BLOCKED", "new ACTIVE entries paused", operator.changed_at))
+        elif operator.state == "TRADING_ENABLED":
+            checks.append(ReadinessCheckView("operator", "RUNNING", "new ACTIVE entries enabled", operator.changed_at))
+        else:
+            checks.append(ReadinessCheckView("operator", "UNAVAILABLE", "operator state unavailable", operator.changed_at))
+
+        return DemoReadinessView(_rollup_readiness(check.status for check in checks), tuple(checks))
 
     def get_latest_decision(self) -> DecisionView:
         rows = self.list_recent_activity(limit=1)
@@ -2714,13 +2809,25 @@ def _optional_percent_value(value: Decimal | None) -> str | None:
 
 
 def _catalog_refresh_is_stale(updated_at: str | None) -> bool:
+    return _timestamp_is_stale(updated_at, timedelta(hours=24))
+
+
+def _timestamp_is_stale(value: str | None, max_age: timedelta) -> bool:
     try:
-        updated = datetime.fromisoformat(updated_at or "")
+        observed = datetime.fromisoformat(value or "")
     except ValueError:
         return True
-    if updated.tzinfo is None:
-        updated = updated.replace(tzinfo=UTC)
-    return datetime.now(UTC) - updated > timedelta(hours=24)
+    if observed.tzinfo is None:
+        observed = observed.replace(tzinfo=UTC)
+    return datetime.now(UTC) - observed > max_age
+
+
+def _rollup_readiness(statuses) -> str:
+    values = tuple(str(status).upper() for status in statuses)
+    for status in ("BLOCKED", "UNAVAILABLE", "DEGRADED"):
+        if status in values:
+            return status
+    return "RUNNING"
 
 def _empty_runtime_state(db_health: str) -> RuntimeStateView:
     return RuntimeStateView(

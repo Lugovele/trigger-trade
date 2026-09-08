@@ -199,6 +199,30 @@ Research facts, including Daily Loss state when available. It never accepts
 browser file paths or exposes raw logs, request headers, `.env` contents,
 cookies, tokens, or exchange credentials.
 
+## Demo Health and Soak Harness
+
+The dashboard exposes a read-only `/api/readiness` contract with
+`RUNNING`, `DEGRADED`, `BLOCKED`, and `UNAVAILABLE` states. The rollup is built
+from factual backend checks such as database readability, persisted runtime
+heartbeats, latest processed market data, instrument catalog state, and
+operator pause state. Missing heartbeat or stale data is reported as degraded
+or unavailable rather than a green running state.
+
+Runtime heartbeat rows are persisted by component and updated idempotently, so
+restart can recover the latest known liveness state without accumulating an
+unbounded log stream. System History includes the readiness rollup and bounded
+heartbeat rows for later diagnosis.
+
+A bounded Bybit Demo soak harness is available but never automatic:
+
+```powershell
+$env:RUN_TRIGGERTRADE_DEMO_SOAK="1"
+python scripts/triggertrade_demo_soak.py
+```
+
+The soak harness refuses mainnet, Spot, live trading, non-Demo URLs, and
+nonlinear venues. It does not enable Dynamic TP or production SHORT alpha.
+
 ## Research Backend
 
 Research is now a backend-owned product entity with persistent records for the

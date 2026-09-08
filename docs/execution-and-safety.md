@@ -218,6 +218,26 @@ Active request records a blocked decision with a factual reason and leaves
 ACTIVE Trigger Sets, Trading Rules, positions, orders, and execution state
 unchanged.
 
+## Demo Readiness and Heartbeat
+
+Sustained Bybit Demo operation uses a factual readiness projection rather than
+an unconditional running indicator. The read-only readiness contract reports
+`RUNNING`, `DEGRADED`, `BLOCKED`, or `UNAVAILABLE` from backend evidence:
+database readability, component heartbeat, market-data progress, instrument
+catalog freshness, and operator pause state.
+
+Heartbeat rows are persisted by stable component id. A new observation replaces
+the previous heartbeat for that component and stores only bounded diagnostic
+metadata. Unknown status values and path-like component ids are rejected. A
+missing or stale heartbeat is degraded/unavailable evidence, not success.
+
+The optional Demo soak harness is explicit opt-in through
+`RUN_TRIGGERTRADE_DEMO_SOAK=1`. It runs bounded cycles only against Bybit Demo
+linear futures in paper mode, refuses mainnet and Spot configuration, and
+records heartbeat evidence before and after the run. It does not enable
+Dynamic TP, does not introduce SHORT alpha, and does not perform destructive
+production testing.
+
 ## Futures Accounting Safety
 
 Futures accounting consumes explicit execution/fill/funding/equity facts and

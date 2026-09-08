@@ -125,6 +125,18 @@ from the backend and copy the returned sanitized text; it must not assemble the
 history from DOM state, read files directly, pass arbitrary paths, or expose a
 raw logs page.
 
+Demo readiness is a backend read model, not a dashboard color heuristic. The
+readiness rollup uses explicit `RUNNING`, `DEGRADED`, `BLOCKED`, and
+`UNAVAILABLE` states from bounded checks: database readability, persisted
+runtime heartbeat, processed market-data freshness, instrument catalog state,
+and operator pause state. The dashboard may display this projection, but it
+must not infer healthy operation from missing data.
+
+Runtime heartbeat is component-scoped persisted state. Each component updates
+one latest heartbeat row with an allowlisted status and bounded metadata, so
+restart can recover the latest known liveness signal without converting
+heartbeats into an unbounded technical log stream.
+
 Research follows `Backtest -> Demo -> Compare -> Decision`. It is separate
 from the older runtime evidence lanes. Backtests reference immutable
 historical replay runs from backend-owned replay inputs, never browser-supplied

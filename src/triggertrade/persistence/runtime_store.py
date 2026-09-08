@@ -74,6 +74,15 @@ class LaneCandleLifecycle:
     rules_evaluation: dict[str, str | None] | None = None
 
 
+@dataclass(frozen=True)
+class RuntimeHeartbeat:
+    component: str
+    status: str
+    observed_at: str
+    detail: str | None = None
+    metadata: dict[str, str | None] | None = None
+
+
 class RuntimeStore:
     def __init__(self, path: str | Path = "runtime/triggertrade_paper.sqlite3") -> None:
         self.path = Path(path)
@@ -352,6 +361,53 @@ class RuntimeStore:
             ).fetchone()
         return None if row is None else _row_to_market_regime(row)
 
+    def record_heartbeat(self, heartbeat: RuntimeHeartbeat) -> RuntimeHeartbeat:
+        component = heartbeat.component.strip().lower()
+        if not component or any(char not in "abcdefghijklmnopqrstuvwxyz0123456789_-." for char in component):
+            raise RuntimeStoreError("heartbeat component must be a stable identifier")
+        status = heartbeat.status.strip().upper()
+        if status not in {"RUNNING", "DEGRADED", "BLOCKED", "UNAVAILABLE"}:
+            raise RuntimeStoreError("heartbeat status must be RUNNING, DEGRADED, BLOCKED, or UNAVAILABLE")
+        normalized = RuntimeHeartbeat(
+            component=component,
+            status=status,
+            observed_at=heartbeat.observed_at,
+            detail=heartbeat.detail,
+            metadata=heartbeat.metadata or {},
+        )
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO runtime_heartbeats (
+                    component, status, observed_at, detail, metadata
+                ) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(component) DO UPDATE SET
+                    status = excluded.status,
+                    observed_at = excluded.observed_at,
+                    detail = excluded.detail,
+                    metadata = excluded.metadata
+                """,
+                (
+                    normalized.component,
+                    normalized.status,
+                    normalized.observed_at,
+                    normalized.detail,
+                    json.dumps(normalized.metadata or {}, sort_keys=True),
+                ),
+            )
+        return normalized
+
+    def list_heartbeats(self) -> tuple[RuntimeHeartbeat, ...]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT component, status, observed_at, detail, metadata
+                FROM runtime_heartbeats
+                ORDER BY component
+                """
+            ).fetchall()
+        return tuple(_row_to_heartbeat(row) for row in rows)
+
     def _init_schema(self) -> None:
         with self._connect() as conn:
             conn.execute(
@@ -452,6 +508,17 @@ class RuntimeStore:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS runtime_heartbeats (
+                    component TEXT PRIMARY KEY,
+                    status TEXT NOT NULL,
+                    observed_at TEXT NOT NULL,
+                    detail TEXT,
+                    metadata TEXT NOT NULL DEFAULT '{}'
+                )
+                """
+            )
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path)
@@ -546,6 +613,16 @@ def _row_to_market_regime(row: sqlite3.Row) -> MarketRegimeContext:
         normalized_features=json.loads(row["normalized_features"]),
         thresholds=json.loads(row["thresholds"]),
         reason=row["reason"],
+    )
+
+
+def _row_to_heartbeat(row: sqlite3.Row) -> RuntimeHeartbeat:
+    return RuntimeHeartbeat(
+        component=row["component"],
+        status=row["status"],
+        observed_at=row["observed_at"],
+        detail=row["detail"],
+        metadata=_json_optional(row, "metadata") or {},
     )
 
 
