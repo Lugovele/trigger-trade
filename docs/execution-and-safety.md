@@ -191,3 +191,18 @@ data is unavailable, not zero. Equity drawdown uses real persisted equity
 snapshots only; synthetic series are forbidden.
 
 In this backend unit, `daily_loss_limit_enabled=true` fails closed until an accounting-backed daily realized-loss gate is wired into entry decisions. `max_positions_per_coin`, when enabled, is constrained to `1` because the approved lifecycle invariant is still one net position per symbol; pyramiding requires a later reviewed change.
+
+## Portfolio Operator Contracts
+
+The Portfolio dashboard may request Pause Entries, Resume Entries, Close One,
+and Close All only through protected local backend POST contracts. Pause and
+Resume update persisted operator state and write audit rows. Close One and
+Close All require an attached futures lifecycle execution bridge; without that
+bridge the dashboard returns an explicit service-unavailable failure and audits
+the failed operator action instead of pretending that a reduce-only close was
+submitted.
+
+Close One must identify a stable `position_id` and symbol. Close All is scoped
+to ACTIVE/live Demo portfolio positions and must not include Research Demo,
+Backtest, or TEST simulation evidence. The browser never receives Bybit
+credentials or calls exchange/order endpoints directly.

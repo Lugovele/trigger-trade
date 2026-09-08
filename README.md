@@ -17,6 +17,10 @@ The project is intentionally small. The infrastructure exists to keep money-movi
 - `.codex/agents/triggertrade-change-reviewer.toml`
 - `.codex/agents/triggertrade-review-remediation-agent.toml`
 - `.codex/agents/triggertrade-test-planner.toml`
+- `.codex/agents/triggertrade-security-change-reviewer.toml`
+- `.codex/agents/triggertrade-security-auditor.toml`
+- `.codex/agents/triggertrade-agent-security-reviewer.toml`
+- `.codex/agents/triggertrade-ux-reviewer.toml`
 - `docs/architecture.md`
 - `docs/trading-rules.md`
 - `docs/execution-and-safety.md`
@@ -40,6 +44,17 @@ On startup they call the shared canonical registry bootstrap before opening runt
 The dashboard is intentionally read-only for trading logic after startup initialization. It does not evaluate triggers, create strategy decisions, approve risk, call execution services, place/cancel orders, or expose API credentials. The startup bootstrap stores only canonical registry metadata, not fake candles, trades, fills, P&L, or performance evidence. Futures P&L shown in the dashboard must come from the backend accounting store; alerts remain deferred.
 
 The dashboard product surface is futures-first: LIVE means the ACTIVE Bybit Demo linear-perpetual lane, not mainnet trading, and TEST means local deterministic futures simulation. It shows account/equity, position, trade, fee, funding, regime, readiness, and recommendation fields only when the backend has persisted authoritative facts. Take-profit, stop-loss, liquidation, margin, or P&L fields that do not yet have backend support are rendered as Not configured, Not available, or unavailable instead of being calculated in the frontend.
+
+Portfolio is now backed by backend read models instead of fixture account rows.
+`Total` is the latest authoritative account equity snapshot, `Available` is
+the latest account available margin/capital for new entries, and `In positions`
+is the sum of persisted open-position entry notionals. `Realized P&L today` is
+closed-trade net P&L for the current UTC day, while aggregate `Unrealized P&L`
+comes from the latest backend equity/accounting snapshot. If those facts are
+missing or stale, the read model exposes `UNAVAILABLE` or `STALE`; the frontend
+does not synthesize balances or recalculate portfolio metrics. Portfolio close
+actions use protected backend POST contracts and fail closed when the dashboard
+process has no attached futures lifecycle execution bridge.
 ## Trigger Sets and Lanes
 
 The runtime now bootstraps versioned trigger sets and evaluates the current ACTIVE set alongside TESTING sets over the same completed candle. ACTIVE remains the only lane connected to paper execution. TEST lanes are persisted for comparison and dashboard visibility only; they do not submit Bybit orders or change trading configuration.

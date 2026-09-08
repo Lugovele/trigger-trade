@@ -319,6 +319,91 @@ class OperatorStateView:
 
 
 @dataclass(frozen=True)
+class PortfolioSnapshotView:
+    as_of: str
+    source: str
+    freshness_state: str
+    total_equity: str | None
+    available_capital: str | None
+    in_positions: str
+    realized_pnl_today: str | None
+    unrealized_pnl: str | None
+    open_positions_count: int
+    currency: str = "USDT"
+    entries_paused: bool = False
+    last_reconciliation_at: str | None = None
+    data_warnings: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class PortfolioOpenPositionRow:
+    position_id: str
+    symbol: str
+    side: str
+    leverage: str
+    qty: str
+    qty_unit: str
+    value: str
+    entry_price: str
+    current_price: str | None
+    price_source: str
+    take_profit_pct: str
+    take_profit_price: str
+    stop_loss_pct: str
+    stop_loss_price: str
+    unrealized_pnl_pct: str | None
+    unrealized_pnl_amount: str | None
+    set_id: str | None
+    set_version: str | None
+    rules_version_id: str | None
+    opened_at: str
+    age_seconds: int | None
+    status: str
+    close_action_available: bool
+
+
+@dataclass(frozen=True)
+class PortfolioClosedPositionRow:
+    trade_id: str
+    position_id: str
+    symbol: str
+    side: str
+    leverage: str
+    qty: str
+    qty_unit: str
+    value: str
+    entry_price: str
+    exit_price: str
+    planned_tp_pct: str
+    planned_tp_price: str
+    planned_sl_pct: str
+    planned_sl_price: str
+    realized_pnl_pct: str
+    realized_pnl_amount: str
+    close_reason: str
+    set_id: str | None
+    set_version: str | None
+    rules_version_id: str | None
+    opened_at: str
+    closed_at: str
+    duration_seconds: int
+
+
+@dataclass(frozen=True)
+class PortfolioClosedSummaryView:
+    closed_today_count: int
+    realized_pnl_today: str | None
+    win_rate_today: str | None
+
+
+@dataclass(frozen=True)
+class PortfolioOpenSummaryView:
+    open_count: int
+    capital_in_open_positions: str
+    unrealized_pnl: str | None
+
+
+@dataclass(frozen=True)
 class OverviewView:
     lane: str
     status: str
@@ -1537,6 +1622,169 @@ class DashboardReadModel:
             reason=row["reason"] or "-",
         )
 
+    def get_portfolio_snapshot(self) -> PortfolioSnapshotView:
+        operator = self.get_operator_trading_state()
+        if not self.db_path.exists():
+            return PortfolioSnapshotView(
+                as_of="-",
+                source="runtime_db_missing",
+                freshness_state="UNAVAILABLE",
+                total_equity=None,
+                available_capital=None,
+                in_positions="0",
+                realized_pnl_today=None,
+                unrealized_pnl=None,
+                open_positions_count=0,
+                entries_paused=operator.state == "TRADING_PAUSED",
+                data_warnings=("runtime DB not present",),
+            )
+        equity = self.get_latest_futures_equity()
+        open_rows = self.list_portfolio_open_positions()
+        in_positions = sum((Decimal(row.value) for row in open_rows), Decimal("0"))
+        realized_today = self.get_portfolio_closed_summary().realized_pnl_today
+        if equity is None:
+            return PortfolioSnapshotView(
+                as_of="-",
+                source="account_equity_unavailable",
+                freshness_state="UNAVAILABLE",
+                total_equity=None,
+                available_capital=None,
+                in_positions=str(in_positions),
+                realized_pnl_today=realized_today,
+                unrealized_pnl=None,
+                open_positions_count=len(open_rows),
+                entries_paused=operator.state == "TRADING_PAUSED",
+                data_warnings=("authoritative account equity snapshot unavailable",),
+            )
+        return PortfolioSnapshotView(
+            as_of=equity.observed_at,
+            source=equity.source,
+            freshness_state=_freshness_state(equity.observed_at),
+            total_equity=equity.equity,
+            available_capital=equity.available_margin,
+            in_positions=str(in_positions),
+            realized_pnl_today=realized_today,
+            unrealized_pnl=equity.unrealized_pnl,
+            open_positions_count=len(open_rows),
+            entries_paused=operator.state == "TRADING_PAUSED",
+            last_reconciliation_at=self._last_reconciliation_at(),
+            data_warnings=() if _freshness_state(equity.observed_at) == "FRESH" else ("account equity snapshot is stale",),
+        )
+
+    def list_portfolio_open_positions(
+        self,
+        *,
+        symbol: str | None = None,
+        side: str | None = None,
+        set_version: str | None = None,
+        limit: int = 100,
+    ) -> tuple[PortfolioOpenPositionRow, ...]:
+        if not self.db_path.exists():
+            return ()
+        clauses = ["status = 'OPEN'", _portfolio_source_clause()]
+        values: list[Any] = []
+        _append_optional_filter(clauses, values, "symbol", symbol)
+        _append_optional_filter(clauses, values, "side", side)
+        _append_optional_filter(clauses, values, "trigger_set_version", set_version)
+        try:
+            with self._connect() as conn:
+                if not _has_table(conn, "futures_positions"):
+                    return ()
+                rows = conn.execute(
+                    f"""
+                    SELECT position_id, symbol, side, leverage, current_qty,
+                           position_value, entry_price, tp_pct, tp_price, sl_pct,
+                           sl_price, trigger_set_id, trigger_set_version,
+                           rules_version_id, opened_at, status
+                    FROM futures_positions
+                    WHERE {' AND '.join(clauses)}
+                    ORDER BY opened_at DESC, position_id DESC
+                    LIMIT ?
+                    """,
+                    (*values, max(1, min(int(limit), 250))),
+                ).fetchall()
+        except (sqlite3.Error, ValueError):
+            return ()
+        return tuple(_portfolio_open_position_row(row) for row in rows)
+
+    def list_portfolio_closed_positions(
+        self,
+        *,
+        symbol: str | None = None,
+        side: str | None = None,
+        set_version: str | None = None,
+        close_reason: str | None = None,
+        limit: int = 100,
+    ) -> tuple[PortfolioClosedPositionRow, ...]:
+        if not self.db_path.exists():
+            return ()
+        clauses = [_portfolio_source_clause()]
+        values: list[Any] = []
+        _append_optional_filter(clauses, values, "symbol", symbol)
+        _append_optional_filter(clauses, values, "direction", side)
+        _append_optional_filter(clauses, values, "trigger_set_version", set_version)
+        _append_optional_filter(clauses, values, "close_reason", close_reason)
+        try:
+            with self._connect() as conn:
+                if not _has_table(conn, "futures_closed_positions"):
+                    return ()
+                rows = conn.execute(
+                    f"""
+                    SELECT trade_id, position_id, symbol, direction, leverage, qty,
+                           position_value, entry_vwap, exit_vwap, planned_tp_pct,
+                           planned_tp_price, planned_sl_pct, planned_sl_price,
+                           realized_pnl_pct, net_pnl, close_reason, trigger_set_id,
+                           trigger_set_version, rules_version_id, opened_at, closed_at,
+                           duration_seconds
+                    FROM futures_closed_positions
+                    WHERE {' AND '.join(clauses)}
+                    ORDER BY closed_at DESC, trade_id DESC
+                    LIMIT ?
+                    """,
+                    (*values, max(1, min(int(limit), 250))),
+                ).fetchall()
+        except (sqlite3.Error, ValueError):
+            return ()
+        return tuple(_portfolio_closed_position_row(row) for row in rows)
+
+    def get_portfolio_open_summary(self) -> PortfolioOpenSummaryView:
+        rows = self.list_portfolio_open_positions()
+        capital = sum((Decimal(row.value) for row in rows), Decimal("0"))
+        equity = self.get_latest_futures_equity()
+        return PortfolioOpenSummaryView(
+            open_count=len(rows),
+            capital_in_open_positions=str(capital),
+            unrealized_pnl=None if equity is None else equity.unrealized_pnl,
+        )
+
+    def get_portfolio_closed_summary(self) -> PortfolioClosedSummaryView:
+        rows = self._portfolio_closed_today_rows()
+        if not rows:
+            return PortfolioClosedSummaryView(0, None, None)
+        realized = sum((Decimal(row.realized_pnl_amount) for row in rows), Decimal("0"))
+        winners = sum(1 for row in rows if Decimal(row.realized_pnl_amount) > 0)
+        return PortfolioClosedSummaryView(
+            closed_today_count=len(rows),
+            realized_pnl_today=str(realized),
+            win_rate_today=str((Decimal(winners) / Decimal(len(rows)) * Decimal("100")).quantize(Decimal("0.01"))),
+        )
+
+    def _portfolio_closed_today_rows(self) -> tuple[PortfolioClosedPositionRow, ...]:
+        today = datetime.now(UTC).date().isoformat()
+        return tuple(row for row in self.list_portfolio_closed_positions(limit=250) if _date_prefix(row.closed_at) == today)
+
+    def _last_reconciliation_at(self) -> str | None:
+        if not self.db_path.exists():
+            return None
+        try:
+            with self._connect() as conn:
+                if not _has_table(conn, "futures_executions"):
+                    return None
+                row = _fetch_optional(conn, "SELECT MAX(updated_at) AS updated_at FROM futures_executions")
+        except sqlite3.Error:
+            return None
+        return None if row is None else row["updated_at"]
+
     def _regime_for_context(self, context_id: str) -> dict[str, Any] | None:
         try:
             with self._connect() as conn:
@@ -1920,6 +2168,117 @@ def _has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
         return column in {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
     except sqlite3.Error:
         return False
+
+
+def _has_table(conn: sqlite3.Connection, table: str) -> bool:
+    try:
+        row = conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)).fetchone()
+    except sqlite3.Error:
+        return False
+    return row is not None
+
+
+def _portfolio_source_clause() -> str:
+    return "UPPER(COALESCE(evidence_source, 'ACTIVE')) IN ('ACTIVE', 'EXCHANGE')"
+
+
+def _append_optional_filter(clauses: list[str], values: list[Any], column: str, raw: str | None) -> None:
+    value = (raw or "").strip()
+    if value and value.lower() not in {"all", "coin: all", "side: all", "set: all", "close reason: all"}:
+        clauses.append(f"{column} = ?")
+        values.append(value.upper() if column in {"symbol", "side", "direction", "close_reason"} else value)
+
+
+def _portfolio_open_position_row(row: sqlite3.Row) -> PortfolioOpenPositionRow:
+    opened_at = row["opened_at"]
+    age_seconds = _age_seconds(opened_at)
+    qty = row["current_qty"]
+    symbol = row["symbol"]
+    return PortfolioOpenPositionRow(
+        position_id=row["position_id"],
+        symbol=symbol,
+        side=row["side"],
+        leverage=row["leverage"],
+        qty=qty,
+        qty_unit=_base_from_symbol(symbol),
+        value=row["position_value"],
+        entry_price=row["entry_price"],
+        current_price=None,
+        price_source="MARK_UNAVAILABLE",
+        take_profit_pct=row["tp_pct"],
+        take_profit_price=row["tp_price"],
+        stop_loss_pct=row["sl_pct"],
+        stop_loss_price=row["sl_price"],
+        unrealized_pnl_pct=None,
+        unrealized_pnl_amount=None,
+        set_id=row["trigger_set_id"],
+        set_version=row["trigger_set_version"],
+        rules_version_id=row["rules_version_id"] if "rules_version_id" in row.keys() else None,
+        opened_at=opened_at,
+        age_seconds=age_seconds,
+        status=row["status"],
+        close_action_available=row["status"] == "OPEN",
+    )
+
+
+def _portfolio_closed_position_row(row: sqlite3.Row) -> PortfolioClosedPositionRow:
+    symbol = row["symbol"]
+    return PortfolioClosedPositionRow(
+        trade_id=row["trade_id"],
+        position_id=row["position_id"],
+        symbol=symbol,
+        side=row["direction"],
+        leverage=row["leverage"],
+        qty=row["qty"],
+        qty_unit=_base_from_symbol(symbol),
+        value=row["position_value"],
+        entry_price=row["entry_vwap"],
+        exit_price=row["exit_vwap"],
+        planned_tp_pct=row["planned_tp_pct"],
+        planned_tp_price=row["planned_tp_price"],
+        planned_sl_pct=row["planned_sl_pct"],
+        planned_sl_price=row["planned_sl_price"],
+        realized_pnl_pct=row["realized_pnl_pct"],
+        realized_pnl_amount=row["net_pnl"],
+        close_reason=row["close_reason"],
+        set_id=row["trigger_set_id"],
+        set_version=row["trigger_set_version"],
+        rules_version_id=row["rules_version_id"] if "rules_version_id" in row.keys() else None,
+        opened_at=row["opened_at"],
+        closed_at=row["closed_at"],
+        duration_seconds=int(row["duration_seconds"]),
+    )
+
+
+def _freshness_state(observed_at: str) -> str:
+    try:
+        observed = datetime.fromisoformat(observed_at)
+    except (TypeError, ValueError):
+        return "UNAVAILABLE"
+    if observed.tzinfo is None:
+        observed = observed.replace(tzinfo=UTC)
+    age_seconds = (datetime.now(UTC) - observed).total_seconds()
+    if age_seconds < 0:
+        return "FRESH"
+    return "FRESH" if age_seconds <= 300 else "STALE"
+
+
+def _age_seconds(value: str | None) -> int | None:
+    try:
+        opened = datetime.fromisoformat(value or "")
+    except ValueError:
+        return None
+    if opened.tzinfo is None:
+        opened = opened.replace(tzinfo=UTC)
+    return max(0, int((datetime.now(UTC) - opened).total_seconds()))
+
+
+def _date_prefix(value: str | None) -> str:
+    return "" if not value else value[:10]
+
+
+def _base_from_symbol(symbol: str) -> str:
+    return symbol[:-4] if symbol.endswith("USDT") else symbol
 
 
 def _regime_metric_values(facts: tuple[TradePerformanceFact, ...]) -> tuple[str, str, str]:

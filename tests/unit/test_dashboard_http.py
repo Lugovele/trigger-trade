@@ -7,6 +7,7 @@ import pytest
 
 from triggertrade.dashboard.__main__ import DEFAULT_HOST, create_server, create_server_from_env, render_dashboard
 from triggertrade.dashboard.read_model import DashboardReadModel
+from triggertrade.persistence.operator_state_store import OperatorStateStore
 from tests.unit.test_dashboard_read_model import _empty_db, _save_no_signal
 
 
@@ -111,6 +112,98 @@ def test_operator_controls_are_protected_frontend_boundaries(tmp_path):
     assert "/order/create" not in html
     assert "manual BUY" not in html
     assert "manual SELL" not in html
+
+
+def test_portfolio_close_actions_fail_closed_without_execution_bridge(tmp_path):
+    db = _empty_db(tmp_path)
+    server = create_server(port=0, db_path=db)
+    host, port = server.server_address
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        token = server.operator_control_token
+        conn = HTTPConnection(host, port, timeout=2)
+        conn.request(
+            "POST",
+            "/operator/close-one",
+            body=f"confirm=yes&token={token}&position_id=pos-1&symbol=BTCUSDT",
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+        assert response.status == HTTPStatus.SERVICE_UNAVAILABLE
+        assert "execution bridge is not attached" in body
+
+        conn.request(
+            "POST",
+            "/operator/close-all",
+            body=f"confirm=yes&token={token}&phrase=CLOSE+ALL",
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+        assert response.status == HTTPStatus.SERVICE_UNAVAILABLE
+        assert "execution bridge is not attached" in body
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+    audit = OperatorStateStore(db).operator_action_rows()
+    assert [row.action for row in audit[:2]] == ["CLOSE_ALL", "CLOSE_ONE"]
+    assert all(row.result == "FAILED" for row in audit[:2])
+
+
+def test_portfolio_close_actions_use_injected_backend_contract(tmp_path):
+    class FakeOperatorActions:
+        def __init__(self):
+            self.closed_one = None
+            self.closed_all = False
+
+        def close_position(self, *, position_id, symbol, close_reason):
+            self.closed_one = (position_id, symbol, close_reason)
+
+        def close_all_positions(self, *, scope):
+            self.closed_all = scope == "ACTIVE"
+
+    db = _empty_db(tmp_path)
+    actions = FakeOperatorActions()
+    server = create_server(port=0, db_path=db, operator_actions=actions)
+    host, port = server.server_address
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        token = server.operator_control_token
+        conn = HTTPConnection(host, port, timeout=2)
+        conn.request(
+            "POST",
+            "/operator/close-one",
+            body=f"confirm=yes&token={token}&position_id=pos-1&symbol=BTCUSDT",
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        response = conn.getresponse()
+        response.read()
+        assert response.status == HTTPStatus.SEE_OTHER
+        assert actions.closed_one == ("pos-1", "BTCUSDT", "MANUAL")
+
+        conn.request(
+            "POST",
+            "/operator/close-all",
+            body=f"confirm=yes&token={token}&phrase=CLOSE+ALL",
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        response = conn.getresponse()
+        response.read()
+        assert response.status == HTTPStatus.SEE_OTHER
+        assert actions.closed_all is True
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+    audit = OperatorStateStore(db).operator_action_rows()
+    assert [row.action for row in audit[:2]] == ["CLOSE_ALL", "CLOSE_ONE"]
+    assert all(row.result == "SUCCESS" for row in audit[:2])
 
 
 def test_secret_like_trace_values_are_not_rendered(tmp_path):

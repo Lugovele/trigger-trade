@@ -22,6 +22,16 @@ class OperatorTradingState:
     reason: str | None = None
 
 
+@dataclass(frozen=True)
+class OperatorActionAudit:
+    action: str
+    changed_at: str
+    target: str | None
+    result: str
+    source: str
+    error: str | None = None
+
+
 class OperatorStateStore:
     def __init__(self, path: str | Path = "runtime/triggertrade_paper.sqlite3") -> None:
         self.path = Path(path)
@@ -101,6 +111,49 @@ class OperatorStateStore:
             for row in rows
         )
 
+    def record_operator_action(
+        self,
+        *,
+        action: str,
+        target: str | None,
+        result: str,
+        source: str = "local_dashboard",
+        error: str | None = None,
+        changed_at: str | None = None,
+    ) -> OperatorActionAudit:
+        changed_at = changed_at or _now()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO operator_action_audit (
+                    changed_at, action, target, result, source, error
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (changed_at, action, target, result, source, error),
+            )
+        return OperatorActionAudit(action, changed_at, target, result, source, error)
+
+    def operator_action_rows(self) -> tuple[OperatorActionAudit, ...]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT changed_at, action, target, result, source, error
+                FROM operator_action_audit
+                ORDER BY changed_at DESC, id DESC
+                """
+            ).fetchall()
+        return tuple(
+            OperatorActionAudit(
+                action=row["action"],
+                changed_at=row["changed_at"],
+                target=row["target"],
+                result=row["result"],
+                source=row["source"],
+                error=row["error"],
+            )
+            for row in rows
+        )
+
     def _init_schema(self) -> None:
         with self._connect() as conn:
             conn.execute(
@@ -111,6 +164,19 @@ class OperatorStateStore:
                     changed_at TEXT NOT NULL,
                     source TEXT NOT NULL,
                     reason TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS operator_action_audit (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    changed_at TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    target TEXT,
+                    result TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    error TEXT
                 )
                 """
             )

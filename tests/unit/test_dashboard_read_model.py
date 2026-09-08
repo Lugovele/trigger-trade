@@ -1,6 +1,8 @@
 ﻿from decimal import Decimal
+from datetime import UTC, datetime
 import sqlite3
 
+from triggertrade.accounting import calculate_drawdown_snapshot
 from triggertrade.dashboard.read_model import DashboardReadModel
 from triggertrade.execution import OrderStatus, OrderType, RiskDecision, Side, TradeIntent
 from triggertrade.execution.service import client_order_id_for_intent
@@ -16,6 +18,9 @@ from triggertrade.persistence import (
     TriggerSetStore,
     bootstrap_current_trigger_sets,
 )
+from triggertrade.persistence.futures_accounting_store import FuturesAccountingStore
+from triggertrade.persistence.futures_position_store import FuturesClosedPositionRecord, FuturesPositionRecord, FuturesPositionStore
+from triggertrade.persistence.operator_state_store import OperatorStateStore
 from triggertrade.triggers import Signal, SignalType
 
 
@@ -556,3 +561,156 @@ def test_current_futures_position_is_honest_when_no_authoritative_snapshot_exist
     assert position.take_profit == "Not configured"
     assert position.stop_loss == "Not configured"
     assert "no authoritative" in position.source
+
+
+def test_portfolio_snapshot_uses_backend_equity_positions_and_accounting(tmp_path):
+    db = _empty_db(tmp_path)
+    _save_portfolio_facts(db)
+
+    model = DashboardReadModel(db)
+    snapshot = model.get_portfolio_snapshot()
+    open_rows = model.list_portfolio_open_positions()
+    closed_rows = model.list_portfolio_closed_positions()
+    open_summary = model.get_portfolio_open_summary()
+    closed_summary = model.get_portfolio_closed_summary()
+
+    assert snapshot.total_equity == "1000"
+    assert snapshot.available_capital == "910"
+    assert snapshot.in_positions == "100.00"
+    assert snapshot.unrealized_pnl == "4.20"
+    assert snapshot.open_positions_count == 1
+    assert snapshot.entries_paused is False
+    assert open_summary.capital_in_open_positions == "100.00"
+    assert open_rows[0].position_id == "pos-btc"
+    assert open_rows[0].symbol == "BTCUSDT"
+    assert open_rows[0].side == "LONG"
+    assert open_rows[0].value == "100.00"
+    assert open_rows[0].current_price is None
+    assert open_rows[0].price_source == "MARK_UNAVAILABLE"
+    assert open_rows[0].set_version == "v1"
+    assert open_rows[0].rules_version_id == "rules-v1"
+    assert closed_rows[0].close_reason == "TAKE_PROFIT"
+    assert closed_rows[0].realized_pnl_amount == "1.20"
+    assert closed_summary.closed_today_count == 1
+    assert closed_summary.realized_pnl_today == "1.20"
+    assert closed_summary.win_rate_today == "100.00"
+
+
+def test_portfolio_filters_and_source_isolation(tmp_path):
+    db = _empty_db(tmp_path)
+    _save_portfolio_facts(db)
+    store = FuturesPositionStore(db)
+    store.save_open_position(_position_record("pos-research", "trade-research", "ETHUSDT", "SHORT", "RESEARCH_DEMO"))
+
+    model = DashboardReadModel(db)
+
+    assert [row.symbol for row in model.list_portfolio_open_positions(symbol="BTCUSDT")] == ["BTCUSDT"]
+    assert model.list_portfolio_open_positions(symbol="ETHUSDT") == ()
+    assert [row.symbol for row in model.list_portfolio_open_positions(side="LONG")] == ["BTCUSDT"]
+    assert [row.close_reason for row in model.list_portfolio_closed_positions(close_reason="TAKE_PROFIT")] == ["TAKE_PROFIT"]
+    assert model.list_portfolio_closed_positions(close_reason="STOP_LOSS") == ()
+
+
+def test_portfolio_empty_unavailable_and_operator_pause_state_are_explicit(tmp_path):
+    db = _empty_db(tmp_path)
+    OperatorStateStore(db).pause(changed_at="2026-09-08T00:00:00+00:00", source="unit")
+
+    snapshot = DashboardReadModel(db).get_portfolio_snapshot()
+
+    assert snapshot.freshness_state == "UNAVAILABLE"
+    assert snapshot.total_equity is None
+    assert snapshot.available_capital is None
+    assert snapshot.realized_pnl_today is None
+    assert snapshot.entries_paused is True
+    assert "authoritative account equity snapshot unavailable" in snapshot.data_warnings
+
+
+def _save_portfolio_facts(db):
+    FuturesAccountingStore(db).record_equity_snapshot(
+        calculate_drawdown_snapshot(
+            snapshot_id="portfolio-equity",
+            observed_at=datetime.now(UTC).isoformat(),
+            source="bybit_demo_account",
+            wallet_balance=Decimal("1000"),
+            equity=Decimal("1000"),
+            available_margin=Decimal("910"),
+            used_margin=Decimal("90"),
+            unrealized_pnl=Decimal("4.20"),
+            realized_pnl=Decimal("1.20"),
+        )
+    )
+    store = FuturesPositionStore(db)
+    store.save_open_position(_position_record("pos-btc", "trade-btc", "BTCUSDT", "LONG", "ACTIVE"))
+    today = datetime.now(UTC).date().isoformat()
+    store.save_closed_position(
+        FuturesClosedPositionRecord(
+            trade_id="trade-closed-btc",
+            position_id="pos-closed-btc",
+            symbol="BTCUSDT",
+            direction="LONG",
+            entry_vwap="100",
+            exit_vwap="101.2",
+            qty="1",
+            position_value="100",
+            leverage="1",
+            planned_tp_pct="0.01",
+            planned_tp_price="101",
+            planned_sl_pct="0.005",
+            planned_sl_price="99.5",
+            realized_pnl_pct="1.20",
+            gross_pnl="1.20",
+            fees="0",
+            funding="0",
+            net_pnl="1.20",
+            opened_at=f"{today}T00:00:00+00:00",
+            closed_at=f"{today}T00:10:00+00:00",
+            duration_seconds=600,
+            close_reason="TAKE_PROFIT",
+            trigger_set_id="triggertrade-futures-core",
+            trigger_set_version="v1",
+            strategy_rule_id="STR-FUTURES",
+            strategy_rule_version="0.1.0",
+            risk_rule_version="futures-position-risk-v1",
+            evidence_source="ACTIVE",
+            accounting_version="futures-accounting-v1",
+            rules_version_id="rules-v1",
+        )
+    )
+
+
+def _position_record(position_id: str, trade_id: str, symbol: str, side: str, evidence_source: str) -> FuturesPositionRecord:
+    return FuturesPositionRecord(
+        position_id=position_id,
+        trade_id=trade_id,
+        symbol=symbol,
+        side=side,
+        status="OPEN",
+        opened_at=datetime.now(UTC).isoformat(),
+        closed_at=None,
+        entry_price="100",
+        current_qty="1",
+        initial_qty="1",
+        leverage="1",
+        position_value="100.00",
+        tp_price="101",
+        tp_pct="0.01",
+        sl_price="99.5",
+        sl_pct="0.005",
+        trigger_set_id="triggertrade-futures-core",
+        trigger_set_version="v1",
+        strategy_rule_id="STR-FUTURES",
+        strategy_rule_version="0.1.0",
+        risk_rule_version="futures-position-risk-v1",
+        protective_exit_version="protective-exit-v1",
+        evidence_source=evidence_source,
+        open_intent_id=f"intent-{position_id}",
+        open_risk_decision_id=f"risk-{position_id}",
+        open_execution_id=f"execution-{position_id}",
+        close_intent_id=None,
+        close_risk_decision_id=None,
+        close_execution_id=None,
+        close_reason=None,
+        rule_snapshot={"rules_version_id": "rules-v1"},
+        updated_at=datetime.now(UTC).isoformat(),
+        rules_version_id="rules-v1",
+    )

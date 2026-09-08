@@ -181,6 +181,18 @@ Analytics facts must preserve evidence source. Exchange-derived accounting and
 TEST-lane simulation facts are not interchangeable; baseline comparisons are
 available only for like-for-like accounting samples.
 
+Portfolio is a read model over ACTIVE/live Demo portfolio state, not a second
+portfolio engine. It reads persisted account equity snapshots, futures position
+records, closed-position accounting records, and local operator state. `Total`
+means the latest authoritative account equity snapshot. `Available` means the
+latest account available margin/capital usable for new entries. `In positions`
+and row `Value` use open-position entry notional so leveraged exposure is not
+confused with free capital. `Realized P&L today` is net closed-trade P&L for
+the current UTC day; aggregate `Unrealized P&L` is backend/accounting supplied
+from the latest equity snapshot. Missing mark/current-price data is unavailable
+rather than recomputed in frontend. Portfolio queries filter to ACTIVE/exchange
+evidence sources and exclude Research Demo, Backtest, and TEST simulation facts.
+
 Canonical registry bootstrap is a shared service-layer startup concern. It writes only configured RuleDefinitions, immutable TriggerSetVersions, memberships, and Recommendations into the intended runtime SQLite database before runtime/dashboard services open their stores. Runtime evidence remains separate: bootstrap must not create candle lifecycles, orders, fills, performance history, P&L, or synthetic analytics rows. If an existing exact rule/set/recommendation identity has different semantics, bootstrap fails closed through persistence immutability instead of silently mutating history.
 
 ## Intraday Experiment Governance

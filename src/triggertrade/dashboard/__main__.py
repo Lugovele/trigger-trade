@@ -28,10 +28,12 @@ class DashboardServer(ThreadingHTTPServer):
         *,
         read_model: DashboardReadModel,
         operator_store: OperatorStateStore,
+        operator_actions=None,
     ) -> None:
         super().__init__(server_address, handler_class)
         self.read_model = read_model
         self.operator_store = operator_store
+        self.operator_actions = operator_actions
         self.operator_control_token = secrets.token_urlsafe(24)
 
 
@@ -109,7 +111,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
-        if parsed.path in {"/operator/pause", "/operator/resume"}:
+        if parsed.path in {"/operator/pause", "/operator/resume", "/operator/close-one", "/operator/close-all"}:
             length = int(self.headers.get("Content-Length", "0") or "0")
             body = self.rfile.read(min(length, 2048)).decode("utf-8")
             values = parse_qs(body)
@@ -121,8 +123,102 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path.endswith("/pause"):
                 self.server.operator_store.pause(reason="confirmed local Pause Entries")
-            else:
+                self.server.operator_store.record_operator_action(
+                    action="PAUSE_ENTRIES",
+                    target="ACTIVE",
+                    result="SUCCESS",
+                    source="local_dashboard",
+                )
+            elif parsed.path.endswith("/resume"):
                 self.server.operator_store.resume(reason="confirmed local Resume")
+                self.server.operator_store.record_operator_action(
+                    action="RESUME_ENTRIES",
+                    target="ACTIVE",
+                    result="SUCCESS",
+                    source="local_dashboard",
+                )
+            elif parsed.path.endswith("/close-one"):
+                position_id = values.get("position_id", [""])[0][:160]
+                symbol = values.get("symbol", [""])[0][:40]
+                if not position_id or not symbol:
+                    self._send_html(render_not_found("position id required"), HTTPStatus.BAD_REQUEST)
+                    return
+                action = self.server.operator_actions
+                if action is None:
+                    error = "close-one execution bridge is not attached to this dashboard process"
+                    self.server.operator_store.record_operator_action(
+                        action="CLOSE_ONE",
+                        target=position_id,
+                        result="FAILED",
+                        source="local_dashboard",
+                        error=error,
+                    )
+                    self._send_html(render_not_found(error), HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                try:
+                    _close_single_position(action, position_id=position_id, symbol=symbol)
+                except Exception as exc:  # noqa: BLE001 - operator action failures must be rendered, not crash the dashboard.
+                    error = str(exc)[:500]
+                    self.server.operator_store.record_operator_action(
+                        action="CLOSE_ONE",
+                        target=position_id,
+                        result="FAILED",
+                        source="local_dashboard",
+                        error=error,
+                    )
+                    self._send_html(render_not_found(error), HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                self.server.operator_store.record_operator_action(
+                    action="CLOSE_ONE",
+                    target=position_id,
+                    result="SUCCESS",
+                    source="local_dashboard",
+                )
+                self.send_response(HTTPStatus.SEE_OTHER)
+                self.send_header("Location", "/")
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                return
+            else:
+                if values.get("phrase", [""])[0] != "CLOSE ALL":
+                    self._send_html(render_not_found("close-all confirmation phrase required"), HTTPStatus.BAD_REQUEST)
+                    return
+                action = self.server.operator_actions
+                if action is None:
+                    error = "close-all execution bridge is not attached to this dashboard process"
+                    self.server.operator_store.record_operator_action(
+                        action="CLOSE_ALL",
+                        target="ACTIVE",
+                        result="FAILED",
+                        source="local_dashboard",
+                        error=error,
+                    )
+                    self._send_html(render_not_found(error), HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                try:
+                    _close_all_positions(action)
+                except Exception as exc:  # noqa: BLE001 - operator action failures must be rendered, not crash the dashboard.
+                    error = str(exc)[:500]
+                    self.server.operator_store.record_operator_action(
+                        action="CLOSE_ALL",
+                        target="ACTIVE",
+                        result="FAILED",
+                        source="local_dashboard",
+                        error=error,
+                    )
+                    self._send_html(render_not_found(error), HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                self.server.operator_store.record_operator_action(
+                    action="CLOSE_ALL",
+                    target="ACTIVE",
+                    result="SUCCESS",
+                    source="local_dashboard",
+                )
+                self.send_response(HTTPStatus.SEE_OTHER)
+                self.send_header("Location", "/")
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                return
             self.send_response(HTTPStatus.SEE_OTHER)
             self.send_header("Location", "/")
             self.send_header("Cache-Control", "no-store")
@@ -156,10 +252,26 @@ def render_dashboard(read_model: DashboardReadModel, selected_set: str = "", ini
 
     operator_state = getattr(read_model, "get_operator_trading_state", lambda: None)()
     operator_control_token = getattr(read_model, "operator_control_token", "")
+    open_positions = read_model.list_portfolio_open_positions()
+    closed_positions = read_model.list_portfolio_closed_positions()
+    portfolio = {
+        "snapshot": read_model.get_portfolio_snapshot(),
+        "open_positions": open_positions,
+        "closed_positions": closed_positions,
+        "open_summary": read_model.get_portfolio_open_summary(),
+        "closed_summary": read_model.get_portfolio_closed_summary(),
+        "filters": {
+            "symbols": sorted({row.symbol for row in (*open_positions, *closed_positions)}),
+            "set_versions": sorted(
+                {row.set_version for row in (*open_positions, *closed_positions) if row.set_version}
+            ),
+        },
+    }
     return render_product_dashboard(
         initial_page=initial_page,
         operator_state=operator_state,
         operator_control_token=operator_control_token,
+        portfolio=portfolio,
     )
 
 
@@ -170,7 +282,13 @@ def render_not_found(value: str) -> str:
     return render_product_not_found(value)
 
 
-def create_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, db_path: str | Path = "runtime/triggertrade_paper.sqlite3") -> DashboardServer:
+def create_server(
+    host: str = DEFAULT_HOST,
+    port: int = DEFAULT_PORT,
+    db_path: str | Path = "runtime/triggertrade_paper.sqlite3",
+    *,
+    operator_actions=None,
+) -> DashboardServer:
     if host != DEFAULT_HOST:
         raise ValueError("dashboard binds to 127.0.0.1 only; non-local bind is not supported")
     read_model = DashboardReadModel(db_path)
@@ -179,9 +297,24 @@ def create_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, db_path: s
         DashboardHandler,
         read_model=read_model,
         operator_store=OperatorStateStore(db_path),
+        operator_actions=operator_actions,
     )
     read_model.operator_control_token = server.operator_control_token
     return server
+
+
+def _close_single_position(operator_actions, *, position_id: str, symbol: str):
+    try:
+        return operator_actions.close_position(position_id=position_id, symbol=symbol, close_reason="MANUAL")
+    except TypeError:
+        return operator_actions.close_position(position_id=position_id, close_reason="MANUAL")
+
+
+def _close_all_positions(operator_actions):
+    try:
+        return operator_actions.close_all_positions(scope="ACTIVE")
+    except TypeError:
+        return operator_actions.close_all_positions()
 
 
 def create_server_from_env(
