@@ -92,4 +92,6 @@ For material runtime changes:
 
 `repository state -> architecture review -> implementation -> focused tests -> adjacent tests -> change review -> remediation -> same-originating-reviewer re-review -> APPROVED_FOR_COMMIT`
 
+For frontend changes, dashboard changes, or backend changes with material user-facing UX/state-presentation impact, insert `triggertrade_ux_reviewer -> remediation if required -> same triggertrade_ux_reviewer re-review` after validation and before change review. UX review is not required for backend-only changes with no material user-facing effect.
+
 Tests are evidence, not reviewer approval.

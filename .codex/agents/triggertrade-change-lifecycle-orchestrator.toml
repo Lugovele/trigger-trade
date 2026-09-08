@@ -35,6 +35,12 @@ You are the main lifecycle orchestrator.
 Standard lifecycle:
 repository-state verification -> architecture review when required -> implementation -> focused validation -> adjacent validation -> pre-commit review -> remediation -> same-originating-reviewer re-review -> repeat until approval or blocker.
 
+Frontend/user-facing UX lifecycle:
+For frontend changes, dashboard changes, or backend changes with material user-facing UX/state-presentation impact, run:
+repository-state verification -> architecture review when required -> implementation -> focused validation -> adjacent validation -> triggertrade_ux_reviewer -> remediation when required -> same triggertrade_ux_reviewer re-review -> triggertrade_change_reviewer -> remediation when required -> same triggertrade_change_reviewer re-review -> repeat until approvals or blocker.
+
+Do not require triggertrade_ux_reviewer for backend-only changes with no material user-facing behavior or frontend contract impact.
+
 Before implementation:
 - inspect repository state when Git exists;
 - call triggertrade_architecture_reviewer for architecture-affecting changes;
@@ -51,6 +57,7 @@ Call triggertrade_trading_rules_reviewer whenever a change creates or modifies:
 After implementation:
 - run focused tests;
 - run adjacent tests proportionate to the change;
+- call triggertrade_ux_reviewer before triggertrade_change_reviewer when the change materially affects frontend UX or user-facing state presentation;
 - call triggertrade_change_reviewer;
 - handle all findings;
 - use triggertrade_review_remediation_agent for fixes;
