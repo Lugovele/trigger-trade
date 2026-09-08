@@ -5,6 +5,10 @@
 Canonical lifecycle:
 
 ```text
+user request
+        ->
+resolve authorized scope
+        ->
 repository-state verification
         ->
 classify change
@@ -40,11 +44,44 @@ Tests are evidence. Tests do not replace reviewer approval.
 
 Only `triggertrade_change_reviewer` may emit `APPROVED_FOR_COMMIT`.
 
+Scope authorization and Git authorization are separate:
+
+- scope authorization means the current user task clearly describes the
+  consequential behavior to implement;
+- Git authorization means the current user task explicitly requests commit
+  and/or push for the current lifecycle unit.
+
+If a task explicitly asks for a consequential behavior, that scope is already
+authorized within the stated boundaries. Consequential nature alone is not a
+reason to ask for duplicate confirmation after required reviewers approve.
+
 The stage/commit/push tail runs automatically only when the current lifecycle
 task explicitly requested commit/push. No additional user confirmation is
 required after `APPROVED_FOR_COMMIT` in that case. If the task did not request
 commit/push, stop at `APPROVED_FOR_COMMIT` and report readiness. If the task
 explicitly says no commit or no push, that override wins.
+
+Exceptional path:
+
+```text
+new material consequence outside authorized scope
+        ->
+STOP
+        ->
+user confirmation
+        ->
+continue only after approval
+```
+
+Examples of already-authorized consequential scope when explicitly requested:
+Daily Loss gate on new entries, TP/SL runtime implementation, SHORT signal
+implementation, position sizing changes, Rules runtime wiring, and execution
+reconciliation changes. New confirmation is required only for materially
+consequential effects discovered outside the requested scope, such as a SHORT
+alpha implementation unexpectedly requiring mainnet enablement, automatic closing
+of existing positions, cancelling protective exits, exposing
+credentials, deleting historical trading data, or changing unrelated risk
+limits.
 
 ## Security change review
 

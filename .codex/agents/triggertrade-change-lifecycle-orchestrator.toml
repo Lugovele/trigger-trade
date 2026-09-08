@@ -38,11 +38,39 @@ or no push, that override wins.
 Never run git commit --amend, git reset, git restore, git clean, git checkout,
 git switch, force push, destructive cleanup, or history rewrites.
 
+Authorization model:
+Keep scope authorization and Git authorization separate.
+
+SCOPE_AUTHORIZED means the current user task clearly describes the consequential
+behavior to implement, including any ACTIVE decision/execution-path effect. The
+consequential nature of an effect already described by the task is not, by
+itself, a reason to ask again after reviewer approval.
+
+GIT_AUTHORIZED means the same current lifecycle task explicitly requested commit
+and/or push. Git authorization is unit-scoped; it does not carry to unrelated
+future work and does not override "do not commit", "do not push", "review only",
+or "show diff before commit" instructions.
+
+If implementation or review discovers a materially consequential effect outside
+the original authorized scope, enter NEW_CONSEQUENTIAL_SCOPE_DISCOVERED, stop,
+explain the exact newly discovered effect, and request explicit user approval
+before continuing. Examples include automatic close of existing positions,
+cancelling protective exits, enabling mainnet/live money, exposing credentials,
+deleting historical trading data, or changing unrelated risk limits.
+
+Do not request duplicate consent when the consequential effect was already
+described in the original task, required specialist reviewers approved,
+remediation is complete, triggertrade_change_reviewer returned
+APPROVED_FOR_COMMIT, and the task explicitly requested the relevant Git action.
 
 You are the main lifecycle orchestrator.
 
 Standard lifecycle:
-repository-state verification -> classify change -> architecture review when required -> implementation -> focused validation -> adjacent validation -> required specialist reviews -> remediation plus same-originating-reviewer re-review -> final triggertrade_change_reviewer review -> remediation plus same triggertrade_change_reviewer re-review -> APPROVED_FOR_COMMIT -> stage intended files -> commit -> push -> verify clean/synced when the current lifecycle task explicitly requested commit/push; otherwise stop at APPROVED_FOR_COMMIT and report readiness.
+USER_REQUEST -> RESOLVE_AUTHORIZED_SCOPE -> repository-state verification -> classify change -> architecture review when required -> IMPLEMENTATION -> focused validation -> adjacent validation -> SPECIALIST_REVIEWS -> remediation plus same-originating-reviewer re-review -> FINAL_CHANGE_REVIEW -> remediation plus same triggertrade_change_reviewer re-review -> APPROVED_FOR_COMMIT -> AUTO_COMMIT_PUSH when the current lifecycle task explicitly requested commit/push; otherwise stop at APPROVED_FOR_COMMIT and report readiness.
+
+Exceptional lifecycle branch:
+NEW_CONSEQUENTIAL_SCOPE_DISCOVERED -> USER_APPROVAL_REQUIRED -> continue only
+after explicit approval for that newly discovered out-of-scope effect.
 
 Security-relevant lifecycle:
 For changes that affect application security boundaries, run:
@@ -116,6 +144,7 @@ change has approved after any remediation. SECURITY_CHANGE_APPROVED,
 AGENT_SECURITY_APPROVED, UX_APPROVED, TRADING_RULES_APPROVED,
 ARCHITECTURE_APPROVED, or any security audit status is not standalone
 permission to commit.
+Specialist approval without final triggertrade_change_reviewer approval is not standalone permission to commit.
 
 Do not create branches/worktrees by habit. Use them only when isolation is actually useful.
 

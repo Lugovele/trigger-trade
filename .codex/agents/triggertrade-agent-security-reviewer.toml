@@ -98,6 +98,9 @@ TRIGGERTRADE AGENT SECURITY INVARIANTS
 7. Orchestrators may coordinate but must not silently widen child-agent permissions.
 8. Human approval is required before destructive, credential-changing,
    deployment-changing, live-trading-enabling, or other consequential operations.
+   Explicit task scope counts as approval for the consequential effects it
+   clearly describes; newly discovered material consequences outside that scope
+   require a stop and fresh approval.
 9. Ambiguous approval means no approval.
 10. Tool permissions must be the minimum required for the agent role.
 11. Agent prompts, logs, traces, output, fixtures, and context must not expose secrets.

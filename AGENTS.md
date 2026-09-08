@@ -33,6 +33,15 @@ The project is not a general trading platform.
 
 Git staging, commit, and push are task-scoped lifecycle actions.
 
+Scope authorization and Git authorization are distinct. Explicit task scope is
+authorization for the consequential behavior it clearly describes.
+
+If the user
+asks to implement Daily Loss enforcement that blocks new ACTIVE entries after a
+threshold, that requested ACTIVE-entry behavior is already authorized within the
+stated boundaries. Consequential nature alone does not require a second
+confirmation after review.
+
 When the current lifecycle task explicitly includes commit and push, Codex may
 continue automatically after all required specialist reviewers approve, final
 `triggertrade_change_reviewer` returns `APPROVED_FOR_COMMIT`, and required
@@ -50,6 +59,14 @@ lifecycle unit, verify `git diff --cached --name-only`, push only to
 If the current task does not explicitly request commit/push, stop at
 `APPROVED_FOR_COMMIT` and report readiness. If the current task explicitly says
 no commit or no push, that instruction wins.
+
+Additional user confirmation is required only when implementation or review
+discovers a materially consequential effect outside the authorized task scope,
+such as automatically closing existing positions, cancelling protective exits,
+enabling mainnet/live-money behavior, sending real-money orders, exposing
+credentials, deleting historical trading data, or changing unrelated risk
+limits. In that case stop, explain the exact new effect, and continue only
+after explicit approval.
 
 Never run:
 
@@ -105,11 +122,15 @@ Do not create worktrees by habit for short sequential tasks.
 
 Canonical lifecycle:
 
-`repository state -> classify change -> architecture review if required -> implementation -> focused tests -> adjacent tests -> required specialist reviews -> remediation + same specialist re-review -> final change review -> remediation + same change reviewer re-review -> APPROVED_FOR_COMMIT -> stage intended files -> commit -> push -> verify clean/synced`
+`user request -> resolve authorized scope -> repository state -> classify change -> architecture review if required -> implementation -> focused tests -> adjacent tests -> required specialist reviews -> remediation + same specialist re-review -> final change review -> remediation + same change reviewer re-review -> APPROVED_FOR_COMMIT -> stage intended files -> commit -> push -> verify clean/synced`
 
 The stage/commit/push tail runs only when the current task explicitly requested
 commit/push. Otherwise the lifecycle stops at `APPROVED_FOR_COMMIT` with a
 readiness report.
+
+Exceptional path:
+
+`new material consequence outside authorized scope -> stop -> user confirmation -> continue only after approval`
 
 Available reviewers:
 

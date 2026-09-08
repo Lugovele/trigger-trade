@@ -11,6 +11,10 @@ def _agent_text(name: str) -> str:
     return (AGENTS_DIR / name).read_text(encoding="utf-8")
 
 
+def _one_line(text: str) -> str:
+    return " ".join(text.split())
+
+
 def test_all_agent_toml_files_parse():
     for path in sorted(AGENTS_DIR.glob("*.toml")):
         parsed = tomllib.loads(path.read_text(encoding="utf-8"))
@@ -75,6 +79,73 @@ def test_lifecycle_auto_commits_only_when_task_explicitly_requests_it():
     assert "belonging to the current" in combined.lower()
     assert "git diff --cached --name-only" in combined
     assert "The remediation agent cannot commit or push on its own" in combined
+
+
+def test_explicit_consequential_scope_does_not_require_duplicate_consent():
+    orchestrator = _agent_text("triggertrade-change-lifecycle-orchestrator.toml")
+    security = _agent_text("triggertrade-security-change-reviewer.toml")
+    agents_doc = Path("AGENTS.md").read_text(encoding="utf-8")
+    lifecycle_doc = Path("docs/development-lifecycle.md").read_text(encoding="utf-8")
+    combined = "\n".join([orchestrator, security, agents_doc, lifecycle_doc])
+
+    assert "SCOPE_AUTHORIZED" in orchestrator
+    assert "GIT_AUTHORIZED" in orchestrator
+    assert "Explicit task scope is authorization for the consequential behavior it clearly describes." in _one_line(agents_doc)
+    assert "Consequential nature alone does not require a second confirmation after review." in _one_line(agents_doc)
+    assert "Do not request duplicate consent" in orchestrator
+    assert "Do not reinterpret an already explicit user request as missing consent" in _one_line(security)
+    assert "Daily Loss gate on new entries" in lifecycle_doc
+    assert "APPROVED_FOR_COMMIT -> AUTO_COMMIT_PUSH" in orchestrator
+
+
+def test_new_out_of_scope_consequential_effect_requires_stop_and_user_approval():
+    orchestrator = _agent_text("triggertrade-change-lifecycle-orchestrator.toml")
+    agents_doc = Path("AGENTS.md").read_text(encoding="utf-8")
+    lifecycle_doc = Path("docs/development-lifecycle.md").read_text(encoding="utf-8")
+    combined = "\n".join([orchestrator, agents_doc, lifecycle_doc])
+
+    assert "NEW_CONSEQUENTIAL_SCOPE_DISCOVERED" in orchestrator
+    assert "USER_APPROVAL_REQUIRED" in orchestrator
+    assert "new material consequence outside authorized scope -> stop -> user confirmation" in agents_doc
+    assert "continue only after approval" in lifecycle_doc
+    assert "automatic closing of existing positions" in _one_line(lifecycle_doc)
+    assert "mainnet enablement" in lifecycle_doc
+
+
+def test_explicit_do_not_commit_override_stops_after_final_approval():
+    orchestrator = _agent_text("triggertrade-change-lifecycle-orchestrator.toml")
+    agents_doc = Path("AGENTS.md").read_text(encoding="utf-8")
+    lifecycle_doc = Path("docs/development-lifecycle.md").read_text(encoding="utf-8")
+    combined = "\n".join([orchestrator, agents_doc, lifecycle_doc])
+
+    assert "do not commit" in combined
+    assert "that override wins" in combined
+    assert "stop at `APPROVED_FOR_COMMIT`" in combined
+
+
+def test_explicit_do_not_push_override_permits_only_authorized_git_tail():
+    orchestrator = _agent_text("triggertrade-change-lifecycle-orchestrator.toml")
+    agents_doc = Path("AGENTS.md").read_text(encoding="utf-8")
+    lifecycle_doc = Path("docs/development-lifecycle.md").read_text(encoding="utf-8")
+    combined = "\n".join([orchestrator, agents_doc, lifecycle_doc])
+
+    assert "do not push" in combined
+    assert "GIT_AUTHORIZED means the same current lifecycle task explicitly requested commit" in orchestrator
+    assert "and/or push" in orchestrator
+    assert "that override wins" in combined
+
+
+def test_specialist_approval_without_final_change_approval_cannot_commit():
+    orchestrator = _agent_text("triggertrade-change-lifecycle-orchestrator.toml")
+    change_reviewer = _agent_text("triggertrade-change-reviewer.toml")
+    agents_doc = Path("AGENTS.md").read_text(encoding="utf-8")
+    lifecycle_doc = Path("docs/development-lifecycle.md").read_text(encoding="utf-8")
+    combined = "\n".join([orchestrator, change_reviewer, agents_doc, lifecycle_doc])
+
+    assert "Only `triggertrade_change_reviewer` may emit `APPROVED_FOR_COMMIT`" in combined
+    assert "Specialist" in agents_doc
+    assert "is not standalone permission to commit" in orchestrator
+    assert "triggertrade_change_reviewer returns exactly\nAPPROVED_FOR_COMMIT" in orchestrator
 
 
 def test_stale_manual_commit_policy_is_removed_from_active_contracts():
