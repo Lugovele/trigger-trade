@@ -331,6 +331,11 @@ class ResearchSummaryRow:
     set_version: str
     rules_version_id: str
     rules_display_version: str
+    selected_backtest_profit_factor: str | None
+    selected_backtest_trades: int | None
+    selected_demo_profit_factor: str | None
+    selected_demo_trades: int | None
+    compare_to_active: str
     selected_backtest_run_id: str | None
     selected_demo_run_id: str | None
     decision: str
@@ -1743,32 +1748,51 @@ class DashboardReadModel:
                     return ()
                 rows = conn.execute(
                     """
-                    SELECT research_id, status, set_id, set_version, rules_version_id,
-                           rules_display_version, selected_backtest_run_id,
-                           selected_demo_run_id, decision, updated_at
-                    FROM research_entities
-                    ORDER BY updated_at DESC, research_id DESC
+                    SELECT r.research_id, r.status, r.set_id, r.set_version,
+                           r.rules_version_id, r.rules_display_version,
+                           r.selected_backtest_run_id, r.selected_demo_run_id,
+                           r.decision, r.updated_at,
+                           bt.metrics_json AS selected_backtest_metrics_json,
+                           dm.metrics_json AS selected_demo_metrics_json
+                    FROM research_entities r
+                    LEFT JOIN research_backtest_runs bt
+                      ON bt.research_id = r.research_id
+                     AND bt.run_id = r.selected_backtest_run_id
+                    LEFT JOIN research_demo_runs dm
+                      ON dm.research_id = r.research_id
+                     AND dm.run_id = r.selected_demo_run_id
+                    ORDER BY r.updated_at DESC, r.research_id DESC
                     LIMIT ?
                     """,
                     (max(1, min(int(limit), 100)),),
                 ).fetchall()
         except (sqlite3.Error, ValueError):
             return ()
-        return tuple(
-            ResearchSummaryRow(
+        summaries = []
+        for row in rows:
+            backtest_metrics = _json_dict(row["selected_backtest_metrics_json"])
+            demo_metrics = _json_dict(row["selected_demo_metrics_json"])
+            compare = self.get_research_compare(row["research_id"]) if row["selected_demo_run_id"] else {}
+            summaries.append(
+                ResearchSummaryRow(
                 research_id=row["research_id"],
                 status=row["status"],
                 set_id=row["set_id"],
                 set_version=row["set_version"],
                 rules_version_id=row["rules_version_id"],
                 rules_display_version=row["rules_display_version"],
+                selected_backtest_profit_factor=_optional_metric(backtest_metrics, "profit_factor") if row["selected_backtest_run_id"] else None,
+                selected_backtest_trades=_optional_int_metric(backtest_metrics, "closed_trades") if row["selected_backtest_run_id"] else None,
+                selected_demo_profit_factor=_optional_metric(demo_metrics, "profit_factor") if row["selected_demo_run_id"] else None,
+                selected_demo_trades=_optional_int_metric(demo_metrics, "closed_trades") if row["selected_demo_run_id"] else None,
+                compare_to_active="Available" if compare.get("available") else str(compare.get("reason") or "Unavailable"),
                 selected_backtest_run_id=row["selected_backtest_run_id"],
                 selected_demo_run_id=row["selected_demo_run_id"],
                 decision=row["decision"],
                 updated_at=row["updated_at"],
             )
-            for row in rows
-        )
+            )
+        return tuple(summaries)
 
     def get_research_detail(self, research_id: str) -> dict[str, Any] | None:
         safe_id = str(research_id)[:160]
@@ -3144,6 +3168,24 @@ def _trade_intent_view(strategy: dict[str, Any] | None) -> dict[str, Any] | None
 
 def _safe_dict(row: dict[str, Any]) -> dict[str, Any]:
     return {key: _redact_value(key, value) for key, value in row.items()}
+
+
+def _optional_metric(metrics: dict[str, Any], key: str) -> str | None:
+    value = metrics.get(key)
+    if value is None or value == "":
+        return None
+    return str(_redact_value(key, value))[:80]
+
+
+def _optional_int_metric(metrics: dict[str, Any], key: str) -> int | None:
+    value = metrics.get(key)
+    if value is None or value == "":
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return max(0, parsed)
 
 
 def _research_backtest_payload(row: sqlite3.Row) -> dict[str, Any]:

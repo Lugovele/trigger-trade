@@ -944,10 +944,10 @@ def _research_section_html(
         f"<td><button class=\"link\" onclick='openResearchById({_js_arg(row.get('research_id'))})'>{_h(row.get('research_id'))}</button></td>"
         f'<td>{_h(row.get("set_id"))}<div class="meta">{_h(row.get("set_version"))}</div></td>'
         f'<td>{_h(row.get("rules_display_version"))}<div class="meta">{_h(row.get("rules_version_id"))}</div></td>'
-        f'<td>{_h(row.get("selected_backtest_run_id") or "-")}</td>'
-        f'<td>{_h(row.get("selected_demo_run_id") or "-")}</td>'
-        f'<td>Backend facts only</td>'
-        f'<td><span class="decision-status {_research_status_class(row.get("status"))}">{_h(row.get("status"))}</span></td>'
+        f'<td>{_h(_research_pf_label(row.get("selected_backtest_profit_factor"), row.get("selected_backtest_trades")))}</td>'
+        f'<td>{_h(_research_pf_label(row.get("selected_demo_profit_factor"), row.get("selected_demo_trades")))}</td>'
+        f'<td>{_h(row.get("compare_to_active") or "Unavailable")}</td>'
+        f'<td><span class="decision-status {_research_status_class(row.get("status"))}">{_h(row.get("decision") or row.get("status"))}</span></td>'
         f'</tr>'
         for row in rows
     )
@@ -977,7 +977,7 @@ def _research_section_html(
         '    <div class="panel"><div class="panelhead"><div><div class="title">Pinned Versions</div>'
         '<div class="meta" id="researchPinnedMeta">Exact backend identities</div></div></div>'
         '<div class="detail-note" id="researchPinnedBody">No Research selected.</div></div>\n'
-        '    <div class="panel"><div class="panelhead"><div class="title">Backtest Runs</div><button class="btn" onclick="createBacktestRun()">Run Backtest</button></div>'
+        '    <div class="panel"><div class="panelhead"><div class="title">Backtest Runs</div><div class="research-panel-actions"><input class="search" id="researchBacktestStart" type="datetime-local"><input class="search" id="researchBacktestEnd" type="datetime-local"><button class="btn" onclick="createBacktestRun()">Run Backtest</button></div></div>'
         '<div class="tablewrap"><table><thead><tr><th>Run</th><th>Status</th><th>Period</th><th>Trades</th><th>Net P/L</th><th>Win Rate</th><th>Profit Factor</th><th>Max Drawdown</th><th>Use</th></tr></thead><tbody id="backtestRunsBody"></tbody></table></div></div>\n'
         '    <div class="panel"><div class="panelhead"><div class="title">Demo Runs</div><button class="btn" onclick="startResearchDemo()">Start Demo</button></div>'
         '<div class="tablewrap"><table><thead><tr><th>Run</th><th>Status</th><th>Period</th><th>Trades</th><th>Net P/L</th><th>Win Rate</th><th>Profit Factor</th><th>Max Drawdown</th><th>Use</th></tr></thead><tbody id="demoRunsBody"></tbody></table></div></div>\n'
@@ -1068,6 +1068,13 @@ def _research_rules_options(rules: dict[str, Any] | None) -> str:
     return "".join(options)
 
 
+def _research_pf_label(profit_factor: Any, trades: Any) -> str:
+    if profit_factor is None or profit_factor == "":
+        return "-"
+    suffix = "" if trades is None else f" · {trades} trades"
+    return f"{profit_factor}{suffix}"
+
+
 def _research_wiring_script(research: dict[str, Any] | None, token: str) -> str:
     payload = json.dumps(_safe_payload(research or {"summaries": ()}), ensure_ascii=False).replace("</", "<\\/")
     token_json = json.dumps(token)
@@ -1079,11 +1086,56 @@ def _research_wiring_script(research: dict[str, Any] | None, token: str) -> str:
   let currentResearch = null;
   const detail = document.getElementById("researchDetail");
   const list = document.querySelector(".research-list");
+  const busy = new Set();
   function html(v){{ return String(v ?? "").replace(/[&<>"']/g, ch => ({{"&":"&amp;","<":"&lt;",">":"&gt;","\\\"":"&quot;","'":"&#39;"}}[ch])); }}
   function statusClass(status){{ const value=String(status||"").toUpperCase(); if(value.includes("RUNNING"))return"running"; if(value.includes("BLOCKED")||value.includes("FAILED"))return"attention"; if(value.includes("ARCHIVED"))return"archived"; return"draft"; }}
+  function pfLabel(value,trades){{ return value===null || value===undefined || value==="" ? "-" : `${{html(value)}}${{trades===null || trades===undefined ? "" : " · "+html(trades)+" trades"}}`; }}
+  function setAction(text){{ const node=document.getElementById("newResearchState"); if(node)node.textContent=text; }}
+  function renderSummaryRows(rows){{
+    const body=document.getElementById("researchSummaryBody");
+    if(!body)return;
+    if(!rows || !rows.length){{ body.innerHTML='<tr><td colspan="7" class="placeholder">No Research records.</td></tr>'; return; }}
+    body.innerHTML=rows.map(row=>`<tr data-research-id="${{html(row.research_id)}}"><td><button class="link" onclick='openResearchById("${{html(row.research_id)}}")'>${{html(row.research_id)}}</button></td><td>${{html(row.set_id)}}<div class="meta">${{html(row.set_version)}}</div></td><td>${{html(row.rules_display_version)}}<div class="meta">${{html(row.rules_version_id)}}</div></td><td>${{pfLabel(row.selected_backtest_profit_factor,row.selected_backtest_trades)}}</td><td>${{pfLabel(row.selected_demo_profit_factor,row.selected_demo_trades)}}</td><td>${{html(row.compare_to_active||"Unavailable")}}</td><td><span class="decision-status ${{statusClass(row.status)}}">${{html(row.decision||row.status)}}</span></td></tr>`).join("");
+  }}
+  async function refreshSummaries(){{
+    const res=await fetch("/api/research");
+    const data=await res.json();
+    if(!res.ok)throw new Error(data.error||"Research unavailable");
+    summaries=data.research||[];
+    renderSummaryRows(summaries);
+    return summaries;
+  }}
+  async function postJson(url, body){{
+    const key=url+JSON.stringify(body||{{}});
+    if(busy.has(key))return null;
+    busy.add(key);
+    try{{
+      const res=await fetch(url, {{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify(body||{{token}})}});
+      const data=await res.json().catch(()=>({{}}));
+      if(!res.ok)throw new Error(data.error||data.reason||"Request failed");
+      return data;
+    }}finally{{
+      busy.delete(key);
+    }}
+  }}
+  async function refreshAndOpen(id){{
+    await refreshSummaries();
+    if(id)await window.openResearchById(id);
+  }}
+  function localDateTimeValue(id){{
+    const value=document.getElementById(id)?.value || "";
+    if(!value)return "";
+    return new Date(value).toISOString();
+  }}
   function runRows(rows, kind){{
     if(!rows || !rows.length)return `<tr><td colspan="9" class="placeholder">No ${{kind}} runs.</td></tr>`;
-    return rows.map(r=>`<tr><td>${{html(r.run_id)}}</td><td>${{html(r.status)}}</td><td>${{html(r.period_start||r.started_at||"-")}} -> ${{html(r.period_end||r.stopped_at||r.blocked_reason||"-")}}</td><td>${{html(r.metrics?.closed_trades||"-")}}</td><td>${{html(r.metrics?.net_pnl||"-")}}</td><td>${{html(r.metrics?.win_rate||"-")}}</td><td>${{html(r.metrics?.profit_factor||"-")}}</td><td>${{html(r.metrics?.max_drawdown||"-")}}</td><td>${{r.selected_for_use ? "Use" : ""}}</td></tr>`).join("");
+    return rows.map(r=>{{
+      const canUse = kind==="backtest" ? ["COMPLETED","COMPLETED_NO_TRADES"].includes(String(r.status)) : String(r.status)==="STOPPED";
+      const selectAction = kind==="backtest" ? "selectBacktestRun" : "selectDemoRun";
+      const use = canUse ? `<input type="radio" name="${{kind}}Use" ${{r.selected_for_use ? "checked" : ""}} onchange="${{selectAction}}('${{html(r.run_id)}}')">` : "";
+      const stop = kind==="demo" && String(r.status)==="RUNNING" ? ` <button class="link" onclick="stopDemoRun('${{html(r.run_id)}}')">Stop</button>` : "";
+      return `<tr><td>${{html(r.run_id)}}</td><td>${{html(r.status)}}${{stop}}</td><td>${{html(r.period_start||r.started_at||"-")}} -> ${{html(r.period_end||r.stopped_at||r.blocked_reason||r.unavailable_reason||"-")}}</td><td>${{html(r.metrics?.closed_trades??"-")}}</td><td>${{html(r.metrics?.net_pnl??"-")}}</td><td>${{html(r.metrics?.win_rate??"-")}}</td><td>${{html(r.metrics?.profit_factor??"-")}}</td><td>${{html(r.metrics?.max_drawdown??"-")}}</td><td class="run-use-cell">${{use}}</td></tr>`;
+    }}).join("");
   }}
   function renderCompare(data){{
     const panel=document.getElementById("comparePanel");
@@ -1155,28 +1207,62 @@ def _research_wiring_script(research: dict[str, Any] | None, token: str) -> str:
     const setValue=document.getElementById("newResearchSet")?.value || "";
     const rules_version_id=document.getElementById("newResearchRules")?.value || "";
     const [set_id,set_version]=setValue.split("|");
-    const state=document.getElementById("newResearchState");
-    if(!set_id || !set_version || !rules_version_id){{ if(state)state.textContent="Backend Set and Rules versions are unavailable."; return; }}
-    const res=await fetch("/api/research", {{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{token,set_id,set_version,rules_version_id}})}});
-    if(res.ok)location.reload(); else if(state){{ const data=await res.json().catch(()=>({{}})); state.textContent=data.error || "Research creation failed"; }}
+    if(!set_id || !set_version || !rules_version_id){{ setAction("Backend Set and Rules versions are unavailable."); return; }}
+    try{{
+      const data=await postJson("/api/research", {{token,set_id,set_version,rules_version_id}});
+      if(!data)return;
+      window.closeNewResearchModal();
+      await refreshAndOpen(data.research?.research_id);
+    }}catch(e){{ setAction(e.message || "Research creation failed"); }}
   }};
   window.createBacktestRun = async function(){{
     if(!currentResearch?.research?.research_id)return;
     const id=currentResearch.research.research_id;
-    const res=await fetch(`/api/research/${{encodeURIComponent(id)}}/backtests`, {{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{token}})}});
-    if(res.ok)window.openResearchById(id); else renderCompare({{available:false,reason:"Backtest unavailable"}});
+    try{{
+      await postJson(`/api/research/${{encodeURIComponent(id)}}/backtests`, {{
+        token,
+        research_start: localDateTimeValue("researchBacktestStart"),
+        research_end: localDateTimeValue("researchBacktestEnd")
+      }});
+      await refreshAndOpen(id);
+    }}catch(e){{ renderCompare({{available:false,reason:e.message || "Backtest unavailable"}}); }}
   }};
   window.startResearchDemo = async function(){{
     if(!currentResearch?.research?.research_id)return;
     const id=currentResearch.research.research_id;
-    await fetch(`/api/research/${{encodeURIComponent(id)}}/demo/start`, {{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{token}})}});
-    window.openResearchById(id);
+    try{{
+      await postJson(`/api/research/${{encodeURIComponent(id)}}/demo/start`, {{token}});
+    }}catch(e){{ renderCompare({{available:false,reason:e.message || "Demo start unavailable"}}); }}
+    await refreshAndOpen(id);
+  }};
+  window.stopDemoRun = async function(runId){{
+    if(!currentResearch?.research?.research_id)return;
+    const id=currentResearch.research.research_id;
+    try{{ await postJson(`/api/research/${{encodeURIComponent(id)}}/demo/${{encodeURIComponent(runId)}}/stop`, {{token}}); }}
+    catch(e){{ renderCompare({{available:false,reason:e.message || "Demo stop unavailable"}}); }}
+    await refreshAndOpen(id);
+  }};
+  window.selectBacktestRun = async function(runId){{
+    if(!currentResearch?.research?.research_id)return;
+    const id=currentResearch.research.research_id;
+    try{{ await postJson(`/api/research/${{encodeURIComponent(id)}}/backtests/${{encodeURIComponent(runId)}}/select`, {{token}}); }}
+    catch(e){{ renderCompare({{available:false,reason:e.message || "Backtest selection unavailable"}}); }}
+    await refreshAndOpen(id);
+  }};
+  window.selectDemoRun = async function(runId){{
+    if(!currentResearch?.research?.research_id)return;
+    const id=currentResearch.research.research_id;
+    try{{ await postJson(`/api/research/${{encodeURIComponent(id)}}/demo/${{encodeURIComponent(runId)}}/select`, {{token}}); }}
+    catch(e){{ renderCompare({{available:false,reason:e.message || "Demo selection unavailable"}}); }}
+    await refreshAndOpen(id);
   }};
   window.archiveResearch = async function(){{
     if(!currentResearch?.research?.research_id)return;
     const id=currentResearch.research.research_id;
-    const res=await fetch(`/api/research/${{encodeURIComponent(id)}}/archive`, {{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{token}})}});
-    if(res.ok)location.reload();
+    try{{ await postJson(`/api/research/${{encodeURIComponent(id)}}/archive`, {{token}}); }}
+    catch(e){{ renderCompare({{available:false,reason:e.message || "Archive unavailable"}}); }}
+    window.closeResearchSet();
+    await refreshSummaries();
   }};
   window.makeResearchActive = async function(){{
     if(!currentResearch?.research?.research_id)return;
@@ -1187,6 +1273,7 @@ def _research_wiring_script(research: dict[str, Any] | None, token: str) -> str:
     if(label)label.textContent=data?.research?.decision || (data?.blocked ? "MAKE_ACTIVE_BLOCKED" : "Decision unavailable");
     const pinned=document.getElementById("researchPinnedBody");
     if(pinned && data?.reason)pinned.innerHTML += `<br>Make Active: ${{html(data.reason)}}`;
+    await refreshSummaries();
   }};
 }})();
 </script>
