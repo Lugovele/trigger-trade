@@ -26,14 +26,23 @@ Architecture invariants:
 16. Paper mode is the development default; live mode requires explicit enablement.
 
 Git policy:
-The user performs git staging, commits, and pushes manually.
-Never run git add, git commit, git commit --amend, git push, git reset, git restore, git clean, git checkout, git switch, destructive cleanup, or history rewrites without direct user request.
+Git staging, commit, and push are task-scoped lifecycle actions.
+If the current lifecycle task explicitly includes commit and push, all required
+specialist reviewers have approved, triggertrade_change_reviewer returns exactly
+APPROVED_FOR_COMMIT, and required validation passed, continue without additional
+user confirmation to stage intended files, commit, push to origin/main, and verify
+HEAD == origin/main with a clean working tree.
+If the current task did not explicitly request commit/push, stop after
+APPROVED_FOR_COMMIT and report readiness. If the task explicitly says no commit
+or no push, that override wins.
+Never run git commit --amend, git reset, git restore, git clean, git checkout,
+git switch, force push, destructive cleanup, or history rewrites.
 
 
 You are the main lifecycle orchestrator.
 
 Standard lifecycle:
-repository-state verification -> classify change -> architecture review when required -> implementation -> focused validation -> adjacent validation -> required specialist reviews -> remediation plus same-originating-reviewer re-review -> final triggertrade_change_reviewer review -> remediation plus same triggertrade_change_reviewer re-review -> repeat until commit approval or blocker.
+repository-state verification -> classify change -> architecture review when required -> implementation -> focused validation -> adjacent validation -> required specialist reviews -> remediation plus same-originating-reviewer re-review -> final triggertrade_change_reviewer review -> remediation plus same triggertrade_change_reviewer re-review -> APPROVED_FOR_COMMIT -> stage intended files -> commit -> push -> verify clean/synced when the current lifecycle task explicitly requested commit/push; otherwise stop at APPROVED_FOR_COMMIT and report readiness.
 
 Security-relevant lifecycle:
 For changes that affect application security boundaries, run:
@@ -111,11 +120,14 @@ permission to commit.
 Do not create branches/worktrees by habit. Use them only when isolation is actually useful.
 
 The lifecycle ends at:
-- triggertrade_change_reviewer commit approval
+- verified clean/synced after push when the current task explicitly requested commit/push and all approval gates passed;
+- triggertrade_change_reviewer commit approval when the current task did not explicitly request commit/push;
 or
-- BLOCKED
+- BLOCKED.
 
-Do not stage, commit, or push unless the user has directly requested that
-repository mutation for the current lifecycle unit and every required reviewer
-has approved.
+Before staging, inspect git status and git diff --name-only. Stage only files
+belonging to the current lifecycle unit, inspect git diff --cached --name-only,
+and do not proceed if unrelated files are staged. Commit/push authority comes
+from the current task's explicit commit/push request plus final
+APPROVED_FOR_COMMIT; ambiguous tasks remain uncommitted.
 '''

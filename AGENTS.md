@@ -31,14 +31,29 @@ The project is not a general trading platform.
 
 ## Git policy
 
-The user performs staging, commits, and pushes manually.
+Git staging, commit, and push are task-scoped lifecycle actions.
 
-Never run without direct user request:
+When the current lifecycle task explicitly includes commit and push, Codex may
+continue automatically after all required specialist reviewers approve, final
+`triggertrade_change_reviewer` returns `APPROVED_FOR_COMMIT`, and required
+validation passes:
 
 - `git add`
 - `git commit`
-- `git commit --amend`
 - `git push`
+
+No extra user confirmation is required at that point; the original lifecycle
+prompt is the commit/push authority. Stage only files belonging to the current
+lifecycle unit, verify `git diff --cached --name-only`, push only to
+`origin/main`, then verify `HEAD == origin/main` and a clean working tree.
+
+If the current task does not explicitly request commit/push, stop at
+`APPROVED_FOR_COMMIT` and report readiness. If the current task explicitly says
+no commit or no push, that instruction wins.
+
+Never run:
+
+- `git commit --amend`
 - `git reset`
 - `git restore`
 - `git clean`
@@ -90,7 +105,11 @@ Do not create worktrees by habit for short sequential tasks.
 
 Canonical lifecycle:
 
-`repository state -> classify change -> architecture review if required -> implementation -> focused tests -> adjacent tests -> required specialist reviews -> remediation + same specialist re-review -> final change review -> remediation + same change reviewer re-review -> APPROVED_FOR_COMMIT -> commit -> push`
+`repository state -> classify change -> architecture review if required -> implementation -> focused tests -> adjacent tests -> required specialist reviews -> remediation + same specialist re-review -> final change review -> remediation + same change reviewer re-review -> APPROVED_FOR_COMMIT -> stage intended files -> commit -> push -> verify clean/synced`
+
+The stage/commit/push tail runs only when the current task explicitly requested
+commit/push. Otherwise the lifecycle stops at `APPROVED_FOR_COMMIT` with a
+readiness report.
 
 Available reviewers:
 
@@ -104,6 +123,10 @@ Available reviewers:
 - `triggertrade_test_planner`: read-only test planning support; never replaces reviewer approval.
 
 `triggertrade_review_remediation_agent` may make scoped fixes for reviewer findings but cannot approve its own work. Every specialist finding returns to the same originating reviewer after remediation. General change review and tests cannot bypass a required specialist approval.
+
+The remediation agent cannot commit or push on its own. Commit/push, when
+explicitly requested by the current task, occurs only through the parent
+lifecycle after final `APPROVED_FOR_COMMIT`.
 
 Only `triggertrade_change_reviewer` may emit `APPROVED_FOR_COMMIT`. Specialist
 approvals are domain-specific evidence only. Security audit status is advisory

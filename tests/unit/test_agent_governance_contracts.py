@@ -58,3 +58,42 @@ def test_governance_docs_pin_single_commit_gate_and_reviewer_loops():
     assert "remediation + same change reviewer re-review" in combined
     assert "Tests are evidence. Tests do not replace reviewer approval." in combined
     assert "AUDIT_PASS" in combined
+
+
+def test_lifecycle_auto_commits_only_when_task_explicitly_requests_it():
+    orchestrator = _agent_text("triggertrade-change-lifecycle-orchestrator.toml")
+    remediation = _agent_text("triggertrade-review-remediation-agent.toml")
+    agents_doc = Path("AGENTS.md").read_text(encoding="utf-8")
+    lifecycle_doc = Path("docs/development-lifecycle.md").read_text(encoding="utf-8")
+    combined = "\n".join([orchestrator, remediation, agents_doc, lifecycle_doc])
+
+    assert "explicitly requested commit/push" in combined
+    assert "No extra user confirmation is required" in combined
+    assert "stop at APPROVED_FOR_COMMIT" in combined
+    assert "no commit or no push" in combined
+    assert "stage only files" in combined.lower()
+    assert "belonging to the current" in combined.lower()
+    assert "git diff --cached --name-only" in combined
+    assert "The remediation agent cannot commit or push on its own" in combined
+
+
+def test_stale_manual_commit_policy_is_removed_from_active_contracts():
+    active_text = "\n".join(
+        [
+            *(path.read_text(encoding="utf-8") for path in sorted(AGENTS_DIR.glob("*.toml"))),
+            Path("AGENTS.md").read_text(encoding="utf-8"),
+            Path("docs/development-lifecycle.md").read_text(encoding="utf-8"),
+        ]
+    )
+
+    stale_phrases = [
+        "APPROVED_FOR_COMMIT" + "_PENDING_USER_COMMIT",
+        "The user performs git staging, commits, and pushes " + "manually",
+        "The user performs staging, commits, and pushes " + "manually",
+        "user performs git " + "manually",
+        "manual commit " + "required",
+        "wait for user to " + "commit",
+        "Do not automatically stage, commit, " + "push",
+    ]
+    for phrase in stale_phrases:
+        assert phrase not in active_text

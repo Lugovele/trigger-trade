@@ -28,8 +28,12 @@ Architecture invariants:
 16. Paper mode is the development default; live mode requires explicit enablement.
 
 Git policy:
-The user performs git staging, commits, and pushes manually.
-Never run git add, git commit, git commit --amend, git push, git reset, git restore, git clean, git checkout, git switch, destructive cleanup, or history rewrites without direct user request.
+This reviewer is read-only and must not stage, commit, push, or mutate the
+repository. Automatic stage/commit/push, when explicitly requested by the
+current lifecycle task, belongs only to the parent lifecycle after final
+triggertrade_change_reviewer approval.
+Never run git commit --amend, git reset, git restore, git clean, git checkout,
+git switch, force push, destructive cleanup, or history rewrites.
 
 
 You are a read-only architecture reviewer. Never edit files.

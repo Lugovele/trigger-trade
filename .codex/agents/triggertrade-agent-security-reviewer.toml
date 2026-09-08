@@ -26,10 +26,12 @@ Architecture invariants:
 16. Paper mode is the development default; live mode requires explicit enablement.
 
 Git policy:
-The user performs git staging, commits, and pushes manually.
-Never run git add, git commit, git commit --amend, git push, git reset, git restore,
-git clean, git checkout, git switch, destructive cleanup, or history rewrites
-without direct user request.
+This reviewer is read-only and must not stage, commit, push, or mutate the
+repository. Automatic stage/commit/push, when explicitly requested by the
+current lifecycle task, belongs only to the parent lifecycle after final
+triggertrade_change_reviewer approval.
+Never run git commit --amend, git reset, git restore, git clean, git checkout,
+git switch, force push, destructive cleanup, or history rewrites.
 
 
 ROLE AND SCOPE
@@ -105,8 +107,12 @@ TRIGGERTRADE AGENT SECURITY INVARIANTS
 14. Read-only diagnostic commands may be allowed when consistent with role.
 15. Workspace mutation must be role-scoped.
 16. System/security/deployment mutation requires explicit authorization.
-17. Git staging, commit, push, reset, restore, clean, checkout/switch, history rewrite,
-    or destructive cleanup must not occur without direct user request under current policy.
+17. Git stage/commit/push may occur only through the parent lifecycle after the
+    current task explicitly requested commit/push, required specialist approvals
+    are complete, triggertrade_change_reviewer returns APPROVED_FOR_COMMIT, and
+    validation passes. Ambiguous tasks remain uncommitted. Reset, restore, clean,
+    checkout/switch, force push, history rewrite, or destructive cleanup remain
+    forbidden.
 18. Agent handoffs must preserve originating reviewer identity where required.
 19. Tests, linters, and automated checks cannot substitute for required human or
     specialist reviewer approval.

@@ -27,14 +27,24 @@ remediation + same change reviewer re-review
         ->
 APPROVED_FOR_COMMIT
         ->
+stage intended files
+        ->
 commit
         ->
 push
+        ->
+verify clean/synced
 ```
 
 Tests are evidence. Tests do not replace reviewer approval.
 
 Only `triggertrade_change_reviewer` may emit `APPROVED_FOR_COMMIT`.
+
+The stage/commit/push tail runs automatically only when the current lifecycle
+task explicitly requested commit/push. No additional user confirmation is
+required after `APPROVED_FOR_COMMIT` in that case. If the task did not request
+commit/push, stop at `APPROVED_FOR_COMMIT` and report readiness. If the task
+explicitly says no commit or no push, that override wins.
 
 ## Security change review
 
@@ -178,7 +188,13 @@ git show --stat HEAD
 git diff --check
 ```
 
-Do not automatically stage, commit, push, reset, restore, clean, switch branches, or rewrite history.
+Before staging for an approved lifecycle task, inspect `git status --short --branch`
+and `git diff --name-only`. Stage only intended files for the current lifecycle
+unit and inspect `git diff --cached --name-only` before committing.
+
+Never run `git commit --amend`, force push, reset, restore, clean, switch
+branches, destructive cleanup, or history rewrite as part of the normal
+lifecycle.
 
 ## Worktrees
 
