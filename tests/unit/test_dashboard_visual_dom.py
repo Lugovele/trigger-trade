@@ -28,9 +28,8 @@ def test_dashboard_uses_approved_product_shell_and_nav(tmp_path):
     assert 'data-page="analytics"' not in html.lower()
     assert 'data-page="logs"' not in html.lower()
     assert 'data-page="trading"' not in html.lower()
-    assert "UI fixture preview" in html
-    assert "non-persistent" in html
-    assert "not live trading/account facts" in html
+    assert "Dashboard state is loaded from backend read models" in html
+    assert "sample data" in html
 
 
 def test_portfolio_matches_open_and_closed_positions_contract(tmp_path):
@@ -183,7 +182,7 @@ def test_rules_current_history_and_read_only_version_detail(tmp_path):
     ):
         assert label in html
     assert 'id="rules-version"' in html
-    assert 'Rules · v' in html
+    assert 'Rules unavailable' in html
     assert 'disabled' in html
     assert '>Save<' not in html
     assert '>Update<' not in html
@@ -253,6 +252,31 @@ def test_messages_copy_and_mobile_structure_are_present(tmp_path):
     assert '.top{position:sticky' in html
 
 
+def test_product_ui_source_has_no_legacy_production_fixture_state():
+    from pathlib import Path
+
+    source = Path("src/triggertrade/dashboard/product_ui.py").read_text(encoding="utf-8")
+
+    forbidden = (
+        "openRows = [",
+        "closedRows = [",
+        "researchRows",
+        "rulesVersions =",
+        "mockRefreshSymbols",
+        "$3,436",
+        "BTCUSDT is approaching its configured Stop Loss level.",
+        "No critical account issues detected.",
+        "R-001",
+        "BT-012",
+        "DM-006",
+        "Forward Test",
+        "Copy logs",
+        "copy logs",
+    )
+    for text in forbidden:
+        assert text not in source
+
+
 def test_dashboard_uses_attached_html_shared_container_without_secret_leakage(tmp_path):
     html = _html(tmp_path)
 
@@ -276,7 +300,19 @@ def test_operator_state_is_allowlisted_before_js_injection():
     html = render_product_dashboard(operator_state=CorruptedState(), operator_control_token="tok")
 
     assert 'TRADING_PAUSED";alert(1);//' not in html
-    assert 'const operatorState = "TRADING_ENABLED";' in html
+    assert 'const operatorState = "UNKNOWN";' in html
+    assert "const operatorStateAvailable = false;" in html
+    assert "State unavailable" in html
+
+
+def test_missing_operator_state_does_not_render_enabled_header():
+    html = render_product_dashboard()
+    header = _section(html, '<header class="top">', '</header>')
+
+    assert 'const operatorState = "UNKNOWN";' in html
+    assert "const operatorStateAvailable = false;" in html
+    assert "State unavailable" in html
+    assert "Entries enabled" not in header
 
 
 def _section(html: str, start: str, end: str) -> str:

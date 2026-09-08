@@ -38,8 +38,8 @@ def test_empty_state_renders_approved_product_ui_without_traceback_or_secrets(tm
     assert "Traceback" not in html
     assert "BYBIT_API_SECRET" not in html
     assert "Authorization" not in html
-    assert "UI fixture preview" in html
-    assert "not live trading/account facts" in html
+    assert "Dashboard state is loaded from backend read models" in html
+    assert "sample data" in html
 
 
 def test_dashboard_http_product_routes_are_read_only(tmp_path):
@@ -57,7 +57,7 @@ def test_dashboard_http_product_routes_are_read_only(tmp_path):
             ("/trigger-catalog", "What it checks"),
             ("/trigger-detail", "formula-block"),
             ("/rules", "Current Rules Configuration"),
-            ("/rules-version", "Rules · v"),
+            ("/rules-version", "Rules unavailable"),
             ("/research", "New Research"),
             ("/research-detail", "Compare Demo to Active"),
             ("/messages", "Messages"),
