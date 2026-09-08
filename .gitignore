@@ -28,6 +28,8 @@ pytest-tmp/
 .coverage
 coverage.xml
 htmlcov/
+.pytest-*/
+Users*AppDataLocalTemptriggertrade-pytest-*/
 
 # Build artifacts
 build/
@@ -57,6 +59,7 @@ market_snapshots/
 # Temporary files
 tmp/
 .tmp/
+.tmp/pytest/
 temp/
 *.tmp
 *.bak
