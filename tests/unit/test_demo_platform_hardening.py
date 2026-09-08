@@ -10,7 +10,7 @@ from scripts.triggertrade_demo_soak import OPT_IN_FLAG, run_soak
 from triggertrade.dashboard.__main__ import create_server
 from triggertrade.dashboard.read_model import DashboardReadModel
 from triggertrade.instruments import InstrumentCatalogRefreshResult
-from triggertrade.persistence import InstrumentCatalogStore, RuntimeHeartbeat, RuntimeStore
+from triggertrade.persistence import InstrumentCatalogStore, LaneCandleLifecycle, RuntimeHeartbeat, RuntimeStore
 from triggertrade.persistence.operator_state_store import OperatorStateStore
 from triggertrade.services.futures_runtime import FuturesDualLaneResult, _heartbeat_outcome
 from triggertrade.services.runtime import RuntimeCycleResult
@@ -86,6 +86,141 @@ def test_demo_readiness_reports_factual_heartbeat_and_operator_block(tmp_path):
     assert checks["database"].status == "RUNNING"
     assert checks["heartbeat:futures_runtime"].status == "RUNNING"
     assert checks["operator"].status == "BLOCKED"
+    assert checks["market_data"].status != "RUNNING"
+
+
+def test_demo_readiness_uses_fresh_futures_lane_evidence(tmp_path):
+    db = _empty_db(tmp_path)
+    store = RuntimeStore(db)
+    processed_at = datetime.now(UTC).isoformat()
+    _record_ok_catalog(db, processed_at)
+    store.record_heartbeat(
+        RuntimeHeartbeat(
+            component="futures_runtime",
+            status="RUNNING",
+            observed_at=processed_at,
+            detail="cycle completed",
+        )
+    )
+    store.save_lane_lifecycle(
+        _lane_lifecycle(
+            candle_id="BTCUSDT:1m:2026-09-08T12:00:00+00:00",
+            status="no_signal",
+            processed_at=processed_at,
+        )
+    )
+
+    readiness = DashboardReadModel(db).get_demo_readiness()
+
+    checks = {check.name: check for check in readiness.checks}
+    assert checks["market_data"].status == "RUNNING"
+    assert "futures ACTIVE lane processed" in checks["market_data"].detail
+    assert "legacy runtime candle state" not in checks["market_data"].detail
+
+
+def test_demo_readiness_reports_startup_without_market_data_evidence_as_unavailable(tmp_path):
+    db = _empty_db(tmp_path)
+    _record_ok_catalog(db, datetime.now(UTC).isoformat())
+
+    readiness = DashboardReadModel(db).get_demo_readiness()
+
+    checks = {check.name: check for check in readiness.checks}
+    assert checks["market_data"].status == "UNAVAILABLE"
+    assert "no futures or legacy market-data evidence" in checks["market_data"].detail
+
+
+def test_demo_readiness_does_not_treat_heartbeat_alone_as_market_data_running(tmp_path):
+    db = _empty_db(tmp_path)
+    processed_at = datetime.now(UTC).isoformat()
+    _record_ok_catalog(db, processed_at)
+    RuntimeStore(db).record_heartbeat(
+        RuntimeHeartbeat(
+            component="futures_runtime",
+            status="RUNNING",
+            observed_at=processed_at,
+            detail="cycle completed",
+        )
+    )
+
+    readiness = DashboardReadModel(db).get_demo_readiness()
+
+    checks = {check.name: check for check in readiness.checks}
+    assert checks["heartbeat:futures_runtime"].status == "RUNNING"
+    assert checks["market_data"].status == "UNAVAILABLE"
+
+
+def test_demo_readiness_reports_stale_futures_lane_evidence_as_degraded(tmp_path):
+    db = _empty_db(tmp_path)
+    _record_ok_catalog(db, datetime.now(UTC).isoformat())
+    RuntimeStore(db).save_lane_lifecycle(
+        _lane_lifecycle(
+            candle_id="BTCUSDT:1m:2000-01-01T00:00:00+00:00",
+            status="no_signal",
+            processed_at="2000-01-01T00:01:00+00:00",
+        )
+    )
+
+    readiness = DashboardReadModel(db).get_demo_readiness()
+
+    checks = {check.name: check for check in readiness.checks}
+    assert checks["market_data"].status == "DEGRADED"
+    assert "futures ACTIVE lane stale" in checks["market_data"].detail
+
+
+def test_demo_readiness_latest_futures_failure_overrides_older_success(tmp_path):
+    db = _empty_db(tmp_path)
+    store = RuntimeStore(db)
+    older = "2026-09-08T12:00:00+00:00"
+    newer = datetime.now(UTC).isoformat()
+    _record_ok_catalog(db, newer)
+    store.save_lane_lifecycle(
+        _lane_lifecycle(
+            candle_id="BTCUSDT:1m:2026-09-08T12:00:00+00:00",
+            status="no_signal",
+            processed_at=older,
+        )
+    )
+    store.save_lane_lifecycle(
+        _lane_lifecycle(
+            candle_id="BTCUSDT:1m:2026-09-08T12:01:00+00:00",
+            status="execution_error",
+            processed_at=newer,
+            error="execution_error",
+        )
+    )
+
+    readiness = DashboardReadModel(db).get_demo_readiness()
+
+    checks = {check.name: check for check in readiness.checks}
+    assert checks["market_data"].status == "DEGRADED"
+    assert "latest status execution_error" in checks["market_data"].detail
+
+
+def test_demo_readiness_newer_failure_heartbeat_overrides_older_futures_success(tmp_path):
+    db = _empty_db(tmp_path)
+    store = RuntimeStore(db)
+    _record_ok_catalog(db, datetime.now(UTC).isoformat())
+    store.save_lane_lifecycle(
+        _lane_lifecycle(
+            candle_id="BTCUSDT:1m:2026-09-08T12:00:00+00:00",
+            status="no_signal",
+            processed_at="2026-09-08T12:01:00+00:00",
+        )
+    )
+    store.record_heartbeat(
+        RuntimeHeartbeat(
+            component="futures_runtime",
+            status="DEGRADED",
+            observed_at=datetime.now(UTC).isoformat(),
+            detail="market_data_unavailable",
+        )
+    )
+
+    readiness = DashboardReadModel(db).get_demo_readiness()
+
+    checks = {check.name: check for check in readiness.checks}
+    assert checks["market_data"].status == "DEGRADED"
+    assert checks["market_data"].detail == "futures runtime reported market_data_unavailable"
 
 
 def test_demo_readiness_reports_stale_heartbeat_as_degraded(tmp_path):
@@ -219,3 +354,38 @@ def test_heartbeat_outcome_does_not_report_running_after_execution_uncertainty()
 
     assert _heartbeat_outcome(unknown) == ("BLOCKED", "execution_unknown")
     assert _heartbeat_outcome(error) == ("BLOCKED", "execution_error")
+
+
+def _lane_lifecycle(
+    *,
+    candle_id: str,
+    status: str,
+    processed_at: str | None,
+    error: str | None = None,
+) -> LaneCandleLifecycle:
+    return LaneCandleLifecycle(
+        lane="ACTIVE",
+        symbol="BTCUSDT",
+        timeframe="1m",
+        candle_id=candle_id,
+        candle_open_time=candle_id.removeprefix("BTCUSDT:1m:"),
+        trigger_set_id="triggertrade-futures-core",
+        trigger_set_version="v1",
+        status=status,
+        processed_at=processed_at,
+        error=error,
+    )
+
+
+def _record_ok_catalog(db, updated_at: str) -> None:
+    InstrumentCatalogStore(db).record_failed_refresh(
+        InstrumentCatalogRefreshResult(
+            fetched_count=1,
+            tradeable_count=1,
+            excluded_count=0,
+            updated_at=updated_at,
+            catalog_hash="unit-catalog",
+            status="OK",
+            error=None,
+        )
+    )

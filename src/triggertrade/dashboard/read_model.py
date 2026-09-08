@@ -40,6 +40,19 @@ class RuntimeHeartbeatView:
 
 
 @dataclass(frozen=True)
+class FuturesLaneEvidenceView:
+    lane: str
+    symbol: str
+    timeframe: str
+    candle_id: str
+    trigger_set_id: str
+    trigger_set_version: str
+    status: str
+    processed_at: str | None
+    error: str | None
+
+
+@dataclass(frozen=True)
 class ReadinessCheckView:
     name: str
     status: str
@@ -585,6 +598,38 @@ class DashboardReadModel:
             )
         return tuple(values)
 
+    def get_latest_futures_lane_evidence(self) -> FuturesLaneEvidenceView | None:
+        if not self.db_path.exists():
+            return None
+        try:
+            with self._connect() as conn:
+                row = _fetch_optional(
+                    conn,
+                    """
+                    SELECT lane, symbol, timeframe, candle_id, trigger_set_id,
+                           trigger_set_version, status, processed_at, error
+                    FROM runtime_lane_lifecycles
+                    WHERE lane = 'ACTIVE'
+                    ORDER BY COALESCE(processed_at, candle_open_time) DESC, candle_id DESC
+                    LIMIT 1
+                    """,
+                )
+        except sqlite3.Error:
+            return None
+        if row is None:
+            return None
+        return FuturesLaneEvidenceView(
+            lane=row["lane"],
+            symbol=row["symbol"],
+            timeframe=row["timeframe"],
+            candle_id=row["candle_id"],
+            trigger_set_id=row["trigger_set_id"],
+            trigger_set_version=row["trigger_set_version"],
+            status=row["status"],
+            processed_at=row["processed_at"],
+            error=row["error"],
+        )
+
     def get_demo_readiness(self) -> DemoReadinessView:
         if not self.db_path.exists():
             return DemoReadinessView(
@@ -604,11 +649,7 @@ class DashboardReadModel:
         else:
             checks.append(ReadinessCheckView("heartbeat", "DEGRADED", "no runtime heartbeat recorded"))
 
-        if runtime_state.last_processed_at:
-            status = "DEGRADED" if _timestamp_is_stale(runtime_state.last_processed_at, timedelta(minutes=5)) else "RUNNING"
-            checks.append(ReadinessCheckView("market_data", status, f"last processed {runtime_state.last_processed_at}", runtime_state.last_processed_at))
-        else:
-            checks.append(ReadinessCheckView("market_data", "DEGRADED", "no processed market candle recorded"))
+        checks.append(self._market_data_readiness_check(runtime_state, heartbeats))
 
         catalog = self.get_rules_catalog_state()
         if catalog.status == "UNAVAILABLE":
@@ -629,6 +670,59 @@ class DashboardReadModel:
             checks.append(ReadinessCheckView("operator", "UNAVAILABLE", "operator state unavailable", operator.changed_at))
 
         return DemoReadinessView(_rollup_readiness(check.status for check in checks), tuple(checks))
+
+    def _market_data_readiness_check(
+        self,
+        runtime_state: RuntimeStateView,
+        heartbeats: tuple[RuntimeHeartbeatView, ...],
+    ) -> ReadinessCheckView:
+        futures = self.get_latest_futures_lane_evidence()
+        futures_heartbeat = next((heartbeat for heartbeat in heartbeats if heartbeat.component == "futures_runtime"), None)
+        if futures is not None:
+            if _futures_heartbeat_overrides_lane(futures_heartbeat, futures):
+                status = "BLOCKED" if futures_heartbeat.status == "BLOCKED" else "DEGRADED"
+                return ReadinessCheckView(
+                    "market_data",
+                    status,
+                    f"futures runtime reported {futures_heartbeat.detail}",
+                    futures_heartbeat.observed_at,
+                )
+            if futures.processed_at is None:
+                return ReadinessCheckView(
+                    "market_data",
+                    "UNAVAILABLE",
+                    "futures ACTIVE lane has no completed processing timestamp",
+                )
+            if _timestamp_is_stale(futures.processed_at, timedelta(minutes=5)):
+                return ReadinessCheckView(
+                    "market_data",
+                    "DEGRADED",
+                    f"futures ACTIVE lane stale; last processed {futures.processed_at}",
+                    futures.processed_at,
+                )
+            if _futures_lane_status_is_success(futures.status, futures.error):
+                return ReadinessCheckView(
+                    "market_data",
+                    "RUNNING",
+                    f"futures ACTIVE lane processed {futures.candle_id} with {futures.status}",
+                    futures.processed_at,
+                )
+            return ReadinessCheckView(
+                "market_data",
+                "DEGRADED",
+                f"futures ACTIVE lane latest status {futures.status}",
+                futures.processed_at,
+            )
+
+        if runtime_state.last_processed_at:
+            status = "DEGRADED" if _timestamp_is_stale(runtime_state.last_processed_at, timedelta(minutes=5)) else "RUNNING"
+            return ReadinessCheckView(
+                "market_data",
+                status,
+                f"legacy runtime candle state last processed {runtime_state.last_processed_at}",
+                runtime_state.last_processed_at,
+            )
+        return ReadinessCheckView("market_data", "UNAVAILABLE", "no futures or legacy market-data evidence recorded")
 
     def get_latest_decision(self) -> DecisionView:
         rows = self.list_recent_activity(limit=1)
@@ -2839,6 +2933,40 @@ def _timestamp_is_stale(value: str | None, max_age: timedelta) -> bool:
     if observed.tzinfo is None:
         observed = observed.replace(tzinfo=UTC)
     return datetime.now(UTC) - observed > max_age
+
+
+def _futures_heartbeat_overrides_lane(
+    heartbeat: RuntimeHeartbeatView | None,
+    lane: FuturesLaneEvidenceView,
+) -> bool:
+    if heartbeat is None or heartbeat.status == "RUNNING":
+        return False
+    try:
+        heartbeat_at = datetime.fromisoformat(heartbeat.observed_at)
+        lane_at = datetime.fromisoformat(lane.processed_at or "")
+    except ValueError:
+        return heartbeat.status in {"BLOCKED", "DEGRADED", "UNAVAILABLE"}
+    if heartbeat_at.tzinfo is None:
+        heartbeat_at = heartbeat_at.replace(tzinfo=UTC)
+    if lane_at.tzinfo is None:
+        lane_at = lane_at.replace(tzinfo=UTC)
+    return heartbeat_at >= lane_at
+
+
+def _futures_lane_status_is_success(status: str, error: str | None) -> bool:
+    normalized = status.strip().lower()
+    if normalized in {"execution_unknown", "execution_error", "blocked", "failed", "unknown"}:
+        return False
+    if error and "execution_unknown" in error.lower():
+        return False
+    return normalized in {
+        "no_signal",
+        "no_intent",
+        "risk_rejected",
+        "test_simulated",
+        "completed",
+        "active_execution_paused",
+    }
 
 
 def _rollup_readiness(statuses) -> str:
