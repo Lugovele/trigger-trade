@@ -94,6 +94,7 @@ def test_demo_readiness_uses_fresh_futures_lane_evidence(tmp_path):
     store = RuntimeStore(db)
     processed_at = datetime.now(UTC).isoformat()
     _record_ok_catalog(db, processed_at)
+    _record_equity_snapshot(db, "fresh-account", processed_at)
     store.record_heartbeat(
         RuntimeHeartbeat(
             component="futures_runtime",
@@ -115,6 +116,7 @@ def test_demo_readiness_uses_fresh_futures_lane_evidence(tmp_path):
     checks = {check.name: check for check in readiness.checks}
     assert checks["market_data"].status == "RUNNING"
     assert "futures ACTIVE lane processed" in checks["market_data"].detail
+    assert checks["account_data"].status == "RUNNING"
     assert "legacy runtime candle state" not in checks["market_data"].detail
 
 
@@ -127,12 +129,14 @@ def test_demo_readiness_reports_startup_without_market_data_evidence_as_unavaila
     checks = {check.name: check for check in readiness.checks}
     assert checks["market_data"].status == "UNAVAILABLE"
     assert "no futures or legacy market-data evidence" in checks["market_data"].detail
+    assert checks["account_data"].status == "UNAVAILABLE"
 
 
 def test_demo_readiness_does_not_treat_heartbeat_alone_as_market_data_running(tmp_path):
     db = _empty_db(tmp_path)
     processed_at = datetime.now(UTC).isoformat()
     _record_ok_catalog(db, processed_at)
+    _record_equity_snapshot(db, "fresh-account", processed_at)
     RuntimeStore(db).record_heartbeat(
         RuntimeHeartbeat(
             component="futures_runtime",
@@ -221,6 +225,17 @@ def test_demo_readiness_newer_failure_heartbeat_overrides_older_futures_success(
     checks = {check.name: check for check in readiness.checks}
     assert checks["market_data"].status == "DEGRADED"
     assert checks["market_data"].detail == "futures runtime reported market_data_unavailable"
+
+
+def test_demo_readiness_reports_stale_account_snapshot_as_degraded(tmp_path):
+    db = _empty_db(tmp_path)
+    _record_equity_snapshot(db, "stale-account", "2000-01-01T00:00:00+00:00")
+
+    readiness = DashboardReadModel(db).get_demo_readiness()
+
+    checks = {check.name: check for check in readiness.checks}
+    assert checks["account_data"].status == "DEGRADED"
+    assert checks["account_data"].detail == "account snapshot stale 2000-01-01T00:00:00+00:00"
 
 
 def test_demo_readiness_reports_stale_heartbeat_as_degraded(tmp_path):
@@ -387,5 +402,30 @@ def _record_ok_catalog(db, updated_at: str) -> None:
             catalog_hash="unit-catalog",
             status="OK",
             error=None,
+        )
+    )
+
+
+def _record_equity_snapshot(db, snapshot_id: str, observed_at: str) -> None:
+    from decimal import Decimal
+
+    from triggertrade.accounting import EquitySnapshot
+    from triggertrade.persistence.futures_accounting_store import FuturesAccountingStore
+
+    FuturesAccountingStore(db).record_equity_snapshot(
+        EquitySnapshot(
+            snapshot_id=snapshot_id,
+            observed_at=observed_at,
+            source="bybit_demo_account",
+            wallet_balance=Decimal("100"),
+            equity=Decimal("100"),
+            available_margin=Decimal("100"),
+            used_margin=Decimal("0"),
+            unrealized_pnl=Decimal("0"),
+            realized_pnl=Decimal("0"),
+            running_peak=Decimal("100"),
+            drawdown_absolute=Decimal("0"),
+            drawdown_percent=Decimal("0"),
+            max_drawdown=Decimal("0"),
         )
     )

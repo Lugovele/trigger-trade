@@ -650,6 +650,7 @@ class DashboardReadModel:
             checks.append(ReadinessCheckView("heartbeat", "DEGRADED", "no runtime heartbeat recorded"))
 
         checks.append(self._market_data_readiness_check(runtime_state, heartbeats))
+        checks.append(self._account_data_readiness_check())
 
         catalog = self.get_rules_catalog_state()
         if catalog.status == "UNAVAILABLE":
@@ -670,6 +671,14 @@ class DashboardReadModel:
             checks.append(ReadinessCheckView("operator", "UNAVAILABLE", "operator state unavailable", operator.changed_at))
 
         return DemoReadinessView(_rollup_readiness(check.status for check in checks), tuple(checks))
+
+    def _account_data_readiness_check(self) -> ReadinessCheckView:
+        snapshot = self.get_portfolio_snapshot()
+        if snapshot.freshness_state == "FRESH":
+            return ReadinessCheckView("account_data", "RUNNING", f"account snapshot refreshed {snapshot.as_of}", snapshot.as_of)
+        if snapshot.freshness_state == "STALE":
+            return ReadinessCheckView("account_data", "DEGRADED", f"account snapshot stale {snapshot.as_of}", snapshot.as_of)
+        return ReadinessCheckView("account_data", "UNAVAILABLE", "authoritative account snapshot unavailable")
 
     def _market_data_readiness_check(
         self,

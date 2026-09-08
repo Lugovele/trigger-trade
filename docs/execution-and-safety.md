@@ -238,6 +238,15 @@ records heartbeat evidence before and after the run. It does not enable
 Dynamic TP, does not introduce SHORT alpha, and does not perform destructive
 production testing.
 
+Each normal futures runtime cycle performs at most one ACTIVE account refresh
+using the existing Bybit Demo private account read path. The refresh is
+account-scoped rather than per-symbol, persists the canonical equity snapshot
+used by Portfolio and System History, and has no order submission,
+cancellation, amendment, or close authority. If the read fails, the previous
+snapshot remains the latest factual Portfolio evidence, account readiness
+degrades or becomes unavailable, and new entries cannot proceed with fabricated
+fresh account state.
+
 ## Futures Accounting Safety
 
 Futures accounting consumes explicit execution/fill/funding/equity facts and

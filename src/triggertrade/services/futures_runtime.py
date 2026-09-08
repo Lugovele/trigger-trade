@@ -8,6 +8,7 @@ from decimal import Decimal
 import time
 from typing import Callable
 
+from triggertrade.accounting import calculate_drawdown_snapshot
 from triggertrade.config import AppConfig, BybitEnvironment, ConfigError, ExecutionVenue, Market, TradingMode
 from triggertrade.execution import OrderStatus, OrderType
 from triggertrade.execution.service import ExecutionError
@@ -124,6 +125,7 @@ class FuturesDualLaneRuntime:
         self._clock = clock or (lambda: datetime.now(UTC))
         self._logger = logger or (lambda message: print(message))
         self._stop_requested = False
+        self._account_snapshot_sequence = 0
 
     def process_once(self) -> FuturesDualLaneResult:
         self._validate_safe_config()
@@ -138,9 +140,6 @@ class FuturesDualLaneRuntime:
             )
             active_pair = self._trigger_set_store.get_active_trading_pair(self._config.futures_runtime.symbol, "1m")
             active_set = active_pair.trigger_set if active_pair is not None else None
-            if active_set is not None:
-                self._recover_active_unresolved(instrument)
-                self._monitor_active_positions(instrument)
             active_checkpoint = _lane_checkpoint(self._runtime_store, Lane.ACTIVE, active_set) if active_set else None
             completed = next_completed_candle(
                 candles,
@@ -168,6 +167,16 @@ class FuturesDualLaneRuntime:
             return FuturesDualLaneResult(None, (), (), "market_data_unavailable")
         if completed is None:
             return FuturesDualLaneResult(None, (), (), "no_completed_candle")
+
+        active_account = None
+        try:
+            active_account = self._refresh_active_account_snapshot(instrument)
+        except (BybitApiError, ValueError, ExecutionError) as exc:
+            self._log(f"futures account data unavailable: {exc.__class__.__name__}")
+            return FuturesDualLaneResult(completed.candle_id, (), (), "account_data_unavailable")
+        if active_set is not None:
+            self._recover_active_unresolved(instrument, active_account)
+            self._monitor_active_positions(instrument, active_account)
 
         event = futures_event_from_completed_candle(
             completed=completed,
@@ -202,6 +211,7 @@ class FuturesDualLaneRuntime:
                     candles=candles,
                     regime_context=regime_context,
                     rules_version=active_pair.rules_version if active_pair is not None else None,
+                    account=active_account,
                 ),
             )
         test_results = tuple(
@@ -248,6 +258,7 @@ class FuturesDualLaneRuntime:
         candles,
         regime_context: MarketRegimeContext,
         rules_version: TradingRulesVersion | None = None,
+        account: FuturesAccountState | None = None,
     ) -> RuntimeCycleResult:
         if trigger_set.status not in {TriggerSetStatus.ACTIVE, TriggerSetStatus.TESTING}:
             return RuntimeCycleResult(completed.candle_id, None, skipped_reason="set_not_eligible")
@@ -328,7 +339,7 @@ class FuturesDualLaneRuntime:
             return RuntimeCycleResult(completed.candle_id, signal.signal_type.value, skipped_reason=rules_skip)
 
         price = _intent_price(event.close, instrument, passive=lane is Lane.ACTIVE)
-        account = self._account_state(instrument, lane)
+        account = account if lane is Lane.ACTIVE and account is not None else self._account_state(instrument, lane)
         try:
             position_risk = _position_risk_config_from_rules(rules_version, account)
             sizing = calculate_position_size(
@@ -735,16 +746,46 @@ class FuturesDualLaneRuntime:
         return self._instrument_catalog.metadata_for_symbol(self._config.futures_runtime.symbol)
 
     def _account_state(self, instrument: FuturesInstrumentMetadata, lane: Lane) -> FuturesAccountState:
-        if self._account_provider is not None:
-            return self._account_provider(instrument)
         if lane is Lane.TEST:
             return _test_account(instrument, self._config.futures_runtime.leverage, self._config.futures_runtime.max_position_notional)
+        if self._account_provider is not None:
+            return self._account_provider(instrument)
         wallet = self._market_client.wallet_balance("UNIFIED").result
         positions = self._market_client.linear_position_list(instrument.symbol).result
         return _account_from_bybit(wallet, positions, instrument, self._config.futures_runtime.leverage)
 
-    def _recover_active_unresolved(self, instrument: FuturesInstrumentMetadata) -> None:
+    def _refresh_active_account_snapshot(self, instrument: FuturesInstrumentMetadata) -> FuturesAccountState:
         account = self._account_state(instrument, Lane.ACTIVE)
+        self._persist_account_snapshot(account)
+        return account
+
+    def _persist_account_snapshot(self, account: FuturesAccountState) -> None:
+        now = self._clock()
+        observed_at = now.isoformat()
+        self._account_snapshot_sequence += 1
+        previous = self._accounting_store.latest_equity_snapshot()
+        previous_peak = _optional_decimal(None if previous is None else previous["running_peak"])
+        previous_max_drawdown = _optional_decimal(None if previous is None else previous["max_drawdown"]) or Decimal("0")
+        equity = account.equity if account.equity is not None else account.available_margin
+        wallet_balance = account.wallet_balance if account.wallet_balance is not None else equity
+        used_margin = max(equity - account.available_margin, Decimal("0"))
+        snapshot = calculate_drawdown_snapshot(
+            snapshot_id=f"acct-{now.strftime('%Y%m%d%H%M%S%f')}-{self._account_snapshot_sequence}",
+            observed_at=observed_at,
+            source="bybit_demo_account" if self._account_provider is None else "runtime_account_provider",
+            wallet_balance=wallet_balance,
+            equity=equity,
+            available_margin=account.available_margin,
+            used_margin=used_margin,
+            unrealized_pnl=account.unrealized_pnl or Decimal("0"),
+            realized_pnl=Decimal("0"),
+            previous_running_peak=previous_peak,
+            previous_max_drawdown=previous_max_drawdown,
+        )
+        self._accounting_store.record_equity_snapshot(snapshot)
+
+    def _recover_active_unresolved(self, instrument: FuturesInstrumentMetadata, account: FuturesAccountState | None = None) -> None:
+        account = account or self._account_state(instrument, Lane.ACTIVE)
         lifecycle = FuturesPositionLifecycleService(
             execution_config=_execution_config(self._config),
             risk_config=_position_risk_config(self._config),
@@ -778,8 +819,8 @@ class FuturesDualLaneRuntime:
             if record.intent_id not in position_intents:
                 bridge.ingest_execution(record=record)
 
-    def _monitor_active_positions(self, instrument: FuturesInstrumentMetadata) -> None:
-        account = self._account_state(instrument, Lane.ACTIVE)
+    def _monitor_active_positions(self, instrument: FuturesInstrumentMetadata, account: FuturesAccountState | None = None) -> None:
+        account = account or self._account_state(instrument, Lane.ACTIVE)
         if account.mark_price is None:
             return
         lifecycle = FuturesPositionLifecycleService(
@@ -913,7 +954,7 @@ def _execution_config(config: AppConfig) -> FuturesExecutionConfig:
 
 
 def _heartbeat_outcome(result: FuturesDualLaneResult) -> tuple[str, str]:
-    if result.skipped_reason in {"market_data_unavailable", "checkpoint_gap"}:
+    if result.skipped_reason in {"market_data_unavailable", "checkpoint_gap", "account_data_unavailable"}:
         return "DEGRADED", result.skipped_reason
     if result.skipped_reason is not None:
         return "RUNNING", result.skipped_reason
@@ -1082,8 +1123,11 @@ def _account_from_bybit(
         size = -raw_size if side.lower() == "sell" else raw_size
         entry_price = _optional_decimal(position_row.get("avgPrice"))
         mark_price = _optional_decimal(position_row.get("markPrice"))
+        unrealized_pnl = _optional_decimal(position_row.get("unrealisedPnl") or position_row.get("unrealizedPnl"))
         liquidation_price = _optional_decimal(position_row.get("liqPrice"))
         configured_leverage = _optional_decimal(position_row.get("leverage")) or configured_leverage
+    else:
+        unrealized_pnl = _optional_decimal(account.get("totalPerpUPL"))
     return FuturesAccountState(
         symbol=instrument.symbol,
         category=ContractCategory.LINEAR,
@@ -1097,6 +1141,7 @@ def _account_from_bybit(
         position_size=size,
         entry_price=entry_price,
         mark_price=mark_price,
+        unrealized_pnl=unrealized_pnl,
         liquidation_price=liquidation_price,
     )
 

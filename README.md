@@ -213,6 +213,13 @@ restart can recover the latest known liveness state without accumulating an
 unbounded log stream. System History includes the readiness rollup and bounded
 heartbeat rows for later diagnosis.
 
+The futures runtime refreshes the ACTIVE Bybit Demo account snapshot once per
+normal completed-candle cycle, before signal evaluation. This keeps Portfolio
+`Total`, `Available`, `Unrealized P&L`, and account freshness factual during
+ordinary no-signal operation without submitting, cancelling, or modifying
+orders. Failed account refreshes preserve the previous snapshot and degrade
+readiness instead of fabricating fresh values.
+
 A bounded Bybit Demo soak harness is available but never automatic:
 
 ```powershell

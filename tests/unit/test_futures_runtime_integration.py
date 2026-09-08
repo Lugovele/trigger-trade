@@ -9,6 +9,7 @@ import pytest
 
 from triggertrade.config import ExecutionVenue, load_config
 from triggertrade.accounting import ClosedTradeResult, EquitySnapshot
+from triggertrade.dashboard.read_model import DashboardReadModel
 from triggertrade.execution import OrderStatus, OrderType
 from triggertrade.execution.futures import FuturesTradeIntent, PositionAction, PositionState
 from triggertrade.exchanges import BybitApiError, BybitResponse
@@ -55,6 +56,102 @@ def test_runtime_uses_one_linear_market_stream_for_active_and_test(tmp_path):
     assert client.spot_candle_calls == 0
     assert result.active[0].execution_status == "submitted"
     assert result.test[0].execution_status == "test_simulated"
+
+
+def test_no_signal_cycle_refreshes_account_snapshot_without_order(tmp_path):
+    path = tmp_path / "runtime.sqlite3"
+    client = LinearOnlyMarketClient(candles=_no_signal_candles())
+    adapter = RecordingFuturesAdapter(order_status="New")
+    provider = RecordingAccountProvider(_instrument(), equity=Decimal("125"), available=Decimal("119"), unrealized=Decimal("-1.5"))
+
+    result = _runtime(
+        tmp_path,
+        path=path,
+        client=client,
+        active_adapter=adapter,
+        account_provider=provider,
+    ).process_once()
+
+    snapshot = FuturesAccountingStore(path).latest_equity_snapshot()
+    portfolio = DashboardReadModel(path).get_portfolio_snapshot()
+
+    assert result.active[0].signal_type == "NO_SIGNAL"
+    assert provider.calls == 1
+    assert adapter.create_calls == 0
+    assert snapshot is not None
+    assert snapshot["equity"] == "125"
+    assert snapshot["available_margin"] == "119"
+    assert snapshot["unrealized_pnl"] == "-1.5"
+    assert portfolio.as_of == "2026-09-05T13:10:30+00:00"
+    assert portfolio.freshness_state == "STALE"
+
+
+def test_signal_cycle_reuses_refreshed_active_account_once(tmp_path):
+    path = tmp_path / "runtime.sqlite3"
+    adapter = RecordingFuturesAdapter(order_status="New")
+    provider = RecordingAccountProvider(_instrument(), equity=Decimal("130"))
+
+    result = _runtime(
+        tmp_path,
+        path=path,
+        active_adapter=adapter,
+        account_provider=provider,
+    ).process_once()
+
+    assert result.active[0].execution_status == "submitted"
+    assert provider.calls == 1
+    assert adapter.create_calls == 1
+    assert FuturesAccountingStore(path).latest_equity_snapshot()["equity"] == "130"
+
+
+def test_account_refresh_failure_retains_old_snapshot_and_blocks_new_entry(tmp_path):
+    path = tmp_path / "runtime.sqlite3"
+    FuturesAccountingStore(path).record_equity_snapshot(
+        _equity_snapshot("old-account", "2026-09-05T12:00:00+00:00", Decimal("100"))
+    )
+    adapter = RecordingFuturesAdapter(order_status="New")
+
+    result = _runtime(
+        tmp_path,
+        path=path,
+        active_adapter=adapter,
+        account_provider=FailingAccountProvider(),
+    ).process_once()
+
+    snapshot = FuturesAccountingStore(path).latest_equity_snapshot()
+
+    assert result.skipped_reason == "account_data_unavailable"
+    assert snapshot["snapshot_id"] == "old-account"
+    assert snapshot["observed_at"] == "2026-09-05T12:00:00+00:00"
+    assert adapter.create_calls == 0
+
+
+def test_restart_refreshes_account_snapshot_without_zero_reset(tmp_path):
+    path = tmp_path / "runtime.sqlite3"
+    FuturesAccountingStore(path).record_equity_snapshot(
+        _equity_snapshot("before-restart", "2026-09-05T12:00:00+00:00", Decimal("100"))
+    )
+
+    _runtime(
+        tmp_path,
+        path=path,
+        client=LinearOnlyMarketClient(candles=_no_signal_candles()),
+        account_provider=RecordingAccountProvider(_instrument(), equity=Decimal("144"), available=Decimal("140")),
+        clock=lambda: datetime(2026, 9, 5, 13, 10, 30, tzinfo=UTC),
+    ).process_once()
+    _runtime(
+        tmp_path,
+        path=path,
+        client=LinearOnlyMarketClient(candles=_no_signal_candles()),
+        account_provider=RecordingAccountProvider(_instrument(), equity=Decimal("145"), available=Decimal("141")),
+        clock=lambda: datetime(2026, 9, 5, 13, 11, 30, tzinfo=UTC),
+    ).process_once()
+
+    snapshot = FuturesAccountingStore(path).latest_equity_snapshot()
+
+    assert snapshot["equity"] == "145"
+    assert snapshot["available_margin"] == "141"
+    assert snapshot["wallet_balance"] == "145"
 
 
 def test_active_lane_creates_futures_trade_intent_and_bybit_demo_record(tmp_path):
@@ -675,6 +772,7 @@ def _runtime(
     position_store=None,
     account_provider=None,
     instrument_catalog=None,
+    clock=None,
     demo_expected_gross_move="1",
     market="linear",
 ):
@@ -696,7 +794,7 @@ def _runtime(
         active_adapter=active_adapter or RecordingFuturesAdapter(order_status="New"),
         account_provider=account_provider or (lambda _: _account(instrument)),
         instrument_catalog=instrument_catalog,
-        clock=lambda: datetime(2026, 9, 5, 13, 10, 30, tzinfo=UTC),
+        clock=clock or (lambda: datetime(2026, 9, 5, 13, 10, 30, tzinfo=UTC)),
         logger=lambda message: None,
     )
 
@@ -776,6 +874,42 @@ class RecordingFuturesAdapter:
         if raw_status == "Cancelled":
             return OrderStatus.CANCELLED
         return OrderStatus.SUBMITTED
+
+
+class RecordingAccountProvider:
+    def __init__(
+        self,
+        instrument,
+        *,
+        equity=Decimal("100"),
+        available=None,
+        unrealized=Decimal("0"),
+        position_size=Decimal("0"),
+        mark_price=None,
+    ):
+        self.instrument = instrument
+        self.equity = equity
+        self.available = equity if available is None else available
+        self.unrealized = unrealized
+        self.position_size = position_size
+        self.mark_price = mark_price
+        self.calls = 0
+
+    def __call__(self, instrument):
+        self.calls += 1
+        return _account(
+            instrument,
+            equity=self.equity,
+            available_margin=self.available,
+            unrealized_pnl=self.unrealized,
+            position_size=self.position_size,
+            mark_price=self.mark_price,
+        )
+
+
+class FailingAccountProvider:
+    def __call__(self, instrument):
+        raise BybitApiError("account read failed")
 
 
 def _linear_candles():
@@ -871,19 +1005,28 @@ def _instrument():
     )
 
 
-def _account(instrument, *, position_size=Decimal("0"), mark_price=None):
+def _account(
+    instrument,
+    *,
+    equity=Decimal("100"),
+    available_margin=Decimal("100"),
+    unrealized_pnl=Decimal("0"),
+    position_size=Decimal("0"),
+    mark_price=None,
+):
     return FuturesAccountState(
         symbol=instrument.symbol,
         category=ContractCategory.LINEAR,
         settlement_asset=instrument.settlement_asset,
-        available_margin=Decimal("100"),
-        equity=Decimal("100"),
-        wallet_balance=Decimal("100"),
+        available_margin=available_margin,
+        equity=equity,
+        wallet_balance=equity,
         configured_leverage=Decimal("1"),
         margin_mode="ISOLATED",
         position_mode="ONE_WAY",
         position_size=position_size,
         mark_price=mark_price,
+        unrealized_pnl=unrealized_pnl,
     )
 
 

@@ -278,6 +278,15 @@ from the latest equity snapshot. Missing mark/current-price data is unavailable
 rather than recomputed in frontend. Portfolio queries filter to ACTIVE/exchange
 evidence sources and exclude Research Demo, Backtest, and TEST simulation facts.
 
+ACTIVE account equity snapshots are operational freshness evidence, not signal
+evidence. The futures runtime refreshes the Bybit Demo account state once per
+normal completed-candle cycle before signal evaluation and persists the snapshot
+atomically to the accounting store. No-signal cycles still update account
+freshness when the private read succeeds. Refresh failure must retain the
+previous factual snapshot, degrade/unavailable readiness as appropriate, and
+must not create orders, reset balances to zero, or mix Research/TEST simulation
+facts into the ACTIVE Portfolio read model.
+
 Canonical registry bootstrap is a shared service-layer startup concern. It writes only configured RuleDefinitions, immutable TriggerSetVersions, memberships, and Recommendations into the intended runtime SQLite database before runtime/dashboard services open their stores. Bootstrap order is rule/trigger versions first, Set Versions second, then explicit lifecycle/status reconciliation. Runtime evidence remains separate: bootstrap must not create candle lifecycles, orders, fills, performance history, P&L, or synthetic analytics rows. If an existing exact rule/set/recommendation identity has different semantics, bootstrap fails closed through persistence immutability instead of silently mutating history.
 
 ## Intraday Experiment Governance

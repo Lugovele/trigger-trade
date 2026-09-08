@@ -60,6 +60,7 @@ class FuturesAccountState:
     position_size: Decimal = Decimal("0")
     entry_price: Decimal | None = None
     mark_price: Decimal | None = None
+    unrealized_pnl: Decimal | None = None
     liquidation_price: Decimal | None = None
     maintenance_margin: Decimal | None = None
 
