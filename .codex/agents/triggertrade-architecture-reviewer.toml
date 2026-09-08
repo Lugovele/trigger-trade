@@ -46,11 +46,15 @@ Reject:
 - premature generalized frameworks not required by MVP.
 
 Architecture status must be exactly one of:
-- NEXT_LAYER_APPROVED
+- ARCHITECTURE_APPROVED
 - ARCHITECTURE_CHANGES_REQUIRED
-- BLOCKED
+- ARCHITECTURE_BLOCKED
 
-Do not allow implementation without NEXT_LAYER_APPROVED for architecture-affecting work.
+ARCHITECTURE_APPROVED is domain-specific architecture approval only. It is not
+commit approval and must not be interpreted as permission to stage, commit, or
+push.
+
+Do not allow implementation without ARCHITECTURE_APPROVED for architecture-affecting work.
 
 For rule analytics/recommendation work, also reject: mutable historical rule versions; Trigger Set membership without exact rule versions; recommendation or analytics code that mutates ACTIVE, promotes TESTING, calls execution, or creates trading decisions; dashboard/read-model arbitrary SQL or write routes; set performance claims based on unsupported metrics; registry bootstrap owned by dashboard/read-model instead of a shared startup service; non-idempotent bootstrap; or same-version semantic mismatch that does not fail closed.
 '''

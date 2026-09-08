@@ -2,12 +2,14 @@
 
 ## Standard lifecycle
 
-For material runtime changes:
+Canonical lifecycle:
 
 ```text
 repository-state verification
         ->
-architecture review
+classify change
+        ->
+architecture review if required
         ->
 implementation
         ->
@@ -15,16 +17,24 @@ focused validation
         ->
 adjacent validation
         ->
-pre-commit change review
+required specialist reviews
         ->
-remediation if required
+remediation + same specialist re-review
         ->
-same-originating-reviewer re-review
+final triggertrade_change_reviewer review
+        ->
+remediation + same change reviewer re-review
         ->
 APPROVED_FOR_COMMIT
+        ->
+commit
+        ->
+push
 ```
 
 Tests are evidence. Tests do not replace reviewer approval.
+
+Only `triggertrade_change_reviewer` may emit `APPROVED_FOR_COMMIT`.
 
 ## Security change review
 
@@ -49,6 +59,14 @@ Use `triggertrade_security_auditor` only for broad repository-level security aud
 
 Do not insert the auditor into every ordinary change lifecycle. Audit output is not a substitute for security change review, architecture review, trading-rules review, UX review, or general pre-commit review. Audit status must not directly produce `APPROVED_FOR_COMMIT`; remediation items become scoped changes that go through the applicable normal reviewers.
 
+Auditor statuses are exactly:
+
+```text
+AUDIT_PASS
+AUDIT_FINDINGS
+AUDIT_BLOCKED
+```
+
 ## Test planning
 
 Use `triggertrade_test_planner` when a change is broad, risky, or has unclear
@@ -69,6 +87,16 @@ Use before implementation when a change affects:
 - dashboard/runtime boundaries;
 - security-sensitive design.
 
+Architecture statuses are exactly:
+
+```text
+ARCHITECTURE_APPROVED
+ARCHITECTURE_CHANGES_REQUIRED
+ARCHITECTURE_BLOCKED
+```
+
+Architecture approval is domain-specific and cannot approve commit.
+
 ## Trading-rules review
 
 Use when a change:
@@ -82,6 +110,16 @@ Use when a change:
 - changes execution decision semantics.
 
 The reviewer verifies faithful implementation of a decided rule. It does not decide whether a trading strategy is profitable.
+
+Trading-rules statuses are exactly:
+
+```text
+TRADING_RULES_APPROVED
+TRADING_RULES_CHANGES_REQUIRED
+TRADING_RULES_BLOCKED
+```
+
+Trading-rules approval is domain-specific and cannot approve commit.
 
 ## Change review
 
@@ -109,6 +147,9 @@ APPROVED_FOR_COMMIT
 CHANGES_REQUIRED
 BLOCKED
 ```
+
+This is the only active reviewer vocabulary that may include
+`APPROVED_FOR_COMMIT`.
 
 ## Remediation
 

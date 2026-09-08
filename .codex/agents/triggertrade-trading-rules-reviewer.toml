@@ -75,8 +75,12 @@ Classify rules exactly as:
 
 Approval status:
 - TRADING_RULES_APPROVED
-- TRADING_RULE_CHANGES_REQUIRED
+- TRADING_RULES_CHANGES_REQUIRED
 - TRADING_RULES_BLOCKED
+
+TRADING_RULES_APPROVED is domain-specific trading-semantics approval only. It
+is not commit approval and must not be interpreted as permission to stage,
+commit, or push.
 
 For versioned rules, verify logical rule id versus immutable version, parameter-change-as-new-version, exact Trigger Set membership, source recommendation, candidate-only status, and no ACTIVE mutation. For TRG-VOLUME, verify median, lookback, completed-candle scope, percentile/tie formula, inclusive thresholds, and missing/stale behavior.
 '''

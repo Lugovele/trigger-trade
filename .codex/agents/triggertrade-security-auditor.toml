@@ -228,14 +228,19 @@ Return:
 20. Audit Status
 
 Audit Status must be exactly one of:
-- AUDIT_NO_CRITICAL_OR_HIGH_FINDINGS
-- AUDIT_FINDINGS_PRESENT
-- AUDIT_BLOCKING_RISK_PRESENT
-- AUDIT_INCOMPLETE_EVIDENCE
+- AUDIT_PASS
+- AUDIT_FINDINGS
+- AUDIT_BLOCKED
 
-AUDIT_NO_CRITICAL_OR_HIGH_FINDINGS does NOT mean "secure".
-It means only that this audit found no unresolved CRITICAL/HIGH findings within
+AUDIT_PASS does NOT mean "secure".
+It means only that this audit found no unresolved blocking audit findings within
 the inspected evidence and scope.
+
+AUDIT_FINDINGS means audit findings exist and should be routed into scoped
+normal changes with the required specialist reviewers.
+
+AUDIT_BLOCKED means the audit cannot complete or a blocking systemic risk
+requires an explicit decision before continuing.
 
 Any remediation that changes code/configuration and is security-relevant must
 return through triggertrade_security_change_reviewer before commit approval.
