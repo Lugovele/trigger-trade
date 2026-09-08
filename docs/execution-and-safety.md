@@ -163,6 +163,8 @@ Futures runtime resolves the current `TradingRulesVersion` before creating an AC
 
 The current rules pointer is mutable; the rules version rows are not. Startup bootstrap may create the factual initial version on an empty DB, but it does not replace a later current version or silently change immutable semantics. Disabled optional gates are recorded as disabled and excluded, not represented by magic limits.
 
+Dashboard Rules writes use the protected backend `Save as New Version` route. The request must carry the browser's expected current rules identity; if the backend pointer has advanced, the save fails with a conflict and does not create a new version. A Rules save never submits, cancels, reconciles, or enables exchange orders.
+
 
 ## Instrument Catalog Safety
 
@@ -171,6 +173,8 @@ Futures order parameters must be validated against the cached Bybit public USDT-
 Price normalization is Decimal and purpose/direction aware. Protective rounding must not overstate reward or increase planned risk: LONG TP rounds down to tick, LONG SL rounds up, SHORT TP rounds up, and SHORT SL rounds down. Quantity normalization rounds down to `qtyStep` and rejects quantities below `minOrderQty`, above limit `maxOrderQty`, or below `minNotionalValue` when price is known. Configured leverage above exchange max is rejected; it is not clamped.
 
 Catalog refresh failures preserve the last valid cache. If no valid catalog exists, new entries fail closed. Existing positions are managed from their persisted instrument snapshot when possible, so refresh outage or later suspension blocks new entries without silently orphaning close/reconciliation paths.
+
+The dashboard catalog refresh button calls the backend catalog service only. The browser receives normalized public catalog state and tradeable symbols, not Bybit URLs, credentials, request headers, or raw private data.
 
 ## Futures Accounting Safety
 

@@ -115,8 +115,20 @@ class TradingRulesService:
             raise TradingRulesError("current trading rules version is not initialized")
         return current
 
-    def create_rules_version_from_current(self, *, changes: Mapping[str, object], created_source: str = "service", created_at: str | None = None) -> TradingRulesChange:
+    def create_rules_version_from_current(
+        self,
+        *,
+        changes: Mapping[str, object],
+        created_source: str = "service",
+        created_at: str | None = None,
+        expected_current_rules_version_id: str | None = None,
+        expected_current_display_version: str | None = None,
+    ) -> TradingRulesChange:
         current = self.get_current_rules_version()
+        if expected_current_rules_version_id is not None and current.rules_version_id != expected_current_rules_version_id:
+            raise TradingRulesError("current trading rules pointer changed; retry version creation")
+        if expected_current_display_version is not None and current.version != expected_current_display_version:
+            raise TradingRulesError("current trading rules display version changed; retry version creation")
         draft = apply_changes(current.draft, changes)
         validate_rules_draft(draft, symbol_validator=self._symbol_validator)
         if semantic_hash(draft) == current.config_hash:
@@ -329,9 +341,15 @@ def draft_from_json(raw: str) -> TradingRulesVersionDraft:
 
 def _convert_change(key: str, value: object) -> object:
     if key == "take_profit_mode":
-        return value if isinstance(value, TakeProfitMode) else TakeProfitMode(str(value).upper())
+        try:
+            return value if isinstance(value, TakeProfitMode) else TakeProfitMode(str(value).upper())
+        except ValueError as exc:
+            raise TradingRulesError("unsupported take-profit mode") from exc
     if key == "direction_mode":
-        return value if isinstance(value, DirectionMode) else DirectionMode(str(value).upper())
+        try:
+            return value if isinstance(value, DirectionMode) else DirectionMode(str(value).upper())
+        except ValueError as exc:
+            raise TradingRulesError("unsupported direction mode") from exc
     if key == "coins":
         return tuple(value)  # type: ignore[arg-type]
     if key.endswith("_enabled"):

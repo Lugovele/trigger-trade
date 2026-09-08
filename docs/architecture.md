@@ -328,6 +328,10 @@ Trading rules versions are immutable rows. The current live rules selection is a
 
 Production futures runtime resolves the current rules version before sizing and risk. New positions must carry `rules_version_id` and a resolved rule snapshot. Existing positions and closed trades retain their original rules attribution even after the current pointer advances. Dashboard/read models may display those persisted facts later, but they must not compute or create trading rules.
 
+The local dashboard exposes a thin Rules API over this same registry. `GET` reads the current version, newest-first history, and exact historical detail. `POST /api/rules/versions` accepts a submitted draft with the expected current identity, validates it through `TradingRulesService`, creates a new immutable version when semantics change, and atomically advances the current pointer. A stale browser edit receives a conflict response with the actual current version identity; the dashboard must not silently branch from stale state.
+
+Rules UI state is local draft state only. It may render backend fields and submit the draft, but it must not infer trading semantics, fabricate versions, or mutate historical versions. The historical detail view resolves the requested version exactly and is read-only.
+
 
 ## Bybit Linear Instrument Catalog
 

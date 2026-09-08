@@ -619,6 +619,215 @@ def _remove_legacy_open_trigger_detail(html: str) -> str:
     return html
 
 
+def _strip_rules_fixtures(html: str, rules: dict[str, Any]) -> str:
+    html = _replace_between(
+        html,
+        '<section class="page" id="rules">',
+        '<section class="page" id="rules-version">',
+        _rules_current_section_html(rules),
+    )
+    html = _replace_between(
+        html,
+        '<section class="page" id="rules-version">',
+        '<section class="page" id="research">',
+        _rules_version_section_html(rules),
+    )
+    return _remove_legacy_rules_script(html)
+
+
+def _rules_current_section_html(rules: dict[str, Any]) -> str:
+    current = rules.get("current")
+    if not current:
+        return """<section class="page" id="rules">
+  <div class="rules-topbar"><div class="current-rules-heading">Current Rules Configuration</div></div>
+  <div class="rules-grid">
+    <div class="panel"><div class="panelhead"><div class="title">Position Rules</div></div><div class="rule-form">
+      <div class="rule-row"><div><div class="rule-name">Position size</div><div class="rule-desc">% of available capital allocated to one new position</div></div><div class="rule-control suffix-control"><input type="number" disabled><span>%</span></div></div>
+      <div class="rule-row"><div><div class="rule-name">Take Profit mode</div><div class="rule-desc">How the target is determined</div></div><div class="rule-control"><select disabled><option>Fixed</option><option>Dynamic</option></select></div></div>
+      <div class="rule-row"><div><div class="rule-name">Fixed Take Profit</div><div class="rule-desc">Exact target move from entry</div></div><div class="rule-control suffix-control"><input type="number" disabled><span>%</span></div></div>
+      <div class="rule-row"><div><div class="rule-name">Minimum Take Profit</div><div class="rule-desc">Dynamic target cannot be lower than this level</div></div><div class="rule-control suffix-control"><input type="number" disabled><span>%</span></div></div>
+      <div class="rule-row"><div><div class="rule-name">Stop Loss</div><div class="rule-desc">Maximum planned move against the position</div></div><div class="rule-control suffix-control"><input type="number" disabled><span>%</span></div></div>
+      <div class="rule-row"><div><div class="rule-name">Minimum Risk / Reward</div><div class="rule-desc">Minimum expected reward relative to planned risk</div></div><div class="rule-control rr-control"><input type="number" disabled><span>: 1</span></div></div>
+      <div class="rule-row"><div><div class="rule-name">Minimum Net Edge <label class="mini-toggle"><input type="checkbox" disabled><span></span></label></div><div class="rule-desc">Minimum expected result after trading costs</div></div><div class="rule-control suffix-control"><input type="number" disabled><span>%</span></div></div>
+      <div class="rule-row"><div><div class="rule-name">Leverage</div><div class="rule-desc">Default leverage for new positions</div></div><div class="rule-control"><select disabled><option>1x</option></select></div></div>
+    </div></div>
+    <div class="panel"><div class="panelhead"><div class="title">Portfolio Rules</div></div><div class="rule-form">
+      <div class="rule-row"><div><div class="rule-name">Max capital in positions</div><div class="rule-desc">Maximum share of total capital allowed in open positions</div></div><div class="rule-control suffix-control"><input type="number" disabled><span>%</span></div></div>
+      <div class="rule-row"><div><div class="rule-name">Max open positions <label class="mini-toggle"><input type="checkbox" disabled><span></span></label></div><div class="rule-desc">Maximum number of simultaneous positions</div></div><div class="rule-control"><input type="number" disabled></div></div>
+      <div class="rule-row"><div><div class="rule-name">Max positions per coin <label class="mini-toggle"><input type="checkbox" disabled><span></span></label></div></div><div class="rule-control"><input type="number" disabled></div></div>
+      <div class="rule-row"><div><div class="rule-name">Direction</div><div class="rule-desc">Allowed trade directions</div></div><div class="rule-control"><select disabled><option>LONG + SHORT</option></select></div></div>
+      <div class="rule-row"><div><div class="rule-name">Daily loss limit <label class="mini-toggle"><input type="checkbox" disabled><span></span></label></div></div><div class="rule-control suffix-control"><input type="number" disabled><span>%</span></div></div>
+    </div></div>
+    <div class="panel"><div class="panelhead"><div class="title">Coins</div><div class="rule-actions"><button class="btn" disabled>Edit</button></div></div><div class="coins-list" id="coinsList"><span class="meta">Current rules unavailable.</span></div><div class="coins-editor"><div class="coins-toolbar"><input class="search" placeholder="Search exchange symbols" disabled><button class="btn" disabled>Refresh from exchange</button></div><div class="coins-footer"><span class="meta">Optional % = max share of total capital for that coin. Blank = no coin-specific limit.</span><button class="btn" disabled>Apply</button></div></div></div>
+    <div class="rules-bottom-actions"><div class="rules-save-state" id="rulesSaveState">Current rules unavailable</div><button class="btn primary-rule" disabled>Save as New Version</button></div>
+    <div class="panel rules-span version-history-table"><div class="panelhead"><div class="title">Version history</div></div><div class="tablewrap"><table><thead><tr><th>Version</th><th>Change</th><th>Used in</th></tr></thead><tbody><tr><td colspan="3" class="placeholder">Backend bootstrap must create the factual initial version.</td></tr></tbody></table></div></div>
+  </div>
+</section>
+
+"""
+    pos = current["position_rules"]
+    port = current["portfolio_rules"]
+    return f"""<section class="page" id="rules">
+  <div class="rules-topbar">
+    <div class="current-rules-heading">Current Rules Configuration <span class="meta" id="rulesCurrentVersionLabel">Rules · {_h(current["display_version"])}</span></div>
+  </div>
+  <div class="rules-grid">
+    <div class="panel"><div class="panelhead"><div class="title">Position Rules</div></div><div class="rule-form">
+      {_rule_number_row("Position size", "% of available capital allocated to one new position", "rulesPosSize", pos["position_size_pct"], "%", "0.1", "0.1", "100")}
+      <div class="rule-row"><div><div class="rule-name">Take Profit mode</div><div class="rule-desc">How the target is determined</div></div><div class="rule-control"><select id="rulesTpMode" onchange="syncTpMode()">{_option("Fixed", pos["take_profit_mode"] == "FIXED")}{_option("Dynamic", pos["take_profit_mode"] == "DYNAMIC")}</select></div></div>
+      <div class="rule-row" id="fixedTpRow"><div><div class="rule-name">Fixed Take Profit</div><div class="rule-desc">Exact target move from entry</div></div><div class="rule-control suffix-control"><input id="rulesFixedTp" type="number" value="{_h(pos["fixed_take_profit_pct"] or "")}" step="0.1" min="0.1"><span>%</span></div></div>
+      <div class="rule-row" id="minTpRow"><div><div class="rule-name">Minimum Take Profit</div><div class="rule-desc">Dynamic target cannot be lower than this level</div></div><div class="rule-control suffix-control"><input id="rulesMinTp" type="number" value="{_h(pos["minimum_take_profit_pct"] or "")}" step="0.1" min="0.1"><span>%</span></div></div>
+      {_rule_number_row("Stop Loss", "Maximum planned move against the position", "rulesSl", pos["stop_loss_pct"], "%", "0.1", "0.1", "")}
+      {_rule_number_row("Minimum Risk / Reward", "Minimum expected reward relative to planned risk", "rulesRR", pos["minimum_risk_reward"], ": 1", "0.1", "0.1", "", "rr-control")}
+      {_toggle_number_row("Minimum Net Edge", "Minimum expected result after trading costs", "rulesEdgeOn", "rulesEdge", pos["minimum_net_edge_enabled"], pos["minimum_net_edge_pct"], "%", "0.1", "0")}
+      <div class="rule-row"><div><div class="rule-name">Leverage</div><div class="rule-desc">Default leverage for new positions</div></div><div class="rule-control"><select id="rulesLev">{_leverage_options(pos["leverage"])}</select></div></div>
+    </div></div>
+    <div class="panel"><div class="panelhead"><div class="title">Portfolio Rules</div></div><div class="rule-form">
+      {_rule_number_row("Max capital in positions", "Maximum share of total capital allowed in open positions", "rulesCap", port["max_capital_in_positions_pct"], "%", "1", "1", "100")}
+      {_toggle_number_row("Max open positions", "Maximum number of simultaneous positions", "rulesMaxOpenOn", "rulesMaxOpen", port["max_open_positions_enabled"], port["max_open_positions"], "", "1", "1")}
+      {_toggle_number_row("Max positions per coin", "", "rulesMaxCoinOn", "rulesMaxCoin", port["max_positions_per_coin_enabled"], port["max_positions_per_coin"], "", "1", "1")}
+      <div class="rule-row"><div><div class="rule-name">Direction</div><div class="rule-desc">Allowed trade directions</div></div><div class="rule-control"><select id="rulesDirection">{_option("LONG + SHORT", port["direction_mode"] == "LONG_SHORT")}{_option("LONG only", port["direction_mode"] == "LONG_ONLY")}{_option("SHORT only", port["direction_mode"] == "SHORT_ONLY")}</select></div></div>
+      {_toggle_number_row("Daily loss limit", "", "rulesDailyLossOn", "rulesDailyLoss", port["daily_loss_limit_enabled"], port["daily_loss_limit_pct"], "%", "0.1", "0")}
+    </div></div>
+    <div class="panel"><div class="panelhead"><div class="title">Coins</div><div class="rule-actions"><button class="btn" onclick="toggleCoinsEditor()">Edit</button></div></div>
+      <div class="coins-list" id="coinsList">{_rules_coin_chips(current["coins"])}</div>
+      <div class="coins-editor" id="coinsEditor" style="display:none"><div class="coins-toolbar"><input class="search" id="coinSearch" placeholder="Search exchange symbols" oninput="filterCoinOptions()"><button class="btn" onclick="refreshRulesCatalog()">Refresh from exchange</button></div><div class="coin-options" id="coinOptions"></div><div class="coins-footer"><span class="meta" id="catalogState">Optional % = max share of total capital for that coin. Blank = no coin-specific limit.</span><button class="btn" onclick="applyCoins()">Apply</button></div></div>
+    </div>
+    <div class="panel rules-span" id="rulesErrorPanel" style="display:none"><div class="panelhead"><div><div class="title">Validation error</div><div class="meta" id="rulesErrorText"></div></div></div></div>
+    <div class="rules-bottom-actions"><div class="rules-save-state" id="rulesSaveState">No unsaved changes</div><button class="btn primary-rule" id="rulesSaveButton" onclick="saveRules()" disabled>Save as New Version</button></div>
+    <div class="panel rules-span"><div class="panelhead"><div><div class="title">Runtime capability</div><div class="meta">Dynamic TP: unsupported/fail closed · Daily loss enforcement: unsupported/fail closed · Direction filters do not create SHORT alpha</div></div></div></div>
+    <div class="panel rules-span"><div class="panelhead"><div><div class="title">Immutable identity</div><div class="meta mono" id="rulesCurrentIdentity">rules_version_id: {_h(current["rules_version_id"])} · config_hash: {_h(current["config_hash"])}</div></div></div></div>
+    <div class="panel rules-span version-history-table"><div class="tablewrap"><table><thead><tr><th>Version</th><th>Change</th><th>Used in</th></tr></thead><tbody id="rulesHistoryBody">{_rules_history_rows(rules.get("history") or ())}</tbody></table></div></div>
+  </div>
+</section>
+
+"""
+
+
+def _rules_version_section_html(rules: dict[str, Any]) -> str:
+    current = rules.get("current")
+    title = "Rules · " + str(current.get("display_version")) if current else "Rules unavailable"
+    return f"""<section class="page" id="rules-version">
+  <div class="rules-version-header"><div class="rules-version-header-inner"><div class="current-rules-heading" id="rulesVersionTitle">{_h(title)}</div><div class="pagesub" id="rulesVersionIdentity">Saved rules configuration · read only</div><div class="version-context"><span id="rulesVersionChange">Change: {_h((current or {}).get("change_summary") or "-")}</span><span id="rulesVersionUsed">Used in: {_h(_rules_used_in_label((current or {}).get("used_in") or ()))}</span></div></div></div>
+  <div class="rules-grid readonly-control" id="rulesVersionDetail"></div>
+</section>
+
+"""
+
+
+def _rules_wiring_script(rules: dict[str, Any] | None, token: str) -> str:
+    if rules is None:
+        return ""
+    payload = json.dumps(_safe_payload(rules), ensure_ascii=False).replace("</", "<\\/")
+    return f"""
+<script id="triggertrade-rules-read-model">
+(function(){{
+  const state = {payload};
+  const token = {json.dumps(token)};
+  const html = (v) => String(v ?? "").replace(/[&<>"']/g, c => ({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}}[c]));
+  let draft = JSON.parse(JSON.stringify(state.current || null));
+  let coinDraft = new Map((draft ? draft.coins : []).map(c => [c.symbol, Object.assign({{}}, c)]));
+  let saving = false;
+  let cleanSnapshot = "";
+  const modeValue = () => rulesTpMode.value === "Fixed" ? "FIXED" : "DYNAMIC";
+  const directionValue = () => rulesDirection.value === "LONG only" ? "LONG_ONLY" : rulesDirection.value === "SHORT only" ? "SHORT_ONLY" : "LONG_SHORT";
+  function val(id){{ const node=document.getElementById(id); return node && node.value !== "" ? node.value : null; }}
+  function checked(id){{ const node=document.getElementById(id); return !!(node && node.checked); }}
+  function syncVisibleCoins(){{ document.querySelectorAll("#coinOptions label").forEach(label => {{ const symbol=label.dataset.symbol; if(!symbol)return; coinDraft.set(symbol, {{symbol, enabled: label.querySelector("input[type=checkbox]").checked, max_allocation_pct: label.querySelector("input[type=number]").value || null}}); }}); }}
+  function currentPayload(){{
+    syncVisibleCoins();
+    return {{
+      expected_rules_version_id: state.current && state.current.rules_version_id,
+      expected_display_version: state.current && state.current.display_version,
+      token,
+      position_rules: {{
+        position_size_pct: val("rulesPosSize"), take_profit_mode: modeValue(), fixed_take_profit_pct: val("rulesFixedTp"), minimum_take_profit_pct: val("rulesMinTp"),
+        stop_loss_pct: val("rulesSl"), minimum_risk_reward: val("rulesRR"), minimum_net_edge_enabled: checked("rulesEdgeOn"), minimum_net_edge_pct: val("rulesEdge"),
+        leverage: String(val("rulesLev") || "").replace("x","")
+      }},
+      portfolio_rules: {{
+        max_capital_in_positions_pct: val("rulesCap"), max_open_positions_enabled: checked("rulesMaxOpenOn"), max_open_positions: val("rulesMaxOpen"),
+        max_positions_per_coin_enabled: checked("rulesMaxCoinOn"), max_positions_per_coin: val("rulesMaxCoin"),
+        direction_mode: directionValue(), daily_loss_limit_enabled: checked("rulesDailyLossOn"), daily_loss_limit_pct: val("rulesDailyLoss")
+      }},
+      coins: [...coinDraft.values()]
+    }};
+  }}
+  function payloadSignature(payload){{ const copy=JSON.parse(JSON.stringify(payload)); delete copy.token; return JSON.stringify(copy); }}
+  function setSave(text, dirty){{ const s=document.getElementById("rulesSaveState"), b=document.getElementById("rulesSaveButton"); if(s)s.textContent=text; if(b)b.disabled=saving || !dirty; }}
+  function clearRulesError(){{ const p=document.getElementById("rulesErrorPanel"); if(p)p.style.display="none"; document.querySelectorAll("#rules .rule-row,#rules .coins-editor").forEach(x=>x.style.outline=""); }}
+  function showRulesError(message){{ clearRulesError(); const panel=document.getElementById("rulesErrorPanel"), text=document.getElementById("rulesErrorText"); if(panel)panel.style.display="block"; if(text)text.textContent=message; const lower=String(message||"").toLowerCase(); let target=null; if(lower.includes("coin")||lower.includes("catalog")||lower.includes("symbol")) target=document.querySelector("#coinsEditor")||document.querySelector("#coinsList"); else if(lower.includes("take-profit")||lower.includes("profit")) target=document.getElementById("rulesTpMode")?.closest(".rule-row"); else if(lower.includes("position_size")) target=document.getElementById("rulesPosSize")?.closest(".rule-row"); else if(lower.includes("stop_loss")) target=document.getElementById("rulesSl")?.closest(".rule-row"); else if(lower.includes("leverage")) target=document.getElementById("rulesLev")?.closest(".rule-row"); else if(lower.includes("max_open")) target=document.getElementById("rulesMaxOpen")?.closest(".rule-row"); else if(lower.includes("daily")) target=document.getElementById("rulesDailyLoss")?.closest(".rule-row"); if(target)target.style.outline="2px solid #f4e4ad"; }}
+  function refreshDirtyState(){{ const dirty=payloadSignature(currentPayload())!==cleanSnapshot; setSave(dirty ? "Unsaved changes" : "No unsaved changes", dirty); }}
+  function markDirty(){{ clearRulesError(); refreshDirtyState(); }}
+  function coinChip(c){{ return `<span class="coin-chip">${{html(c.symbol)}}${{c.max_allocation_pct ? ` <small>${{html(c.max_allocation_pct)}}%</small>` : ""}}</span>`; }}
+  function renderCurrentIdentity(){{ const label=document.getElementById("rulesCurrentVersionLabel"), ident=document.getElementById("rulesCurrentIdentity"); if(label)label.textContent="Rules · "+(state.current?.display_version || "-"); if(ident)ident.textContent=`rules_version_id: ${{state.current?.rules_version_id || "-"}} · config_hash: ${{state.current?.config_hash || "-"}}`; }}
+  function renderCoinsList(){{ const node=document.getElementById("coinsList"); if(node) node.innerHTML = (currentPayload().coins.filter(c=>c.enabled).map(coinChip).join("") || '<span class="meta">No enabled coins</span>'); }}
+  function renderCoinOptions(list){{ syncVisibleCoins(); const rows = (list && list.length ? list : (state.coins || [])); const node=document.getElementById("coinOptions"); if(!node)return; node.innerHTML = rows.map(c => {{ const cur=coinDraft.get(c.symbol)||{{symbol:c.symbol,enabled:false,max_allocation_pct:null}}; return `<label data-symbol="${{html(c.symbol)}}"><span><input type="checkbox" ${{cur.enabled?'checked':''}}> ${{html(c.symbol)}}</span><span class="coin-limit"><input type="number" value="${{html(cur.max_allocation_pct||"")}}" placeholder="-" min="1" max="100">%</span></label>`; }}).join("") || '<div class="placeholder">No tradeable catalog symbols available.</div>'; node.querySelectorAll("input").forEach(x => x.addEventListener("input", markDirty)); }}
+  window.syncTpMode = function(){{ const fixed=document.getElementById("fixedTpRow"), min=document.getElementById("minTpRow"); if(!fixed||!min)return; if(modeValue()==="FIXED"){{fixed.style.display="grid";min.style.display="none";}}else{{fixed.style.display="none";min.style.display="grid";}} }};
+  window.toggleCoinsEditor = function(){{ const e=document.getElementById("coinsEditor"); if(e)e.style.display=e.style.display==="none"?"block":"none"; renderCoinOptions(); }};
+  window.filterCoinOptions = async function(){{ const q=document.getElementById("coinSearch").value; const res=await fetch(`/api/instruments/search?q=${{encodeURIComponent(q)}}`); const data=await res.json(); renderCoinOptions(data.coins || []); }};
+  window.refreshRulesCatalog = async function(){{ setSave("Refreshing catalog...", payloadSignature(currentPayload())!==cleanSnapshot); const res=await fetch("/api/instruments/refresh", {{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{token}})}}); const data=await res.json(); const c=document.getElementById("catalogState"); if(c)c.textContent=res.ok?`Catalog refreshed: ${{data.tradeable_count}} tradeable symbols`:`Catalog refresh failed: ${{data.error || "previous cache preserved"}}`; await window.filterCoinOptions(); refreshDirtyState(); }};
+  window.applyCoins = function(){{ renderCoinsList(); markDirty(); }};
+  window.saveRules = async function(){{ if(saving)return; saving=true; clearRulesError(); setSave("Saving...", true); const res=await fetch("/api/rules/versions", {{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify(currentPayload())}}); const data=await res.json(); saving=false; if(!res.ok){{ const msg=res.status===409?"Conflict - current version changed; refresh current rules before saving":(data.error || "Validation error"); showRulesError(msg); setSave(msg, true); return; }} state.current=data.rules; state.history=data.history; draft=JSON.parse(JSON.stringify(state.current)); coinDraft = new Map((draft ? draft.coins : []).map(c => [c.symbol, Object.assign({{}}, c)])); renderCurrentIdentity(); renderHistory(); renderCoinOptions(); renderCoinsList(); cleanSnapshot=payloadSignature(currentPayload()); setSave(`Saved as ${{state.current.display_version}}`, false); }};
+  function renderHistory(){{ const body=document.getElementById("rulesHistoryBody"); if(!body)return; body.innerHTML=(state.history||[]).map(v=>`<tr><td><button class="link" onclick="openRulesVersion('${{html(v.rules_version_id)}}')">${{html(v.display_version)}}</button></td><td>${{html(v.change_summary)}}</td><td>${{html(usedLabel(v.used_in))}}</td></tr>`).join(""); }}
+  function usedLabel(rows){{ return (rows||[]).map(r=>r.usage_type+(r.entity_id?` · ${{r.entity_id}}`:"")).join("; ") || "-"; }}
+  window.openRulesVersion = async function(v){{ const res=await fetch(`/api/rules/version/${{encodeURIComponent(v)}}`); const d=await res.json(); if(!res.ok)return; rulesVersionTitle.textContent="Rules · "+d.display_version; const ident=document.getElementById("rulesVersionIdentity"); if(ident)ident.textContent=`Saved rules configuration · read only · ${{d.rules_version_id}} · ${{d.config_hash}}`; rulesVersionChange.textContent="Change: "+d.change_summary; rulesVersionUsed.textContent="Used in: "+usedLabel(d.used_in); const node=document.getElementById("rulesVersionDetail"); if(node) node.innerHTML=`<div class="panel"><div class="panelhead"><div class="title">Position Rules</div></div><div class="detail-note">${{html(JSON.stringify(d.position_rules))}}</div></div><div class="panel"><div class="panelhead"><div class="title">Portfolio Rules</div></div><div class="detail-note">${{html(JSON.stringify(d.portfolio_rules))}}</div></div><div class="panel"><div class="panelhead"><div class="title">Coins</div></div><div class="coins-list">${{(d.coins||[]).filter(c=>c.enabled).map(coinChip).join("")}}</div></div>`; showPage("rules-version"); }};
+  if(draft){{ document.querySelectorAll("#rules input,#rules select").forEach(x=>x.addEventListener("input", markDirty)); renderCoinOptions(); renderCoinsList(); renderHistory(); syncTpMode(); cleanSnapshot=payloadSignature(currentPayload()); setSave("No unsaved changes", false); }}
+}})();
+</script>
+"""
+
+
+def _rule_number_row(name: str, desc: str, field_id: str, value: Any, suffix: str, step: str, min_value: str, max_value: str, cls: str = "suffix-control") -> str:
+    max_attr = "" if not max_value else f' max="{_h(max_value)}"'
+    return f'<div class="rule-row"><div><div class="rule-name">{_h(name)}</div><div class="rule-desc">{_h(desc)}</div></div><div class="rule-control {cls}"><input id="{_h(field_id)}" type="number" value="{_h(value)}" step="{_h(step)}" min="{_h(min_value)}"{max_attr}><span>{_h(suffix)}</span></div></div>'
+
+
+def _toggle_number_row(name: str, desc: str, toggle_id: str, field_id: str, enabled: Any, value: Any, suffix: str, step: str, min_value: str) -> str:
+    checked = " checked" if enabled else ""
+    control = "suffix-control" if suffix else ""
+    return f'<div class="rule-row"><div><div class="rule-name">{_h(name)} <label class="mini-toggle"><input id="{_h(toggle_id)}" type="checkbox"{checked}><span></span></label></div><div class="rule-desc">{_h(desc)}</div></div><div class="rule-control {control}"><input id="{_h(field_id)}" type="number" value="{_h(value if value is not None else "")}" step="{_h(step)}" min="{_h(min_value)}"><span>{_h(suffix)}</span></div></div>'
+
+
+def _option(label: str, selected: bool) -> str:
+    return f'<option{" selected" if selected else ""}>{_h(label)}</option>'
+
+
+def _leverage_options(current: Any) -> str:
+    values = ["1", "2", "3", "5"]
+    current_value = str(current)
+    if current_value not in values:
+        values.append(current_value)
+    return "".join(_option(f"{value}x", current_value == value) for value in values)
+
+
+def _rules_coin_chips(coins: Any) -> str:
+    enabled = [coin for coin in coins if coin.get("enabled")]
+    return "".join(f'<span class="coin-chip">{_h(coin.get("symbol"))}{f" <small>{_h(coin.get("max_allocation_pct"))}%</small>" if coin.get("max_allocation_pct") else ""}</span>' for coin in enabled) or '<span class="meta">No enabled coins</span>'
+
+
+def _rules_history_rows(history: Any) -> str:
+    return "".join(f'<tr><td><button class="link" onclick="openRulesVersion({_js_arg(row.get("rules_version_id"))})">{_h(row.get("display_version"))}</button></td><td>{_h(row.get("change_summary"))}</td><td>{_h(_rules_used_in_label(row.get("used_in") or ()))}</td></tr>' for row in history)
+
+
+def _rules_used_in_label(used_in: Any) -> str:
+    labels = [str(row.get("usage_type")) + (f' · {row.get("entity_id")}' if row.get("entity_id") else "") for row in used_in]
+    return "; ".join(labels) if labels else "-"
+
+
+def _replace_between(html: str, start_marker: str, end_marker: str, replacement: str) -> str:
+    start = html.find(start_marker)
+    end = html.find(end_marker, start + len(start_marker)) if start >= 0 else -1
+    if start < 0 or end < 0:
+        return html
+    return html[:start] + replacement + html[end:]
+
+
+def _remove_legacy_rules_script(html: str) -> str:
+    pattern = r"\nconst rulesVersions = \{.*?function openRulesVersion\(v\)\{.*?\n\}\n"
+    return re.sub(pattern, "\n", html, count=1, flags=re.S)
+
+
 def render_product_dashboard(
     *,
     initial_page: str = "portfolio",
@@ -626,6 +835,7 @@ def render_product_dashboard(
     operator_control_token: str = "",
     portfolio: dict[str, Any] | None = None,
     registry: dict[str, Any] | None = None,
+    rules: dict[str, Any] | None = None,
 ) -> str:
     page = initial_page if initial_page in _ALLOWED_PAGES else "portfolio"
     startup = ["window.showPage && window.showPage(" + json.dumps(page) + ");"]
@@ -645,6 +855,8 @@ def render_product_dashboard(
     )
     if registry is not None:
         html = _strip_registry_fixtures(html, registry)
+    if rules is not None:
+        html = _strip_rules_fixtures(html, rules)
     html = html.replace(
         ".placeholder{padding:50px 20px;text-align:center;color:var(--muted);font-size:11px}",
         ".placeholder{padding:50px 20px;text-align:center;color:var(--muted);font-size:11px}\n"
@@ -660,6 +872,7 @@ def render_product_dashboard(
         + _server_boundary_script(state, bool(operator_control_token))
         + _portfolio_wiring_script(portfolio)
         + _registry_wiring_script(registry)
+        + _rules_wiring_script(rules, operator_control_token)
     )
     return html.replace(marker, script + marker)
 

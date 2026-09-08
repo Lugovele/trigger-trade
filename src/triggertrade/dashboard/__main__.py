@@ -5,6 +5,8 @@ from __future__ import annotations
 from html import escape
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 import json
 import os
 from pathlib import Path
@@ -12,8 +14,11 @@ import secrets
 from urllib.parse import parse_qs, unquote, urlparse
 
 from triggertrade.dashboard.read_model import DashboardReadModel
-from triggertrade.persistence import OperatorStateStore
+from triggertrade.exchanges import BybitDemoClient
+from triggertrade.persistence import InstrumentCatalogStore, OperatorStateStore, TradingRulesStore
+from triggertrade.rules import CoinRule, TradingRulesError, TradingRulesService
 from triggertrade.services.bootstrap import ensure_runtime_registry_for_env, merged_runtime_env, runtime_db_path
+from triggertrade.services.instrument_catalog import InstrumentCatalogService
 
 
 DEFAULT_HOST = "127.0.0.1"
@@ -28,11 +33,15 @@ class DashboardServer(ThreadingHTTPServer):
         *,
         read_model: DashboardReadModel,
         operator_store: OperatorStateStore,
+        trading_rules_service: TradingRulesService,
+        instrument_catalog_service: InstrumentCatalogService,
         operator_actions=None,
     ) -> None:
         super().__init__(server_address, handler_class)
         self.read_model = read_model
         self.operator_store = operator_store
+        self.trading_rules_service = trading_rules_service
+        self.instrument_catalog_service = instrument_catalog_service
         self.operator_actions = operator_actions
         self.operator_control_token = secrets.token_urlsafe(24)
 
@@ -42,6 +51,33 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path == "/api/rules/current":
+            payload = self.server.read_model.get_current_rules_version_payload()
+            if payload is None:
+                self._send_json({"error": "current trading rules version is unavailable"}, HTTPStatus.SERVICE_UNAVAILABLE)
+            else:
+                self._send_json(payload)
+            return
+        if parsed.path == "/api/rules/history":
+            self._send_json({"versions": self.server.read_model.list_rules_version_payloads()})
+            return
+        if parsed.path.startswith("/api/rules/version/"):
+            identity = unquote(parsed.path.removeprefix("/api/rules/version/"))
+            payload = self.server.read_model.get_rules_version_payload(identity)
+            if payload is None:
+                self._send_json({"error": "trading rules version not found"}, HTTPStatus.NOT_FOUND)
+            else:
+                self._send_json(payload)
+            return
+        if parsed.path == "/api/instruments/search":
+            query = parse_qs(parsed.query).get("q", [""])[0]
+            self._send_json(
+                {
+                    "catalog": _catalog_state_payload(self.server.read_model),
+                    "coins": self.server.read_model.search_rules_catalog_coins(query),
+                }
+            )
+            return
         product_pages = {
             "/": "portfolio",
             "/portfolio": "portfolio",
@@ -130,6 +166,54 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path == "/api/rules/versions":
+            payload = self._read_json_body(max_bytes=16000)
+            token = str(payload.get("token") or "")
+            if token != self.server.operator_control_token:
+                self._send_json({"error": "operator token required"}, HTTPStatus.FORBIDDEN)
+                return
+            try:
+                changes = _rules_changes_from_payload(payload)
+                result = self.server.trading_rules_service.create_rules_version_from_current(
+                    changes=changes,
+                    created_source="local_dashboard",
+                    created_at=datetime.now(UTC).isoformat(),
+                    expected_current_rules_version_id=str(payload.get("expected_rules_version_id") or ""),
+                    expected_current_display_version=str(payload.get("expected_display_version") or ""),
+                )
+            except TradingRulesError as exc:
+                status = HTTPStatus.CONFLICT if "pointer changed" in str(exc) or "display version changed" in str(exc) else HTTPStatus.BAD_REQUEST
+                current = self.server.read_model.get_current_rules_version_payload()
+                self._send_json({"error": _safe_public_error(exc), "current": current}, status)
+                return
+            response = self.server.read_model.get_current_rules_version_payload()
+            history = self.server.read_model.list_rules_version_payloads()
+            if not result.changed:
+                self._send_json({"changed": False, "error": "No semantic changes", "current": response, "history": history}, HTTPStatus.BAD_REQUEST)
+                return
+            self._send_json({"changed": True, "rules": response, "history": history, "change_summary": result.change_summary}, HTTPStatus.CREATED)
+            return
+        if parsed.path == "/api/instruments/refresh":
+            payload = self._read_json_body(max_bytes=2048)
+            token = str(payload.get("token") or "")
+            if token != self.server.operator_control_token:
+                self._send_json({"error": "operator token required"}, HTTPStatus.FORBIDDEN)
+                return
+            result = self.server.instrument_catalog_service.refresh_instrument_catalog()
+            status = HTTPStatus.OK if result.status == "OK" else HTTPStatus.SERVICE_UNAVAILABLE
+            self._send_json(
+                {
+                    "status": result.status,
+                    "fetched_count": result.fetched_count,
+                    "tradeable_count": result.tradeable_count,
+                    "excluded_count": result.excluded_count,
+                    "updated_at": result.updated_at,
+                    "error": result.error,
+                    "catalog": _catalog_state_payload(self.server.read_model),
+                },
+                status,
+            )
+            return
         if parsed.path in {"/operator/pause", "/operator/resume", "/operator/close-one", "/operator/close-all"}:
             length = int(self.headers.get("Content-Length", "0") or "0")
             body = self.rfile.read(min(length, 2048)).decode("utf-8")
@@ -265,6 +349,25 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
+    def _send_json(self, value, status: HTTPStatus = HTTPStatus.OK) -> None:
+        payload = json.dumps(value, ensure_ascii=False, default=str).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def _read_json_body(self, *, max_bytes: int) -> dict:
+        length = min(int(self.headers.get("Content-Length", "0") or "0"), max_bytes)
+        if length <= 0:
+            return {}
+        try:
+            value = json.loads(self.rfile.read(length).decode("utf-8"))
+        except json.JSONDecodeError:
+            return {}
+        return value if isinstance(value, dict) else {}
+
 
 def render_dashboard(
     read_model: DashboardReadModel,
@@ -301,12 +404,19 @@ def render_dashboard(
         else None,
         "integrity_errors": read_model.get_registry_integrity_errors(),
     }
+    rules = {
+        "current": read_model.get_current_rules_version_payload(),
+        "history": read_model.list_rules_version_payloads(),
+        "catalog": _catalog_state_payload(read_model),
+        "coins": read_model.search_rules_catalog_coins(),
+    }
     return render_product_dashboard(
         initial_page=initial_page,
         operator_state=operator_state,
         operator_control_token=operator_control_token,
         portfolio=portfolio,
         registry=registry,
+        rules=rules,
     )
 
 
@@ -322,16 +432,25 @@ def create_server(
     port: int = DEFAULT_PORT,
     db_path: str | Path = "runtime/triggertrade_paper.sqlite3",
     *,
+    trading_rules_service: TradingRulesService | None = None,
+    instrument_catalog_service: InstrumentCatalogService | None = None,
     operator_actions=None,
 ) -> DashboardServer:
     if host != DEFAULT_HOST:
         raise ValueError("dashboard binds to 127.0.0.1 only; non-local bind is not supported")
     read_model = DashboardReadModel(db_path)
+    catalog_service = instrument_catalog_service or InstrumentCatalogService(store=InstrumentCatalogStore(db_path))
+    rules_service = trading_rules_service or TradingRulesService(
+        TradingRulesStore(db_path),
+        symbol_validator=catalog_service.validate_symbol,
+    )
     server = DashboardServer(
         (host, port),
         DashboardHandler,
         read_model=read_model,
         operator_store=OperatorStateStore(db_path),
+        trading_rules_service=rules_service,
+        instrument_catalog_service=catalog_service,
         operator_actions=operator_actions,
     )
     read_model.operator_control_token = server.operator_control_token
@@ -362,7 +481,9 @@ def create_server_from_env(
     host = env.get("TRIGGERTRADE_DASHBOARD_HOST", DEFAULT_HOST)
     port = int(env.get("TRIGGERTRADE_DASHBOARD_PORT", str(DEFAULT_PORT)))
     db_path = runtime_db_path(config, env)
-    return create_server(host=host, port=port, db_path=db_path), bootstrap.db_path
+    catalog_service = InstrumentCatalogService(store=InstrumentCatalogStore(db_path), client=BybitDemoClient(config=config.bybit))
+    rules_service = TradingRulesService(TradingRulesStore(db_path), symbol_validator=catalog_service.validate_symbol)
+    return create_server(host=host, port=port, db_path=db_path, trading_rules_service=rules_service, instrument_catalog_service=catalog_service), bootstrap.db_path
 
 
 def main() -> int:
@@ -377,6 +498,99 @@ def main() -> int:
     finally:
         server.server_close()
     return 0
+
+
+def _catalog_state_payload(read_model: DashboardReadModel) -> dict[str, object]:
+    state = read_model.get_rules_catalog_state()
+    return {
+        "status": state.status,
+        "updated_at": state.updated_at,
+        "is_stale": state.is_stale,
+        "tradeable_count": state.tradeable_count,
+        "error": state.error,
+    }
+
+
+def _rules_changes_from_payload(payload: dict) -> dict[str, object]:
+    position = payload.get("position_rules")
+    portfolio = payload.get("portfolio_rules")
+    coins = payload.get("coins")
+    if not isinstance(position, dict) or not isinstance(portfolio, dict) or not isinstance(coins, list):
+        raise TradingRulesError("rules payload is incomplete")
+    return {
+        "position_size_pct": _pct_to_fraction(position.get("position_size_pct")),
+        "take_profit_mode": str(position.get("take_profit_mode") or "").upper(),
+        "fixed_take_profit_pct": _optional_pct_to_fraction(position.get("fixed_take_profit_pct")),
+        "minimum_take_profit_pct": _optional_pct_to_fraction(position.get("minimum_take_profit_pct")),
+        "stop_loss_pct": _pct_to_fraction(position.get("stop_loss_pct")),
+        "minimum_risk_reward": _decimal_value(position.get("minimum_risk_reward")),
+        "minimum_net_edge_enabled": _bool_value(position.get("minimum_net_edge_enabled")),
+        "minimum_net_edge_pct": _optional_pct_to_fraction(position.get("minimum_net_edge_pct")),
+        "leverage": _decimal_value(position.get("leverage")),
+        "max_capital_in_positions_pct": _pct_to_fraction(portfolio.get("max_capital_in_positions_pct")),
+        "max_open_positions_enabled": _bool_value(portfolio.get("max_open_positions_enabled")),
+        "max_open_positions": _optional_int(portfolio.get("max_open_positions")),
+        "max_positions_per_coin_enabled": _bool_value(portfolio.get("max_positions_per_coin_enabled")),
+        "max_positions_per_coin": _optional_int(portfolio.get("max_positions_per_coin")),
+        "direction_mode": str(portfolio.get("direction_mode") or "").upper(),
+        "daily_loss_limit_enabled": _bool_value(portfolio.get("daily_loss_limit_enabled")),
+        "daily_loss_limit_pct": _optional_pct_to_fraction(portfolio.get("daily_loss_limit_pct")),
+        "coins": tuple(_coin_rule_from_payload(item) for item in coins),
+    }
+
+
+def _coin_rule_from_payload(item: object) -> CoinRule:
+    if not isinstance(item, dict):
+        raise TradingRulesError("coin rules must be objects")
+    return CoinRule(
+        symbol=str(item.get("symbol") or ""),
+        enabled=_bool_value(item.get("enabled")),
+        max_allocation_pct=_optional_pct_to_fraction(item.get("max_allocation_pct")),
+    )
+
+
+def _pct_to_fraction(value: object) -> Decimal:
+    parsed = _decimal_value(value)
+    return parsed / Decimal("100")
+
+
+def _optional_pct_to_fraction(value: object) -> Decimal | None:
+    if value in {None, ""}:
+        return None
+    return _pct_to_fraction(value)
+
+
+def _decimal_value(value: object) -> Decimal:
+    try:
+        parsed = Decimal(str(value))
+    except (InvalidOperation, ValueError) as exc:
+        raise TradingRulesError("numeric rules fields must be valid decimals") from exc
+    if not parsed.is_finite():
+        raise TradingRulesError("numeric rules fields must be finite decimals")
+    return parsed
+
+
+def _optional_int(value: object) -> int | None:
+    if value in {None, ""}:
+        return None
+    try:
+        return int(str(value))
+    except ValueError as exc:
+        raise TradingRulesError("integer rules fields must be valid integers") from exc
+
+
+def _bool_value(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    raise TradingRulesError("enabled flags require explicit boolean values")
+
+
+def _safe_public_error(exc: Exception) -> str:
+    text = str(exc)
+    lower = text.lower()
+    if any(token in lower for token in ("secret", "api_key", "authorization", "x-bapi", "password", "token")):
+        return exc.__class__.__name__
+    return text[:240]
 
 def _operator_controls(state, token: str = "") -> str:
     if state is None:

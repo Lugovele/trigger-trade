@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 import json
@@ -12,6 +12,7 @@ from typing import Any
 
 from triggertrade.analytics import TradePerformanceFact, compare_baseline, compute_futures_performance
 from triggertrade.governance import EvidenceCapability, GovernanceEvidence, GovernancePolicy, evaluate_readiness
+from triggertrade.persistence import InstrumentCatalogStore, TradingRulesStore
 
 
 @dataclass(frozen=True)
@@ -137,6 +138,15 @@ class TriggerDetailView:
     version_history: tuple[dict[str, str], ...]
     immutable: bool
     unavailable_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class RulesCatalogStateView:
+    status: str
+    updated_at: str | None
+    is_stale: bool
+    tradeable_count: int
+    error: str | None = None
 
 
 @dataclass(frozen=True)
@@ -961,6 +971,72 @@ class DashboardReadModel:
                 return _active_integrity_errors(conn)
         except sqlite3.Error:
             return ("registry unavailable",)
+
+    def get_current_rules_version_payload(self) -> dict[str, Any] | None:
+        if not self.db_path.exists():
+            return None
+        try:
+            current = TradingRulesStore(self.db_path).get_current()
+        except Exception:
+            return None
+        if current is None:
+            return None
+        return _rules_version_payload(current, _rules_used_in(current, self.db_path))
+
+    def list_rules_version_payloads(self) -> tuple[dict[str, Any], ...]:
+        if not self.db_path.exists():
+            return ()
+        try:
+            store = TradingRulesStore(self.db_path)
+            versions = store.list_versions()
+        except Exception:
+            return ()
+        return tuple(_rules_version_summary_payload(version, _rules_used_in(version, self.db_path)) for version in versions)
+
+    def get_rules_version_payload(self, rules_version_id_or_version: str) -> dict[str, Any] | None:
+        if not rules_version_id_or_version or len(rules_version_id_or_version) > 120 or not self.db_path.exists():
+            return None
+        try:
+            version = TradingRulesStore(self.db_path).get_version(rules_version_id_or_version)
+        except Exception:
+            return None
+        if version is None:
+            return None
+        return _rules_version_payload(version, _rules_used_in(version, self.db_path))
+
+    def get_rules_catalog_state(self) -> RulesCatalogStateView:
+        if not self.db_path.exists():
+            return RulesCatalogStateView("UNAVAILABLE", None, True, 0, "runtime database is unavailable")
+        try:
+            store = InstrumentCatalogStore(self.db_path)
+            latest = store.latest_refresh()
+            tradeable = store.list_instruments(tradeable_only=True)
+        except Exception:
+            return RulesCatalogStateView("UNAVAILABLE", None, True, 0, "instrument catalog is unavailable")
+        if latest is None:
+            return RulesCatalogStateView("UNAVAILABLE", None, True, len(tradeable), "instrument catalog has not been refreshed")
+        stale = _catalog_refresh_is_stale(latest.updated_at)
+        status = "STALE" if stale else latest.status
+        return RulesCatalogStateView(status, latest.updated_at, stale, len(tradeable), latest.error)
+
+    def search_rules_catalog_coins(self, search: str | None = None) -> tuple[dict[str, str | None], ...]:
+        if not self.db_path.exists():
+            return ()
+        try:
+            instruments = InstrumentCatalogStore(self.db_path).list_instruments(tradeable_only=True, search=(search or "")[:40])
+        except Exception:
+            return ()
+        return tuple(
+            {
+                "symbol": item.symbol,
+                "base_coin": item.base_coin,
+                "quote_coin": item.quote_coin,
+                "status": item.status,
+                "max_leverage": str(item.max_leverage),
+                "updated_at": item.updated_at,
+            }
+            for item in instruments
+        )
 
     def list_trigger_sets(self) -> tuple[TriggerSetRow, ...]:
         if not self.db_path.exists():
@@ -2379,6 +2455,112 @@ def _recommendations_for_rule(conn: sqlite3.Connection, rule_id: str, version: s
         if needle in sources or proposed.get("add_rule_version") == f"{rule_id}@{version}":
             matches.append(_safe_dict(data))
     return tuple(matches)
+
+
+def _rules_version_payload(version, used_in: tuple[dict[str, str | None], ...]) -> dict[str, Any]:
+    draft = version.draft
+    return {
+        "rules_version_id": version.rules_version_id,
+        "display_version": version.version,
+        "is_current": version.is_current,
+        "created_at": version.created_at,
+        "created_from_version_id": version.created_from_version_id,
+        "change_summary": version.change_summary,
+        "schema_version": version.schema_version,
+        "config_hash": version.config_hash,
+        "position_rules": {
+            "position_size_pct": _percent_value(draft.position_size_pct),
+            "take_profit_mode": draft.take_profit_mode.value,
+            "fixed_take_profit_pct": _optional_percent_value(draft.fixed_take_profit_pct),
+            "minimum_take_profit_pct": _optional_percent_value(draft.minimum_take_profit_pct),
+            "stop_loss_pct": _percent_value(draft.stop_loss_pct),
+            "minimum_risk_reward": str(draft.minimum_risk_reward),
+            "minimum_net_edge_enabled": draft.minimum_net_edge_enabled,
+            "minimum_net_edge_pct": _optional_percent_value(draft.minimum_net_edge_pct),
+            "leverage": str(draft.leverage),
+        },
+        "portfolio_rules": {
+            "max_capital_in_positions_pct": _percent_value(draft.max_capital_in_positions_pct),
+            "max_open_positions_enabled": draft.max_open_positions_enabled,
+            "max_open_positions": draft.max_open_positions,
+            "max_positions_per_coin_enabled": draft.max_positions_per_coin_enabled,
+            "max_positions_per_coin": draft.max_positions_per_coin,
+            "direction_mode": draft.direction_mode.value,
+            "daily_loss_limit_enabled": draft.daily_loss_limit_enabled,
+            "daily_loss_limit_pct": _optional_percent_value(draft.daily_loss_limit_pct),
+        },
+        "coins": tuple(
+            {
+                "symbol": coin.symbol,
+                "enabled": coin.enabled,
+                "max_allocation_pct": _optional_percent_value(coin.max_allocation_pct),
+            }
+            for coin in draft.coins
+        ),
+        "runtime_support": _rules_runtime_support(),
+        "used_in": used_in,
+    }
+
+
+def _rules_version_summary_payload(version, used_in: tuple[dict[str, str | None], ...]) -> dict[str, Any]:
+    return {
+        "rules_version_id": version.rules_version_id,
+        "display_version": version.version,
+        "created_at": version.created_at,
+        "change_summary": version.change_summary,
+        "is_current": version.is_current,
+        "used_in": used_in,
+    }
+
+
+def _rules_used_in(version, db_path: Path) -> tuple[dict[str, str | None], ...]:
+    usage: list[dict[str, str | None]] = []
+    if version.is_current:
+        usage.append({"usage_type": "Current", "entity_id": version.version, "entity_version": None, "context": "LIVE"})
+    try:
+        rows = TradingRulesStore(db_path).list_usage(version.rules_version_id)
+    except Exception:
+        rows = ()
+    for row in rows:
+        usage.append(
+            {
+                "usage_type": row.usage_type,
+                "entity_id": row.entity_id,
+                "entity_version": row.entity_version,
+                "context": row.context,
+            }
+        )
+    return tuple(usage)
+
+
+def _rules_runtime_support() -> dict[str, Any]:
+    return {
+        "take_profit_modes": {
+            "FIXED": "supported",
+            "DYNAMIC": "unsupported_fail_closed",
+        },
+        "daily_loss_enforcement": "unsupported_fail_closed",
+        "short_execution_lifecycle_supported": True,
+        "short_strategy_signal_supported": False,
+    }
+
+
+def _percent_value(value: Decimal) -> str:
+    return str(value * Decimal("100"))
+
+
+def _optional_percent_value(value: Decimal | None) -> str | None:
+    return None if value is None else _percent_value(value)
+
+
+def _catalog_refresh_is_stale(updated_at: str | None) -> bool:
+    try:
+        updated = datetime.fromisoformat(updated_at or "")
+    except ValueError:
+        return True
+    if updated.tzinfo is None:
+        updated = updated.replace(tzinfo=UTC)
+    return datetime.now(UTC) - updated > timedelta(hours=24)
 
 def _empty_runtime_state(db_health: str) -> RuntimeStateView:
     return RuntimeStateView(

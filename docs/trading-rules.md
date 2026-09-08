@@ -202,6 +202,10 @@ Changing trading rules creates a new version and moves the current pointer; it d
 
 Direction mode is a filter, not alpha. `LONG_ONLY` and `SHORT_ONLY` can block otherwise produced intents, but they do not create new LONG/SHORT strategy signals. Profit Factor remains an analytics metric and is not part of pre-trade Rules decisioning.
 
+The dashboard Rules contract is backend-backed. Current Rules returns the exact current `TradingRulesVersion` with position rules, portfolio rules, coin rules, change summary, schema version, factual `Used In` entries, and capability truth. `Save as New Version` submits a complete draft and expected current identity to the backend; identical drafts are rejected as no semantic change, stale drafts receive a conflict, and historical versions remain immutable. Version history is newest-first factual data from the registry, and historical detail is read-only exact lookup rather than a latest/current fallback.
+
+Rules Coins use the backend Bybit USDT linear perpetual instrument catalog. Enabled symbols for a new version must be known, tradeable, USDT-settled `LinearPerpetual` instruments with complete metadata. Blank per-coin allocation means no coin-specific cap, not zero percent.
+
 ## Perpetual Futures Domain Rules
 
 The futures architecture uses explicit position actions instead of ambiguous

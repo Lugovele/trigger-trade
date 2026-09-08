@@ -172,6 +172,8 @@ The shared bootstrap creates one factual `v1` from the existing futures runtime 
 
 `FIXED` take-profit is supported in runtime. `DYNAMIC` is represented as a contract value but fails closed until a separately reviewed deterministic algorithm exists. Minimum take-profit is a floor, not a cap. Optional rules use explicit enabled flags; disabled net edge is excluded from the gate rather than represented by magic zero/null thresholds.
 
+The local dashboard Rules page is wired to this backend registry. It reads the exact current version, lists factual history, opens immutable historical detail, and saves changes only through the protected backend `Save as New Version` contract with stale edit detection. Coin search and catalog refresh go through the backend Bybit linear instrument catalog; the browser never calls Bybit or the database directly.
+
 
 ## Bybit Linear Instrument Catalog
 
