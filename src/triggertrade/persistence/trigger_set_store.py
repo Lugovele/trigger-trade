@@ -3,11 +3,23 @@
 from __future__ import annotations
 
 from pathlib import Path
+from hashlib import sha256
 import json
+import re
 import sqlite3
 from typing import Iterable
 
-from triggertrade.trigger_sets import Recommendation, RuleDefinition, RuleStatus, RuleType, TriggerSetStatus, TriggerSetVersion
+from triggertrade.trigger_sets import (
+    TRIGGER_REGISTRY_SCHEMA_VERSION,
+    TRIGGER_SET_REGISTRY_SCHEMA_VERSION,
+    Recommendation,
+    RegistrySyncReport,
+    RuleDefinition,
+    RuleStatus,
+    RuleType,
+    TriggerSetStatus,
+    TriggerSetVersion,
+)
 
 
 class TriggerSetStoreError(RuntimeError):
@@ -24,6 +36,10 @@ _RECOMMENDATION_TRANSITIONS = {
     "ARCHIVED": set(),
 }
 
+_SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+$")
+_SET_VERSION_RE = re.compile(r"^v\d+([-.][a-z0-9]+)*$")
+_LEGACY_UNVERIFIED_DEFINITION_HASH = "LEGACY_UNVERIFIED"
+
 
 class TriggerSetStore:
     def __init__(self, path: str | Path = "runtime/triggertrade_paper.sqlite3") -> None:
@@ -33,24 +49,73 @@ class TriggerSetStore:
         self._init_schema()
 
     def save_rule(self, rule: RuleDefinition) -> RuleDefinition:
+        self._save_rule_result(rule)
+        return rule
+
+    def register_trigger_definitions(self, rules: Iterable[RuleDefinition]) -> RegistrySyncReport:
+        return self.sync_trigger_registry(rules)
+
+    def sync_trigger_registry(self, rules: Iterable[RuleDefinition]) -> RegistrySyncReport:
+        unchanged: list[str] = []
+        registered: list[str] = []
+        conflicts: list[str] = []
+        invalid: list[str] = []
+        for rule in rules:
+            try:
+                result = self._save_rule_result(rule)
+            except TriggerSetStoreError as exc:
+                message = f"{rule.rule_id}@{rule.version}: {exc}"
+                if "invalid" in str(exc) or "required" in str(exc) or "must use" in str(exc):
+                    invalid.append(message)
+                else:
+                    conflicts.append(message)
+            else:
+                (unchanged if result == "unchanged" else registered).append(f"{rule.rule_id}@{rule.version}")
+        return RegistrySyncReport(tuple(unchanged), tuple(registered), tuple(conflicts), tuple(invalid), ())
+
+    def _save_rule_result(self, rule: RuleDefinition) -> str:
+        _validate_rule_definition(rule)
         definition = json.dumps(_rule_definition_payload(rule), sort_keys=True)
+        rule_hash = definition_hash(rule)
+        if rule.semantic_hash is not None and rule.semantic_hash != rule_hash:
+            raise TriggerSetStoreError("definition_hash does not match canonical trigger definition")
         with self._connect() as conn:
             existing = conn.execute(
-                "SELECT status, condition, definition FROM rule_definitions WHERE rule_id = ? AND version = ?",
+                """
+                SELECT rule_id, version, name, status, asset_scope, rule_type,
+                       condition, definition, definition_hash, schema_version,
+                       created_at, updated_at, provenance
+                FROM rule_definitions
+                WHERE rule_id = ? AND version = ?
+                """,
                 (rule.rule_id, rule.version),
             ).fetchone()
-            if existing is not None and (
-                existing["status"] != rule.status.value
-                or existing["condition"] != rule.condition
-                or existing["definition"] != definition
-            ):
-                raise TriggerSetStoreError("rule versions are immutable; create a new version")
+            if existing is not None:
+                existing_hash = existing["definition_hash"] or _definition_hash_from_row(existing)
+                if (
+                    existing_hash not in {rule_hash, _LEGACY_UNVERIFIED_DEFINITION_HASH}
+                    or existing["status"] != rule.status.value
+                    or existing["condition"] != rule.condition
+                    or existing["definition"] != definition
+                ):
+                    raise TriggerSetStoreError("semantic definition changed without Trigger Version bump")
+                if existing["definition_hash"] is None and existing_hash == rule_hash:
+                    conn.execute(
+                        """
+                        UPDATE rule_definitions
+                        SET definition_hash = ?, schema_version = ?
+                        WHERE rule_id = ? AND version = ?
+                        """,
+                        (rule_hash, TRIGGER_REGISTRY_SCHEMA_VERSION, rule.rule_id, rule.version),
+                    )
+                return "unchanged"
             conn.execute(
                 """
                 INSERT INTO rule_definitions (
                     rule_id, version, name, status, asset_scope, rule_type,
-                    condition, definition, created_at, updated_at, provenance
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    condition, definition, definition_hash, schema_version,
+                    created_at, updated_at, provenance
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(rule_id, version) DO NOTHING
                 """,
                 (
@@ -62,27 +127,77 @@ class TriggerSetStore:
                     rule.rule_type.value,
                     rule.condition,
                     definition,
+                    rule_hash,
+                    TRIGGER_REGISTRY_SCHEMA_VERSION,
                     rule.created_at,
                     rule.updated_at,
                     rule.provenance,
                 ),
             )
-        return rule
+        return "registered"
 
     def create_set(self, trigger_set: TriggerSetVersion) -> TriggerSetVersion:
+        self._create_set_result(trigger_set)
+        return trigger_set
+
+    def register_trigger_sets(self, trigger_sets: Iterable[TriggerSetVersion]) -> RegistrySyncReport:
+        return self.sync_trigger_sets(trigger_sets)
+
+    def sync_trigger_sets(self, trigger_sets: Iterable[TriggerSetVersion]) -> RegistrySyncReport:
+        unchanged: list[str] = []
+        registered: list[str] = []
+        conflicts: list[str] = []
+        invalid: list[str] = []
+        for trigger_set in trigger_sets:
+            try:
+                result = self._create_set_result(trigger_set)
+            except TriggerSetStoreError as exc:
+                message = f"{trigger_set.set_id}@{trigger_set.version}: {exc}"
+                if "invalid" in str(exc) or "requires" in str(exc) or "unknown" in str(exc):
+                    invalid.append(message)
+                else:
+                    conflicts.append(message)
+            else:
+                (unchanged if result == "unchanged" else registered).append(f"{trigger_set.set_id}@{trigger_set.version}")
+        return RegistrySyncReport(tuple(unchanged), tuple(registered), tuple(conflicts), tuple(invalid), ())
+
+    def _create_set_result(self, trigger_set: TriggerSetVersion) -> str:
         if not trigger_set.version:
             raise TriggerSetStoreError("trigger set version is required")
-        semantic_hash = _semantic_hash(trigger_set)
+        _validate_trigger_set_version(trigger_set)
+        legacy_semantic_hash = _semantic_hash(trigger_set)
+        set_hash = composition_hash(trigger_set)
         with self._connect() as conn:
             _validate_membership(conn, trigger_set.rule_versions)
             existing = conn.execute(
-                "SELECT semantic_hash FROM trigger_set_versions WHERE set_id = ? AND version = ?",
+                """
+                SELECT set_id, version, purpose, status, symbol, timeframe,
+                       strategy_version, risk_profile_version, config_snapshot,
+                       semantic_hash, composition_hash, schema_version,
+                       created_at, provenance
+                FROM trigger_set_versions
+                WHERE set_id = ? AND version = ?
+                """,
                 (trigger_set.set_id, trigger_set.version),
             ).fetchone()
             if existing is not None:
-                if existing["semantic_hash"] != semantic_hash:
-                    raise TriggerSetStoreError("trigger set versions are immutable; create a new version")
-                return trigger_set
+                persisted_set = self._row_to_set(existing, conn)
+                persisted_hash = composition_hash(persisted_set)
+                existing_hash = existing["composition_hash"] or existing["semantic_hash"]
+                if existing_hash not in {set_hash, legacy_semantic_hash}:
+                    raise TriggerSetStoreError("semantic composition changed without Set Version bump")
+                if persisted_hash != set_hash:
+                    raise TriggerSetStoreError("persisted trigger set membership does not match composition_hash; fail closed")
+                if existing["composition_hash"] is None:
+                    conn.execute(
+                        """
+                        UPDATE trigger_set_versions
+                        SET composition_hash = ?, schema_version = ?
+                        WHERE set_id = ? AND version = ?
+                        """,
+                        (set_hash, TRIGGER_SET_REGISTRY_SCHEMA_VERSION, trigger_set.set_id, trigger_set.version),
+                    )
+                return "unchanged"
             if trigger_set.status is TriggerSetStatus.ACTIVE:
                 active = self.get_active_set(trigger_set.symbol, trigger_set.timeframe, conn)
                 if active is not None:
@@ -92,8 +207,9 @@ class TriggerSetStore:
                 INSERT INTO trigger_set_versions (
                     set_id, version, purpose, status, symbol, timeframe,
                     strategy_version, risk_profile_version, config_snapshot,
-                    semantic_hash, created_at, provenance
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    semantic_hash, composition_hash, schema_version,
+                    created_at, provenance
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     trigger_set.set_id,
@@ -105,7 +221,9 @@ class TriggerSetStore:
                     trigger_set.strategy_version,
                     trigger_set.risk_profile_version,
                     json.dumps(dict(trigger_set.config_snapshot), sort_keys=True),
-                    semantic_hash,
+                    legacy_semantic_hash,
+                    set_hash,
+                    TRIGGER_SET_REGISTRY_SCHEMA_VERSION,
                     trigger_set.created_at,
                     trigger_set.provenance,
                 ),
@@ -119,7 +237,7 @@ class TriggerSetStore:
                     """,
                     (trigger_set.set_id, trigger_set.version, rule_id, rule_version, position),
                 )
-        return trigger_set
+        return "registered"
 
     def transition_status(
         self,
@@ -194,7 +312,8 @@ class TriggerSetStore:
             rows = conn.execute(
                 """
                 SELECT rule_id, version, name, status, asset_scope, rule_type,
-                       condition, definition, created_at, updated_at, provenance
+                       condition, definition, definition_hash, schema_version,
+                       created_at, updated_at, provenance
                 FROM rule_definitions
                 ORDER BY rule_id, version
                 """
@@ -207,7 +326,8 @@ class TriggerSetStore:
                 row = conn.execute(
                     """
                     SELECT rule_id, version, name, status, asset_scope, rule_type,
-                           condition, definition, created_at, updated_at, provenance
+                           condition, definition, definition_hash, schema_version,
+                           created_at, updated_at, provenance
                     FROM rule_definitions
                     WHERE rule_id = ?
                     ORDER BY created_at DESC, version DESC
@@ -219,13 +339,35 @@ class TriggerSetStore:
                 row = conn.execute(
                     """
                     SELECT rule_id, version, name, status, asset_scope, rule_type,
-                           condition, definition, created_at, updated_at, provenance
+                           condition, definition, definition_hash, schema_version,
+                           created_at, updated_at, provenance
                     FROM rule_definitions
                     WHERE rule_id = ? AND version = ?
                     """,
                     (rule_id, version),
                 ).fetchone()
         return None if row is None else _row_to_rule(row)
+
+    def get_exact_rule(self, rule_id: str, version: str) -> RuleDefinition:
+        rule = self.get_rule(rule_id, version)
+        if rule is None:
+            raise TriggerSetStoreError(f"unknown rule version: {rule_id}@{version}")
+        return rule
+
+    def resolve_trigger_version(self, trigger_set: TriggerSetVersion, trigger_id: str) -> RuleDefinition:
+        versions = [version for rule_id, version in trigger_set.rule_versions if rule_id == trigger_id]
+        if not versions:
+            raise TriggerSetStoreError(f"trigger set does not include exact trigger version: {trigger_id}")
+        if len(versions) > 1:
+            raise TriggerSetStoreError(f"trigger set has ambiguous trigger version: {trigger_id}")
+        rule = self.get_exact_rule(trigger_id, versions[0])
+        if rule.rule_type is not RuleType.TRIGGER:
+            raise TriggerSetStoreError(f"rule version is not a trigger: {trigger_id}@{versions[0]}")
+        if not rule.semantic_hash:
+            raise TriggerSetStoreError(f"unverified trigger definition hash: {trigger_id}@{versions[0]}")
+        if rule.semantic_hash != definition_hash(rule):
+            raise TriggerSetStoreError(f"trigger definition hash mismatch: {trigger_id}@{versions[0]}")
+        return rule
 
     def list_rule_versions(self, rule_id: str) -> tuple[RuleDefinition, ...]:
         with self._connect() as conn:
@@ -384,6 +526,8 @@ class TriggerSetStore:
                     rule_type TEXT NOT NULL,
                     condition TEXT NOT NULL,
                     definition TEXT NOT NULL,
+                    definition_hash TEXT,
+                    schema_version TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT,
                     provenance TEXT NOT NULL,
@@ -404,6 +548,8 @@ class TriggerSetStore:
                     risk_profile_version TEXT NOT NULL,
                     config_snapshot TEXT NOT NULL,
                     semantic_hash TEXT NOT NULL,
+                    composition_hash TEXT,
+                    schema_version TEXT,
                     created_at TEXT NOT NULL,
                     provenance TEXT NOT NULL,
                     PRIMARY KEY (set_id, version)
@@ -467,6 +613,10 @@ class TriggerSetStore:
                 )
                 """
             )
+            _ensure_column(conn, "rule_definitions", "definition_hash", "TEXT")
+            _ensure_column(conn, "rule_definitions", "schema_version", "TEXT")
+            _ensure_column(conn, "trigger_set_versions", "composition_hash", "TEXT")
+            _ensure_column(conn, "trigger_set_versions", "schema_version", "TEXT")
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path)
@@ -474,11 +624,13 @@ class TriggerSetStore:
         return conn
 
 
-def bootstrap_current_trigger_sets(store: TriggerSetStore, *, created_at: str = "2026-09-05T00:00:00+00:00") -> None:
-    for rule in current_rule_definitions(created_at=created_at):
-        store.save_rule(rule)
-    store.create_set(current_active_trigger_set(created_at=created_at))
-    store.create_set(current_testing_trigger_set(created_at=created_at))
+def bootstrap_current_trigger_sets(store: TriggerSetStore, *, created_at: str = "2026-09-05T00:00:00+00:00") -> RegistrySyncReport:
+    reports: list[RegistrySyncReport] = [
+        store.sync_trigger_registry(current_rule_definitions(created_at=created_at)),
+        store.sync_trigger_sets((current_active_trigger_set(created_at=created_at), current_testing_trigger_set(created_at=created_at))),
+    ]
+    _raise_on_sync_failure(reports[0])
+    _raise_on_sync_failure(reports[-1])
     store.transition_status(
         set_id="triggertrade-core",
         version="v1",
@@ -493,9 +645,11 @@ def bootstrap_current_trigger_sets(store: TriggerSetStore, *, created_at: str = 
         changed_at=created_at,
         reason="archived by futures runtime migration; spot test history remains readable",
     )
-    store.create_set(current_futures_active_trigger_set(created_at=created_at))
-    store.create_set(current_futures_testing_trigger_set(created_at=created_at))
+    reports.append(store.sync_trigger_sets((current_futures_active_trigger_set(created_at=created_at), current_futures_testing_trigger_set(created_at=created_at))))
+    for report in reports:
+        _raise_on_sync_failure(report)
     store.save_recommendation(current_volume_recommendation(created_at=created_at))
+    return _merge_reports(tuple(reports))
 
 
 def current_rule_definitions(*, created_at: str) -> tuple[RuleDefinition, ...]:
@@ -798,13 +952,57 @@ def _rule_definition_payload(rule: RuleDefinition) -> dict[str, object]:
         "boundary_semantics": rule.boundary_semantics,
         "stale_data_semantics": rule.stale_data_semantics,
         "missing_data_semantics": rule.missing_data_semantics,
-        "semantic_hash": rule.semantic_hash,
         "change_summary": rule.change_summary,
     }
     metadata = {key: value for key, value in semantic_fields.items() if value is not None}
     if metadata:
         payload["_version_metadata"] = metadata
     return payload
+
+
+def definition_hash(rule: RuleDefinition) -> str:
+    payload = {
+        "schema_version": TRIGGER_REGISTRY_SCHEMA_VERSION,
+        "trigger_id": rule.rule_id,
+        "version": rule.version,
+        "rule_type": rule.rule_type.value,
+        "implementation_key": _implementation_key(rule),
+        "condition": rule.condition,
+        "definition": _semantic_definition_payload(rule),
+        "formula": rule.formula,
+        "parameter_snapshot": rule.parameter_snapshot,
+        "input_contract": rule.input_contract,
+        "output_contract": rule.output_contract,
+        "boundary_semantics": rule.boundary_semantics,
+        "stale_data_semantics": rule.stale_data_semantics,
+        "missing_data_semantics": rule.missing_data_semantics,
+    }
+    return _hash_payload(payload)
+
+
+def composition_hash(trigger_set: TriggerSetVersion) -> str:
+    payload = {
+        "schema_version": TRIGGER_SET_REGISTRY_SCHEMA_VERSION,
+        "set_id": trigger_set.set_id,
+        "version": trigger_set.version,
+        "purpose": trigger_set.purpose,
+        "symbol": trigger_set.symbol,
+        "timeframe": trigger_set.timeframe,
+        "composition_mode": trigger_set.config_snapshot.get("composition_mode", "ordered_all"),
+        "trigger_versions": tuple(
+            {
+                "rule_id": rule_id,
+                "rule_version": rule_version,
+                "position": position,
+                "role": _membership_role(rule_id),
+            }
+            for position, (rule_id, rule_version) in enumerate(trigger_set.rule_versions)
+        ),
+        "strategy_version": trigger_set.strategy_version,
+        "risk_profile_version": trigger_set.risk_profile_version,
+        "config_snapshot": dict(trigger_set.config_snapshot),
+    }
+    return _hash_payload(payload)
 
 
 def _validate_membership(conn: sqlite3.Connection, memberships: tuple[tuple[str, str], ...]) -> None:
@@ -817,6 +1015,28 @@ def _validate_membership(conn: sqlite3.Connection, memberships: tuple[tuple[str,
         ).fetchone()
         if row is None:
             raise TriggerSetStoreError(f"unknown rule version: {rule_id}@{version}")
+
+
+def _validate_rule_definition(rule: RuleDefinition) -> None:
+    if not rule.rule_id or not rule.version:
+        raise TriggerSetStoreError("trigger_id and version are required")
+    if rule.rule_type is RuleType.TRIGGER and not _SEMVER_RE.match(rule.version):
+        raise TriggerSetStoreError("trigger versions must use semantic versioning")
+    if rule.rule_type is RuleType.TRIGGER and not _implementation_key(rule):
+        raise TriggerSetStoreError("implementation_key is required for trigger versions")
+    if not rule.condition:
+        raise TriggerSetStoreError("condition is required")
+
+
+def _validate_trigger_set_version(trigger_set: TriggerSetVersion) -> None:
+    if not _SET_VERSION_RE.match(trigger_set.version):
+        raise TriggerSetStoreError("trigger set version must use vN naming")
+    if not trigger_set.rule_versions:
+        raise TriggerSetStoreError("trigger set requires at least one rule")
+    if any(not rule_id or not version for rule_id, version in trigger_set.rule_versions):
+        raise TriggerSetStoreError("trigger set memberships require exact rule_id and version")
+    if any(rule_id.startswith("TRG-") and not _SEMVER_RE.match(version) for rule_id, version in trigger_set.rule_versions):
+        raise TriggerSetStoreError("trigger set memberships require exact semantic Trigger Versions")
 
 
 def _insert_transition(
@@ -851,6 +1071,85 @@ def _semantic_hash(trigger_set: TriggerSetVersion) -> str:
     return json.dumps(payload, sort_keys=True)
 
 
+def _semantic_definition_payload(rule: RuleDefinition) -> dict[str, object]:
+    payload = dict(rule.definition)
+    metadata = payload.get("_version_metadata")
+    if isinstance(metadata, dict):
+        metadata = {
+            key: value
+            for key, value in metadata.items()
+            if key not in {"definition_hash", "semantic_hash", "schema_version"}
+        }
+        if metadata:
+            payload["_version_metadata"] = metadata
+        else:
+            payload.pop("_version_metadata", None)
+    return payload
+
+
+def _definition_hash_from_row(row: sqlite3.Row) -> str:
+    try:
+        return definition_hash(_row_to_rule(row))
+    except Exception:
+        return _LEGACY_UNVERIFIED_DEFINITION_HASH
+
+
+def _implementation_key(rule: RuleDefinition) -> str:
+    explicit = rule.definition.get("implementation_key")
+    if explicit:
+        return str(explicit)
+    logical = rule.logical_name or rule.definition.get("logical_name")
+    known = {
+        "TRG-001": "triggertrade.triggers.PercentagePriceMoveTrigger",
+        "TRG-002": "triggertrade.triggers.RobustVolumeConfirmationTrigger",
+        "CTX-REGIME": "triggertrade.market_data.regime.evaluate_market_regime",
+        "STR-001": "triggertrade.strategies.BuyCandidateStrategy",
+        "STR-FUT-001": "triggertrade.strategies.IntegrationDirectionalFuturesStrategy",
+        "RSK-PAPER-001": "triggertrade.risk.RiskManager",
+        "RSK-FUTURES-001": "triggertrade.execution.futures.FuturesRiskManager",
+    }
+    return known.get(rule.rule_id, "" if logical is None else str(logical))
+
+
+def _membership_role(rule_id: str) -> str:
+    if rule_id.startswith("TRG-"):
+        return "TRIGGER"
+    if rule_id.startswith("STR-"):
+        return "STRATEGY"
+    if rule_id.startswith("RSK-"):
+        return "RISK"
+    if rule_id.startswith("CTX-"):
+        return "CONTEXT"
+    return "MEMBER"
+
+
+def _hash_payload(payload: dict[str, object]) -> str:
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+    columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+    if column not in columns:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
+def _merge_reports(reports: tuple[RegistrySyncReport, ...]) -> RegistrySyncReport:
+    return RegistrySyncReport(
+        unchanged_versions=tuple(item for report in reports for item in report.unchanged_versions),
+        new_versions_registered=tuple(item for report in reports for item in report.new_versions_registered),
+        conflicts=tuple(item for report in reports for item in report.conflicts),
+        invalid_definitions=tuple(item for report in reports for item in report.invalid_definitions),
+        warnings=tuple(item for report in reports for item in report.warnings),
+    )
+
+
+def _raise_on_sync_failure(report: RegistrySyncReport) -> None:
+    failures = report.conflicts + report.invalid_definitions
+    if failures:
+        raise TriggerSetStoreError("; ".join(failures))
+
+
 def _row_to_rule(row: sqlite3.Row) -> RuleDefinition:
     return RuleDefinition(
         rule_id=row["rule_id"],
@@ -864,4 +1163,5 @@ def _row_to_rule(row: sqlite3.Row) -> RuleDefinition:
         created_at=row["created_at"],
         updated_at=row["updated_at"],
         provenance=row["provenance"],
+        semantic_hash=row["definition_hash"] if "definition_hash" in row.keys() else None,
     )

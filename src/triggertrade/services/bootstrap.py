@@ -10,6 +10,7 @@ from typing import Mapping
 from triggertrade.config import AppConfig, load_config
 from triggertrade.persistence import TradingRulesStore, TriggerSetStore, bootstrap_current_trigger_sets
 from triggertrade.rules import TradingRulesService
+from triggertrade.trigger_sets import RegistrySyncReport
 
 
 @dataclass(frozen=True)
@@ -20,6 +21,7 @@ class RegistryBootstrapResult:
     recommendations_count: int
     trading_rules_versions_count: int
     current_rules_version_id: str | None
+    sync_report: RegistrySyncReport
 
 
 def load_env_file(path: str | Path = ".env") -> dict[str, str]:
@@ -66,7 +68,7 @@ def ensure_runtime_registry_initialized(
     created_at: str = "2026-09-05T00:00:00+00:00",
 ) -> RegistryBootstrapResult:
     store = TriggerSetStore(db_path)
-    bootstrap_current_trigger_sets(store, created_at=created_at)
+    sync_report = bootstrap_current_trigger_sets(store, created_at=created_at)
     rules_config = config or load_config({})
     trading_store = TradingRulesStore(db_path)
     trading_rules = TradingRulesService(trading_store).ensure_initial_version(rules_config, created_at=created_at)
@@ -77,6 +79,7 @@ def ensure_runtime_registry_initialized(
         recommendations_count=len(store.list_recommendations()),
         trading_rules_versions_count=len(trading_store.list_versions()),
         current_rules_version_id=trading_rules.rules_version_id,
+        sync_report=sync_report,
     )
 
 

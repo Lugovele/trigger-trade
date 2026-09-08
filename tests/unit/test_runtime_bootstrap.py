@@ -43,6 +43,8 @@ def test_empty_runtime_db_bootstraps_canonical_registries_without_fake_evidence(
     assert result.rules_count == 9
     assert result.trigger_sets_count == 4
     assert result.recommendations_count == 1
+    assert "TRG-001@0.1.0" in result.sync_report.new_versions_registered
+    assert "triggertrade-futures-core@v1" in result.sync_report.new_versions_registered
     assert {rule.rule_id for rule in model.list_rules()} >= {"TRG-001", "TRG-002", "CTX-REGIME"}
     assert model.get_rule_detail("TRG-002", "0.2.0").rule["status"] == "TESTING"
     assert model.get_rule_detail("CTX-REGIME", "0.1.0").rule["rule_type"] == "context"
@@ -75,7 +77,7 @@ def test_same_version_same_semantics_ok_and_different_semantics_fail_closed(tmp_
 
     store.save_rule(rule)
     mutated = RuleDefinition(**{**rule.__dict__, "condition": "relative_volume >= 1.5"})
-    with pytest.raises(TriggerSetStoreError, match="immutable"):
+    with pytest.raises(TriggerSetStoreError, match="definition_hash"):
         store.save_rule(mutated)
 
 
@@ -172,7 +174,7 @@ def test_bootstrap_fails_closed_on_existing_candidate_set_semantic_mismatch(tmp_
     )
     store.create_set(mismatched)
 
-    with pytest.raises(TriggerSetStoreError, match="immutable"):
+    with pytest.raises(TriggerSetStoreError, match="Version bump"):
         ensure_runtime_registry_initialized(db)
 
 

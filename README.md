@@ -63,6 +63,8 @@ Dashboard Sets, Trigger Catalog, and Trigger Detail views are read-only projecti
 
 The interface intentionally keeps promotion, trigger editing, and rule editing out of the Sets/Trigger surfaces. Financial values are displayed only when persisted by backend accounting.
 
+Trigger and Set changes are code-first. `rule_definitions` stores immutable exact Trigger/Rule Versions with deterministic `definition_hash` values; `trigger_set_versions` stores immutable exact Set Versions with deterministic `composition_hash` values; memberships reference exact `rule_id + version` pairs. Startup bootstrap is idempotent for matching hashes and fails closed when code changes a historical semantic definition without a version bump. See `docs/code-first-trigger-set-workflow.md`.
+
 ## Rule Analytics and Recommendations
 
 Rules now have a logical identity and immutable versions. Trigger Set membership references exact `rule_id + version` pairs so historical TEST/ACTIVE evidence remains reproducible. A parameter or formula change must create a new rule version instead of mutating historical records.

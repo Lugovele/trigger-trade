@@ -186,13 +186,15 @@ class BacktestEngine:
         return BacktestResult(run.backtest_run_id, BacktestStatus.COMPLETED, candles_processed, signals, intents, trades, metrics.closed_trades, rejected, no_action, technical, metrics.net_pnl, metrics.expectancy_per_trade, metrics.profit_factor, metrics.max_drawdown, metrics.fees, metrics.funding, metrics.long.closed_trades if metrics.long else 0, metrics.short.closed_trades if metrics.short else 0, by_regime), tuple(trade_ids)
 
     def _price_signal(self, *, trigger_set: TriggerSetVersion, completed: CompletedCandle, event) -> Signal:
+        trigger_version = self._trigger_set_store.resolve_trigger_version(trigger_set, "TRG-001").version
         observation = event.to_market_observation(stale_after_seconds=self._config.risk_rules.stale_after_seconds)
         observation = replace(observation, source=f"{observation.source}|BACKTEST|{trigger_set.set_id}|{trigger_set.version}")
-        signal = PercentagePriceMoveTrigger(replace(self._config.trigger_rule, version="0.2.0"), symbol=self._config.futures_runtime.symbol).evaluate(observation, now=event.close_time)
+        signal = PercentagePriceMoveTrigger(replace(self._config.trigger_rule, version=trigger_version), symbol=self._config.futures_runtime.symbol).evaluate(observation, now=event.close_time)
         return replace(signal, signal_id=_backtest_signal_id(trigger_set, signal.signal_id), lane=Lane.TEST.value, trigger_set_id=trigger_set.set_id, trigger_set_version=trigger_set.version)
 
     def _volume_signal(self, *, trigger_set: TriggerSetVersion, completed: CompletedCandle, event, history) -> Signal:
-        evaluation = RobustVolumeConfirmationTrigger(VolumeConfirmationConfig(version="0.2.0", stale_after_seconds=self._config.risk_rules.stale_after_seconds), symbol=completed.symbol).evaluate(volume_window_from_futures_event(event, previous_candles=tuple(history[-60:])), now=event.close_time)
+        trigger_version = self._trigger_set_store.resolve_trigger_version(trigger_set, "TRG-002").version
+        evaluation = RobustVolumeConfirmationTrigger(VolumeConfirmationConfig(version=trigger_version, stale_after_seconds=self._config.risk_rules.stale_after_seconds), symbol=completed.symbol).evaluate(volume_window_from_futures_event(event, previous_candles=tuple(history[-60:])), now=event.close_time)
         return Signal(_backtest_signal_id(trigger_set, evaluation.evaluation_id), evaluation.rule_id, evaluation.rule_version, evaluation.symbol, evaluation.observed_at, evaluation.timeframe, {"category": "linear", "evidence_source": BACKTEST_EVIDENCE_SOURCE}, evaluation.condition_result, SignalType.CONFIRMED if evaluation.result is VolumeConfirmationResult.CONFIRMED else SignalType.NOT_CONFIRMED, evaluation.missing_data_reason or evaluation.stale_data_reason or evaluation.result.value.lower(), Lane.TEST.value, trigger_set.set_id, trigger_set.version)
 
 

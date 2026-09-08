@@ -7,6 +7,10 @@ from enum import StrEnum
 from typing import Any, Mapping
 
 
+TRIGGER_REGISTRY_SCHEMA_VERSION = "trigger-definition@1"
+TRIGGER_SET_REGISTRY_SCHEMA_VERSION = "trigger-set-composition@1"
+
+
 class Lane(StrEnum):
     ACTIVE = "ACTIVE"
     TEST = "TEST"
@@ -71,6 +75,15 @@ class RuleDefinition:
 
 
 @dataclass(frozen=True)
+class TriggerVersion(RuleDefinition):
+    """Immutable semantic version of a code-defined trigger.
+
+    The current persistence table is still named rule_definitions for
+    compatibility because it also stores strategy, risk, and context versions.
+    """
+
+
+@dataclass(frozen=True)
 class RuleVersion(RuleDefinition):
     """Immutable semantic version of a logical trading rule.
 
@@ -118,3 +131,12 @@ class TriggerSetVersion:
     config_snapshot: Mapping[str, str]
     created_at: str
     provenance: str
+
+
+@dataclass(frozen=True)
+class RegistrySyncReport:
+    unchanged_versions: tuple[str, ...] = ()
+    new_versions_registered: tuple[str, ...] = ()
+    conflicts: tuple[str, ...] = ()
+    invalid_definitions: tuple[str, ...] = ()
+    warnings: tuple[str, ...] = ()

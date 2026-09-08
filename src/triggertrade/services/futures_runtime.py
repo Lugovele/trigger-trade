@@ -598,9 +598,10 @@ class FuturesDualLaneRuntime:
         return RuntimeCycleResult(completed.candle_id, signal.signal_type.value, intent.intent_id, risk.risk_decision_id, True, None if record is None else record.status.value)
 
     def _price_signal(self, *, lane: Lane, trigger_set: TriggerSetVersion, completed: CompletedCandle, event) -> Signal:
+        trigger_version = self._trigger_set_store.resolve_trigger_version(trigger_set, "TRG-001").version
         observation = event.to_market_observation(stale_after_seconds=self._config.risk_rules.stale_after_seconds)
         observation = replace(observation, source=f"{observation.source}|{lane.value}|{trigger_set.set_id}|{trigger_set.version}")
-        config = replace(self._config.trigger_rule, version="0.2.0")
+        config = replace(self._config.trigger_rule, version=trigger_version)
         signal = PercentagePriceMoveTrigger(config, symbol=self._config.futures_runtime.symbol).evaluate(
             observation,
             now=self._clock(),
@@ -608,13 +609,14 @@ class FuturesDualLaneRuntime:
         return replace(signal, lane=lane.value, trigger_set_id=trigger_set.set_id, trigger_set_version=trigger_set.version)
 
     def _volume_signal(self, *, lane: Lane, trigger_set: TriggerSetVersion, completed: CompletedCandle, event, candles) -> Signal:
+        trigger_version = self._trigger_set_store.resolve_trigger_version(trigger_set, "TRG-002").version
         previous = tuple(
             candle
             for candle in sorted(candles, key=lambda item: item.start_time_ms)
             if candle.start_time_ms < completed.candle.start_time_ms
         )
         evaluation = RobustVolumeConfirmationTrigger(
-            VolumeConfirmationConfig(version="0.2.0", stale_after_seconds=self._config.risk_rules.stale_after_seconds),
+            VolumeConfirmationConfig(version=trigger_version, stale_after_seconds=self._config.risk_rules.stale_after_seconds),
             symbol=completed.symbol,
         ).evaluate(
             volume_window_from_futures_event(event, previous_candles=previous[-60:]),

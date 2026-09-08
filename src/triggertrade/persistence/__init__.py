@@ -19,12 +19,14 @@ from .trigger_set_store import (
     TriggerSetStore,
     TriggerSetStoreError,
     bootstrap_current_trigger_sets,
+    composition_hash,
     current_active_trigger_set,
     current_futures_active_trigger_set,
     current_futures_testing_trigger_set,
     current_rule_definitions,
     current_testing_trigger_set,
     current_volume_recommendation,
+    definition_hash,
 )
 
 __all__ = [
@@ -52,10 +54,12 @@ __all__ = [
     "TriggerSetStore",
     "TriggerSetStoreError",
     "bootstrap_current_trigger_sets",
+    "composition_hash",
     "current_active_trigger_set",
     "current_futures_active_trigger_set",
     "current_futures_testing_trigger_set",
     "current_rule_definitions",
     "current_testing_trigger_set",
     "current_volume_recommendation",
+    "definition_hash",
 ]

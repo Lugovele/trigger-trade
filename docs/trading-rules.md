@@ -163,7 +163,7 @@ Only confirmed/active rules may affect runtime behavior.
 
 ## Trigger Set Lifecycle
 
-Runtime behavior is selected through versioned trigger sets, not by editing a live rule in place. A trigger set is an immutable membership snapshot containing specific trigger, strategy, and risk rule versions.
+Runtime behavior is selected through versioned trigger sets, not by editing a live rule in place. A trigger set is an immutable membership snapshot containing exact trigger, strategy, context, and risk rule versions.
 
 Lifecycle statuses:
 
@@ -174,7 +174,7 @@ ACTIVE
 ARCHIVE
 ```
 
-Rules and trigger sets must remain immutable once used for `TESTING` or `ACTIVE` runtime evidence. To change behavior, create a new rule version or a new trigger set version. At most one trigger set may be `ACTIVE` for the same symbol/timeframe. Multiple `TESTING` sets may evaluate the same completed candle in a separate TEST lane.
+Rules and trigger sets must remain immutable once used for `TESTING` or `ACTIVE` runtime evidence. To change behavior, create a new rule version or a new trigger set version. Registry sync stores deterministic `definition_hash` and `composition_hash` values and rejects same-identity semantic changes without a version bump. At most one trigger set may be `ACTIVE` for the same symbol/timeframe. Multiple `TESTING` sets may evaluate the same completed candle in a separate TEST lane.
 
 ACTIVE and TEST lane results must be attributed with:
 

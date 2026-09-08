@@ -124,6 +124,38 @@ def test_backtest_reuses_runtime_components_pins_versions_and_is_reproducible(tm
     assert "\"instrument_contract_size\": \"\"" in payload
 
 
+def test_backtest_resolves_old_set_to_exact_trigger_version_after_new_version_exists(tmp_path):
+    db = tmp_path / "bt.sqlite3"
+    _bootstrap(db)
+    store = TriggerSetStore(db)
+    existing = store.get_rule("TRG-001", "0.2.0")
+    next_version = existing.__class__(
+        **{
+            **existing.__dict__,
+            "version": "0.3.0",
+            "condition": "future example price trigger version",
+            "definition": {**existing.definition, "parameter_snapshot": {"threshold_pct": "future-example"}},
+            "semantic_hash": None,
+        }
+    )
+    store.save_rule(next_version)
+    config = _config(db)
+    candles = _trade_candles()
+    plan = BacktestPlan("BTCUSDT", "linear", "1m", candles[60].close_time, candles[-2].close_time)
+
+    run_backtest(config=config, db_path=db, trigger_set_id="triggertrade-futures-core", trigger_set_version="v1", plan=plan, candles=candles, instrument=_instrument())
+
+    with sqlite3.connect(db) as conn:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT trigger_rule_version
+            FROM trigger_evaluations
+            WHERE trigger_rule_id = 'TRG-001'
+            """
+        ).fetchall()
+    assert {row[0] for row in rows} == {"0.2.0"}
+
+
 def test_backtest_never_adds_short_or_private_order_path(tmp_path):
     db = tmp_path / "bt.sqlite3"
     _bootstrap(db)

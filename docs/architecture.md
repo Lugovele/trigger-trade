@@ -139,7 +139,7 @@ dashboard -> place_order()
 
 ## Versioned Trigger Sets and Parallel Lanes
 
-Trigger, strategy, and risk rules are grouped into immutable `TriggerSetVersion` records. A trigger set version records its symbol/timeframe scope, lifecycle status, rule membership, creation metadata, and a semantic hash. Existing rule formulas keep their own stable rule ids and versions; the trigger set is the runtime unit that chooses which versions run together.
+Trigger, strategy, context, and risk rules are grouped into immutable `TriggerSetVersion` records. A trigger set version records its symbol/timeframe scope, lifecycle status, exact rule membership, creation metadata, and deterministic composition hash. Existing rule formulas keep their own stable rule ids and versions with deterministic definition hashes; the trigger set is the runtime unit that chooses which versions run together.
 
 Supported trigger set statuses are:
 
@@ -195,6 +195,14 @@ metadata is surfaced as unavailable/unknown, not replaced by dashboard
 fixtures. Used Trigger Versions remain immutable/read-only and the dashboard
 does not expose edit APIs.
 
+The registry is code-first. New Trigger Versions and Set Versions are introduced
+through reviewed code, not UI CRUD. Re-registering an existing exact
+`rule_id + version` or `set_id + version` is idempotent only when the stored
+hash and semantic payload match; any changed semantic definition under the same
+version fails closed and requires a new version. Set `composition_hash` excludes
+lifecycle status so explicit status transitions do not mutate composition
+semantics.
+
 Portfolio is a read model over ACTIVE/live Demo portfolio state, not a second
 portfolio engine. It reads persisted account equity snapshots, futures position
 records, closed-position accounting records, and local operator state. `Total`
@@ -207,7 +215,7 @@ from the latest equity snapshot. Missing mark/current-price data is unavailable
 rather than recomputed in frontend. Portfolio queries filter to ACTIVE/exchange
 evidence sources and exclude Research Demo, Backtest, and TEST simulation facts.
 
-Canonical registry bootstrap is a shared service-layer startup concern. It writes only configured RuleDefinitions, immutable TriggerSetVersions, memberships, and Recommendations into the intended runtime SQLite database before runtime/dashboard services open their stores. Runtime evidence remains separate: bootstrap must not create candle lifecycles, orders, fills, performance history, P&L, or synthetic analytics rows. If an existing exact rule/set/recommendation identity has different semantics, bootstrap fails closed through persistence immutability instead of silently mutating history.
+Canonical registry bootstrap is a shared service-layer startup concern. It writes only configured RuleDefinitions, immutable TriggerSetVersions, memberships, and Recommendations into the intended runtime SQLite database before runtime/dashboard services open their stores. Bootstrap order is rule/trigger versions first, Set Versions second, then explicit lifecycle/status reconciliation. Runtime evidence remains separate: bootstrap must not create candle lifecycles, orders, fills, performance history, P&L, or synthetic analytics rows. If an existing exact rule/set/recommendation identity has different semantics, bootstrap fails closed through persistence immutability instead of silently mutating history.
 
 ## Intraday Experiment Governance
 

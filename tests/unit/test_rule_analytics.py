@@ -21,7 +21,7 @@ def test_rule_versions_are_lookupable_and_immutable(tmp_path):
     assert issubclass(RuleVersion, RuleDefinition)
 
     mutated = RuleDefinition(**{**trg2.__dict__, "condition": "relative_volume >= 1.7"})
-    with pytest.raises(TriggerSetStoreError, match="immutable"):
+    with pytest.raises(TriggerSetStoreError, match="definition_hash"):
         store.save_rule(mutated)
 
 
@@ -136,7 +136,7 @@ def test_rule_version_semantic_metadata_is_immutable(tmp_path):
         asset_scope="BTCUSDT spot",
         rule_type=current_rule_definitions(created_at="2026-09-05T00:00:00+00:00")[0].rule_type,
         condition="x >= 1",
-        definition={"threshold": "1"},
+        definition={"implementation_key": "tests.XTrigger", "threshold": "1"},
         created_at="2026-09-05T00:00:00+00:00",
         provenance="unit test",
         formula="x / y",
@@ -145,5 +145,5 @@ def test_rule_version_semantic_metadata_is_immutable(tmp_path):
     store.save_rule(rule)
 
     changed_formula = RuleDefinition(**{**rule.__dict__, "formula": "x / z"})
-    with pytest.raises(TriggerSetStoreError, match="immutable"):
+    with pytest.raises(TriggerSetStoreError, match="Version bump"):
         store.save_rule(changed_formula)
