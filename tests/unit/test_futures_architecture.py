@@ -29,6 +29,7 @@ from triggertrade.market_data import ContractCategory, FuturesAccountState, Futu
 from triggertrade.market_data.bybit import parse_linear_instrument
 from triggertrade.market_data.futures import MarketRegimeContext
 from triggertrade.persistence import FuturesExecutionStore, OperatorStateStore, TradingState
+from scripts.bybit_demo_futures_lifecycle_smoke import _intent as lifecycle_smoke_intent
 
 
 def test_position_state_machine_allows_only_explicit_open_close():
@@ -344,6 +345,22 @@ def test_manual_demo_validation_lane_is_not_active_pause_path(tmp_path):
 
     assert record.status is OrderStatus.SUBMITTED
     assert service._adapter.create_calls == 1
+
+
+def test_lifecycle_smoke_intent_carries_immutable_rules_evidence():
+    intent = lifecycle_smoke_intent(
+        "lifecycle-long-unique",
+        PositionAction.OPEN_LONG,
+        Decimal("0.001"),
+        Decimal("10000.0"),
+    )
+
+    assert intent.intent_id == "lifecycle-long-unique"
+    assert intent.rules_version_id == "trules-v1"
+    assert intent.rule_evaluation_snapshot == {
+        "rules_version_id": "trules-v1",
+        "source": "manual-demo-lifecycle-smoke",
+    }
 
 
 def test_paused_idempotent_retry_reconciles_existing_futures_record(tmp_path):

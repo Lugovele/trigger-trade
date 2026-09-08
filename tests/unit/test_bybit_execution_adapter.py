@@ -82,5 +82,36 @@ def test_private_signing_helpers_reject_non_allowlisted_paths():
         client._private_post("/v5/position/set-leverage", {})
 
 
+def test_private_api_error_includes_sanitized_ret_msg():
+    def transport(request, timeout):
+        return json.dumps(
+            {
+                "retCode": 110072,
+                "retMsg": "Duplicate orderLinkId API_KEY=secret Authorization:bearer",
+                "result": {},
+            }
+        ).encode()
+
+    client = BybitDemoClient(
+        credentials=ApiCredentials("unit-key", "unit-signing-value"),
+        transport=transport,
+    )
+
+    with pytest.raises(BybitApiError) as raised:
+        client._create_linear_limit_order(
+            symbol="BTCUSDT",
+            side="Buy",
+            qty="0.001",
+            price="10000.00",
+            order_link_id="tt-safe",
+        )
+
+    assert raised.value.code == "110072"
+    assert "retCode=110072" in str(raised.value)
+    assert "Duplicate orderLinkId" in str(raised.value)
+    assert "secret" not in str(raised.value)
+    assert "bearer" not in str(raised.value)
+
+
 def _payload(result):
     return json.dumps({"retCode": 0, "retMsg": "OK", "result": result}).encode()

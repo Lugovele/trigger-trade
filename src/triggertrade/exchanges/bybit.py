@@ -7,6 +7,7 @@ from decimal import Decimal
 from hashlib import sha256
 import hmac
 import json
+import re
 import time
 from typing import Any, Callable
 from urllib.error import HTTPError
@@ -387,8 +388,9 @@ class BybitDemoClient:
             result=raw.get("result") or {},
         )
         if response.ret_code != 0:
+            message = _sanitize_error_message(response.ret_msg)
             raise BybitApiError(
-                f"Bybit API returned retCode={response.ret_code}",
+                f"Bybit API returned retCode={response.ret_code}: {message}",
                 code=str(response.ret_code),
             )
         return response
@@ -469,6 +471,13 @@ def _validate_order_link_id(order_link_id: str) -> None:
     allowed = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_")
     if any(char not in allowed for char in order_link_id):
         raise BybitApiError("orderLinkId contains unsupported characters")
+
+
+def _sanitize_error_message(message: str) -> str:
+    text = (message or "unspecified error").strip()
+    sensitive = r"api[-_ ]?key|api[-_ ]?secret|authorization|signature|token|cookie|password"
+    text = re.sub(rf"(?i)\b({sensitive})\b\s*[:=]\s*[^,\s;]+", r"\1=<redacted>", text)
+    return text[:240]
 
 
 def _urlopen_transport(request: Request, timeout: int) -> bytes:

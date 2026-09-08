@@ -56,7 +56,7 @@ def main() -> int:
     try:
         result = run_smoke(env)
     except (BybitApiError, ConfigError, ExecutionError, ValueError) as exc:
-        print(f"Bybit Demo futures lifecycle smoke failed: {exc.__class__.__name__}")
+        print(f"Bybit Demo futures lifecycle smoke failed: {exc.__class__.__name__}: {exc}")
         return 1
     for key, value in result.items():
         print(f"{key}: {value}")
@@ -104,7 +104,7 @@ def run_smoke(env: dict[str, str]) -> dict[str, str]:
         operator_trading_state=lambda: operator.get_trading_state().state.value,
         execution_lane="MANUAL_DEMO_VALIDATION",
     )
-    long_intent = _intent("lifecycle-long", PositionAction.OPEN_LONG, quantity, passive_price)
+    long_intent = _intent(f"lifecycle-long-{run_id}-{os.getpid()}", PositionAction.OPEN_LONG, quantity, passive_price)
     long_intent = _with_exits(long_intent, instrument)
     risk = _approved_risk(long_intent)
     opened = service.open_position(intent=long_intent, risk_decision=risk, take_profit=long_intent.take_profit, stop_loss=long_intent.stop_loss)
@@ -177,6 +177,8 @@ def _intent(intent_id: str, action: PositionAction, quantity: Decimal, price: De
         trigger_set_version="v1",
         strategy_rule_id="manual-lifecycle-smoke",
         strategy_rule_version="0.1.0",
+        rules_version_id="trules-v1",
+        rule_evaluation_snapshot={"rules_version_id": "trules-v1", "source": "manual-demo-lifecycle-smoke"},
     )
 
 
