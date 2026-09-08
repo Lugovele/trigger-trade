@@ -39,11 +39,13 @@ from triggertrade.market_data import (
 )
 from triggertrade.market_data.futures import ContractCategory, MarketRegimeLabel
 from triggertrade.persistence import (
+    DailyLossStore,
     FuturesExecutionStore,
     InstrumentCatalogStore,
     TradingRulesStore,
     LaneCandleLifecycle,
     LaneRuntimeCheckpoint,
+    MessageStore,
     OperatorStateStore,
     RuntimeStore,
     TraceStore,
@@ -51,6 +53,7 @@ from triggertrade.persistence import (
 )
 from triggertrade.persistence.futures_accounting_store import FuturesAccountingStore
 from triggertrade.persistence.futures_position_store import FuturesPositionStore
+from triggertrade.services.daily_loss import DailyLossEvaluator
 from triggertrade.services.futures_accounting_bridge import FuturesAccountingBridge
 from triggertrade.services.instrument_catalog import InstrumentCatalogService
 from triggertrade.services.runtime import CompletedCandle, RuntimeCycleResult, RuntimeGapError, latest_completed_candle, next_completed_candle
@@ -83,6 +86,8 @@ class FuturesDualLaneRuntime:
         runtime_store: RuntimeStore,
         trigger_set_store: TriggerSetStore,
         operator_state_store: OperatorStateStore,
+        daily_loss_store: DailyLossStore | None = None,
+        message_store: MessageStore | None = None,
         position_store: FuturesPositionStore | None = None,
         active_adapter: BybitFuturesExecutionAdapter | None = None,
         test_simulator: TestFuturesSimulator | None = None,
@@ -99,6 +104,8 @@ class FuturesDualLaneRuntime:
         self._runtime_store = runtime_store
         self._trigger_set_store = trigger_set_store
         self._operator_state_store = operator_state_store
+        self._daily_loss_store = daily_loss_store or DailyLossStore(config.futures_runtime.db_path)
+        self._message_store = message_store or MessageStore(config.futures_runtime.db_path)
         self._position_store = position_store or FuturesPositionStore(config.futures_runtime.db_path)
         self._instrument_catalog = instrument_catalog or InstrumentCatalogService(
             store=InstrumentCatalogStore(config.futures_runtime.db_path),
@@ -385,6 +392,34 @@ class FuturesDualLaneRuntime:
             self._checkpoint_lane(lane, trigger_set, completed)
             return RuntimeCycleResult(completed.candle_id, signal.signal_type.value, intent.intent_id, skipped_reason=direction_skip)
 
+        daily_loss = None
+        if lane is Lane.ACTIVE and intent.action in {PositionAction.OPEN_LONG, PositionAction.OPEN_SHORT}:
+            daily_loss = DailyLossEvaluator(
+                accounting_store=self._accounting_store,
+                daily_loss_store=self._daily_loss_store,
+                message_store=self._message_store,
+            ).evaluate(rules_version=rules_version, now=self._clock(), account=account, notify=True)
+            if daily_loss.blocked:
+                reason = daily_loss.reason or daily_loss.status.lower()
+                self._save_lane_lifecycle(
+                    lane,
+                    trigger_set,
+                    completed,
+                    "no_intent",
+                    signal_id=signal.signal_id,
+                    intent_id=intent.intent_id,
+                    processed_at=self._clock().isoformat(),
+                    error=reason,
+                    regime_context=regime_context,
+                    rules_version_id=rules_version.rules_version_id,
+                    rules_evaluation={
+                        **_rules_rejection_evidence(rules_version, reason, event.symbol),
+                        **_prefixed_daily_loss_evidence(daily_loss.evidence()),
+                    },
+                )
+                self._checkpoint_lane(lane, trigger_set, completed)
+                return RuntimeCycleResult(completed.candle_id, signal.signal_type.value, intent.intent_id, skipped_reason=reason)
+
         take_profit, stop_loss = build_fixed_protective_exit_plan(
             action=intent.action,
             entry_price=intent.price,
@@ -399,7 +434,7 @@ class FuturesDualLaneRuntime:
             stop_loss=stop_loss,
             minimum_risk_reward=rules.minimum_risk_reward,
             rules_version_id=rules_version.rules_version_id,
-            rule_evaluation_snapshot=_rule_evaluation_snapshot(rules_version, sizing, account),
+            rule_evaluation_snapshot=_rule_evaluation_snapshot(rules_version, sizing, account, daily_loss=daily_loss),
         )
         self._trace_store.save_futures_strategy_decision(intent, tuple(signal_ids))
         if lane is Lane.ACTIVE:
@@ -494,7 +529,7 @@ class FuturesDualLaneRuntime:
             risk_decision_id=risk.risk_decision_id,
             regime_context=regime_context,
             rules_version_id=rules_version.rules_version_id,
-            rules_evaluation=_rule_evaluation_snapshot(rules_version, sizing, account),
+            rules_evaluation=_rule_evaluation_snapshot(rules_version, sizing, account, daily_loss=daily_loss),
         )
         if not risk.approved:
             self._save_lane_lifecycle(
@@ -882,8 +917,6 @@ def _rules_skip_reason(rules_version: TradingRulesVersion, symbol: str) -> str |
         coin = coin_rule_for(rules_version.draft, symbol)
     except (ExecutionError, TradingRulesError) as exc:
         return str(exc)
-    if rules_version.draft.daily_loss_limit_enabled:
-        return "daily_loss_limit_enabled_unsupported"
     if coin is None:
         return "symbol_not_present_in_current_trading_rules"
     if not coin.enabled:
@@ -919,10 +952,10 @@ def _direction_skip_reason(rules_version: TradingRulesVersion, action: PositionA
     return None
 
 
-def _rule_evaluation_snapshot(rules_version: TradingRulesVersion, sizing, account: FuturesAccountState) -> dict[str, str | None]:
+def _rule_evaluation_snapshot(rules_version: TradingRulesVersion, sizing, account: FuturesAccountState, *, daily_loss=None) -> dict[str, str | None]:
     rules = rules_version.draft
     denominator, denominator_source = _capital_denominator(account)
-    return {
+    evidence = {
         "rules_version_id": rules_version.rules_version_id,
         "rules_version": rules_version.version,
         "position_size_pct": str(rules.position_size_pct),
@@ -952,6 +985,13 @@ def _rule_evaluation_snapshot(rules_version: TradingRulesVersion, sizing, accoun
         "sizing_quantity": str(sizing.quantity),
         "sizing_notional": str(sizing.notional),
     }
+    if daily_loss is not None:
+        evidence.update(_prefixed_daily_loss_evidence(daily_loss.evidence()))
+    return evidence
+
+
+def _prefixed_daily_loss_evidence(evidence: dict[str, str | None]) -> dict[str, str | None]:
+    return {f"daily_loss_{key}": value for key, value in evidence.items()}
 
 def _position_risk_config(config: AppConfig) -> PositionRiskConfig:
     return PositionRiskConfig(

@@ -29,7 +29,7 @@ def test_rules_api_current_history_detail_are_backend_backed(tmp_path):
         assert current_payload["display_version"] == "v1"
         assert current_payload["position_rules"]["take_profit_mode"] == "FIXED"
         assert current_payload["runtime_support"]["take_profit_modes"]["DYNAMIC"] == "unsupported_fail_closed"
-        assert current_payload["runtime_support"]["daily_loss_enforcement"] == "unsupported_fail_closed"
+        assert current_payload["runtime_support"]["daily_loss_enforcement"] == "accounting_backed_new_entries"
         assert history_payload["versions"][0]["rules_version_id"] == current.rules_version_id
         assert detail_payload["rules_version_id"] == current.rules_version_id
         assert "Rules · v1" in html

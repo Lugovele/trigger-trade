@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 import sqlite3
@@ -12,11 +13,12 @@ from triggertrade.execution.futures import PositionState
 
 
 class FuturesAccountingStore:
-    def __init__(self, path: str | Path = "runtime/triggertrade_paper.sqlite3") -> None:
+    def __init__(self, path: str | Path = "runtime/triggertrade_paper.sqlite3", *, initialize: bool = True) -> None:
         self.path = Path(path)
         if self.path.parent != Path("."):
             self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._init_schema()
+        if initialize:
+            self._init_schema()
 
     def record_fill(self, event: FuturesFillEvent) -> bool:
         values = _fill_values(event)
@@ -104,6 +106,41 @@ class FuturesAccountingStore:
             return conn.execute(
                 "SELECT * FROM futures_equity_snapshots ORDER BY observed_at DESC, snapshot_id DESC LIMIT 1"
             ).fetchone()
+
+    def first_equity_snapshot_for_utc_day(self, trading_day: str) -> sqlite3.Row | None:
+        start, end = _utc_day_bounds(trading_day)
+        try:
+            with self._connect() as conn:
+                return conn.execute(
+                    """
+                    SELECT *
+                    FROM futures_equity_snapshots
+                    WHERE observed_at >= ? AND observed_at < ?
+                      AND UPPER(COALESCE(source, 'exchange_wallet')) IN ('ACTIVE', 'EXCHANGE', 'EXCHANGE_WALLET', 'BYBIT_DEMO_ACCOUNT')
+                    ORDER BY observed_at ASC, snapshot_id ASC
+                    LIMIT 1
+                    """,
+                    (start, end),
+                ).fetchone()
+        except sqlite3.Error:
+            return None
+
+    def realized_net_pnl_for_utc_day(self, trading_day: str) -> Decimal:
+        start, end = _utc_day_bounds(trading_day)
+        try:
+            with self._connect() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT net_pnl
+                    FROM futures_closed_trades
+                    WHERE closed_at >= ? AND closed_at < ?
+                      AND UPPER(COALESCE(evidence_source, 'exchange')) IN ('ACTIVE', 'EXCHANGE')
+                    """,
+                    (start, end),
+                ).fetchall()
+        except sqlite3.Error:
+            raise RuntimeError("futures accounting closed trade facts unavailable") from None
+        return sum((Decimal(str(row["net_pnl"])) for row in rows), Decimal("0"))
 
     def _init_schema(self) -> None:
         with self._connect() as conn:
@@ -368,3 +405,9 @@ def _add_column_if_missing(conn: sqlite3.Connection, table: str, column: str, de
     columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
     if column not in columns:
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
+def _utc_day_bounds(trading_day: str) -> tuple[str, str]:
+    start = datetime.fromisoformat(trading_day).replace(tzinfo=UTC)
+    end = start + timedelta(days=1)
+    return start.isoformat(), end.isoformat()

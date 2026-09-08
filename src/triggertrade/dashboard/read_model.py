@@ -12,7 +12,9 @@ from typing import Any
 
 from triggertrade.analytics import TradePerformanceFact, compare_baseline, compute_futures_performance
 from triggertrade.governance import EvidenceCapability, GovernanceEvidence, GovernancePolicy, evaluate_readiness
-from triggertrade.persistence import InstrumentCatalogStore, TradingRulesStore
+from triggertrade.persistence import DailyLossStore, InstrumentCatalogStore, TradingRulesStore
+from triggertrade.persistence.futures_accounting_store import FuturesAccountingStore
+from triggertrade.services.daily_loss import read_only_daily_loss_state
 
 
 @dataclass(frozen=True)
@@ -1000,6 +1002,21 @@ class DashboardReadModel:
         except Exception:
             return ()
         return tuple(_rules_version_summary_payload(version, _rules_used_in(version, self.db_path)) for version in versions)
+
+    def get_daily_loss_state(self) -> dict[str, Any] | None:
+        if not self.db_path.exists():
+            return None
+        try:
+            current = TradingRulesStore(self.db_path).get_current()
+        except Exception:
+            return None
+        if current is None:
+            return None
+        return read_only_daily_loss_state(
+            accounting_store=FuturesAccountingStore(self.db_path, initialize=False),
+            daily_loss_store=DailyLossStore(self.db_path, initialize=False),
+            rules_version=current,
+        )
 
     def get_rules_version_payload(self, rules_version_id_or_version: str) -> dict[str, Any] | None:
         if not rules_version_id_or_version or len(rules_version_id_or_version) > 120 or not self.db_path.exists():
@@ -2547,7 +2564,7 @@ def _rules_runtime_support() -> dict[str, Any]:
             "FIXED": "supported",
             "DYNAMIC": "unsupported_fail_closed",
         },
-        "daily_loss_enforcement": "unsupported_fail_closed",
+        "daily_loss_enforcement": "accounting_backed_new_entries",
         "short_execution_lifecycle_supported": True,
         "short_strategy_signal_supported": False,
     }

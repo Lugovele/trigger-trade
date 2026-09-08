@@ -7,6 +7,7 @@ from decimal import Decimal
 import pytest
 
 from triggertrade.config import ExecutionVenue, load_config
+from triggertrade.accounting import ClosedTradeResult, EquitySnapshot
 from triggertrade.execution import OrderStatus, OrderType
 from triggertrade.execution.futures import FuturesTradeIntent, PositionAction, PositionState
 from triggertrade.exchanges import BybitApiError, BybitResponse
@@ -14,6 +15,7 @@ from triggertrade.market_data import ContractCategory, FuturesAccountState, Futu
 from triggertrade.market_data import FuturesMarketEvent, MarketRegimeContext, MarketRegimeLabel, RegimeCapability
 from triggertrade.persistence import (
     FuturesExecutionStore,
+    MessageStore,
     TradingRulesStore,
     FuturesExecutionRecord,
     FuturesPositionRecord,
@@ -146,7 +148,7 @@ def test_runtime_dynamic_take_profit_fails_closed_until_algorithm_is_approved(tm
     assert adapter.create_calls == 0
 
 
-def test_runtime_daily_loss_enabled_fails_closed_until_accounting_gate_exists(tmp_path):
+def test_runtime_daily_loss_enabled_allows_active_entry_before_threshold(tmp_path):
     path = tmp_path / "runtime.sqlite3"
     config = load_config(_env(path))
     rules = TradingRulesService(TradingRulesStore(path))
@@ -168,11 +170,50 @@ def test_runtime_daily_loss_enabled_fails_closed_until_accounting_gate_exists(tm
         trigger_set_version="v1",
     )
 
-    assert result.active[0].skipped_reason == "daily_loss_limit_enabled_unsupported"
+    assert result.active[0].execution_status == "submitted"
+    assert adapter.create_calls == 1
+    position = FuturesPositionStore(path).get_position(futures_position_id(active.intent_id))
+    assert position.rules_version_id == current.rules_version_id
+    assert position.rule_snapshot["daily_loss_status"] == "OK"
+    assert position.rule_snapshot["daily_loss_enabled"] == "True"
+
+
+def test_runtime_daily_loss_latch_blocks_only_active_new_entries_and_creates_one_message(tmp_path):
+    path = tmp_path / "runtime.sqlite3"
+    config = load_config(_env(path))
+    rules = TradingRulesService(TradingRulesStore(path))
+    rules.ensure_initial_version(config)
+    current = rules.create_rules_version_from_current(
+        changes={"daily_loss_limit_enabled": True, "daily_loss_limit_pct": Decimal("0.02")},
+        created_source="unit",
+        created_at="2026-09-07T01:00:00+00:00",
+    ).rules
+    accounting = FuturesAccountingStore(path)
+    accounting.record_equity_snapshot(_equity_snapshot("runtime-equity", "2026-09-05T00:00:01+00:00", Decimal("100")))
+    accounting.record_closed_trade(_closed_trade("runtime-loss", Decimal("-2"), evidence_source="exchange"))
+    accounting.record_closed_trade(_closed_trade("runtime-test-loss", Decimal("-50"), evidence_source="test_simulation"))
+    adapter = RecordingFuturesAdapter(order_status="New")
+
+    result = _runtime(tmp_path, path=path, active_adapter=adapter).process_once()
+    active = RuntimeStore(path).get_lane_lifecycle(
+        lane="ACTIVE",
+        symbol="BTCUSDT",
+        timeframe="1m",
+        candle_id=result.candle_id,
+        trigger_set_id="triggertrade-futures-core",
+        trigger_set_version="v1",
+    )
+
+    assert result.active[0].skipped_reason == "daily_loss_limit_reached"
+    assert result.test[0].execution_status == "test_simulated"
     assert adapter.create_calls == 0
     assert active.rules_version_id == current.rules_version_id
-    assert active.rules_evaluation["blocking_rule"] == "daily_loss_limit_enabled_unsupported"
-    assert active.rules_evaluation["daily_loss_limit_enabled"] == "True"
+    assert active.rules_evaluation["blocking_rule"] == "daily_loss_limit_reached"
+    assert active.rules_evaluation["daily_loss_realized_net_pnl"] == "-2"
+    assert active.rules_evaluation["daily_loss_latched"] == "True"
+    messages = MessageStore(path).list_messages()
+    assert len(messages) == 1
+    assert messages[0].dedupe_key == "daily_loss:2026-09-05:latched"
 
 
 def test_runtime_disabled_net_edge_excludes_expected_move_requirement(tmp_path):
@@ -792,6 +833,46 @@ def _account(instrument, *, position_size=Decimal("0"), mark_price=None):
         position_mode="ONE_WAY",
         position_size=position_size,
         mark_price=mark_price,
+    )
+
+
+def _equity_snapshot(snapshot_id: str, observed_at: str, equity: Decimal):
+    return EquitySnapshot(
+        snapshot_id=snapshot_id,
+        observed_at=observed_at,
+        source="exchange_wallet",
+        wallet_balance=equity,
+        equity=equity,
+        available_margin=equity,
+        used_margin=Decimal("0"),
+        unrealized_pnl=Decimal("0"),
+        realized_pnl=Decimal("0"),
+        running_peak=equity,
+        drawdown_absolute=Decimal("0"),
+        drawdown_percent=Decimal("0"),
+        max_drawdown=Decimal("0"),
+    )
+
+
+def _closed_trade(trade_id: str, net_pnl: Decimal, *, evidence_source: str = "exchange"):
+    return ClosedTradeResult(
+        trade_id=trade_id,
+        symbol="BTCUSDT",
+        direction=PositionState.LONG,
+        quantity=Decimal("1"),
+        leverage=Decimal("1"),
+        entry_vwap=Decimal("100"),
+        exit_vwap=Decimal("99"),
+        gross_pnl=net_pnl,
+        entry_fee=Decimal("0"),
+        exit_fee=Decimal("0"),
+        other_fees=Decimal("0"),
+        funding=Decimal("0"),
+        net_pnl=net_pnl,
+        opened_at="2026-09-05T00:00:00+00:00",
+        closed_at="2026-09-05T01:00:00+00:00",
+        duration_seconds=3600,
+        evidence_source=evidence_source,
     )
 
 

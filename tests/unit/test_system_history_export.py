@@ -1,5 +1,11 @@
+from decimal import Decimal
+
+from triggertrade.accounting import EquitySnapshot
 from triggertrade.dashboard.read_model import DashboardReadModel
-from triggertrade.persistence import MessageStore
+from triggertrade.config import load_config
+from triggertrade.persistence import MessageStore, TradingRulesStore
+from triggertrade.persistence.futures_accounting_store import FuturesAccountingStore
+from triggertrade.rules import TradingRulesService
 from triggertrade.persistence.operator_state_store import OperatorStateStore
 from triggertrade.services.system_history import SystemHistoryExporter
 from tests.unit.test_dashboard_read_model import _empty_db, _save_buy_lifecycle
@@ -32,6 +38,43 @@ def test_system_history_export_contains_factual_sections_without_research_fabric
     assert "PAUSE_ENTRIES" in text
     assert "rules_version_id" in text
     assert "triggertrade-futures-core" in text
+    assert "RESEARCH" not in text
+
+
+def test_system_history_export_includes_allowlisted_daily_loss_state(tmp_path):
+    db = _empty_db(tmp_path)
+    config = load_config({"TRIGGERTRADE_RUNTIME_DB_PATH": str(db), "TRIGGERTRADE_WATCHLIST": "BTCUSDT", "TRIGGERTRADE_RUNTIME_SYMBOL": "BTCUSDT"})
+    rules = TradingRulesService(TradingRulesStore(db))
+    rules.ensure_initial_version(config)
+    rules.create_rules_version_from_current(
+        changes={"daily_loss_limit_enabled": True, "daily_loss_limit_pct": Decimal("0.02")},
+        created_source="unit",
+        created_at="2026-09-05T00:00:00+00:00",
+    )
+    FuturesAccountingStore(db).record_equity_snapshot(
+        EquitySnapshot(
+            snapshot_id="daily-loss-export-equity",
+            observed_at="2026-09-08T00:00:01+00:00",
+            source="exchange_wallet",
+            wallet_balance=Decimal("100"),
+            equity=Decimal("100"),
+            available_margin=Decimal("100"),
+            used_margin=Decimal("0"),
+            unrealized_pnl=Decimal("0"),
+            realized_pnl=Decimal("0"),
+            running_peak=Decimal("100"),
+            drawdown_absolute=Decimal("0"),
+            drawdown_percent=Decimal("0"),
+            max_drawdown=Decimal("0"),
+        )
+    )
+
+    text = SystemHistoryExporter(read_model=DashboardReadModel(db)).build_export(generated_at="2026-09-08T12:00:00+00:00")
+
+    assert "daily_loss:" in text
+    assert "baseline_equity=100" in text
+    assert "limit_amount=2.00" in text
+    assert "raw" not in text
     assert "RESEARCH" not in text
 
 

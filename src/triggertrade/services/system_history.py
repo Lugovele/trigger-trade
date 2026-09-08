@@ -94,7 +94,8 @@ class SystemHistoryExporter:
 
     def _risk_lines(self) -> list[str]:
         latest = _call(self.read_model, "get_latest_decision")
-        return [f"latest_decision: {_one_line(latest)}"]
+        daily_loss = _call(self.read_model, "get_daily_loss_state")
+        return [f"latest_decision: {_one_line(latest)}", f"daily_loss: {_one_line(daily_loss)}"]
 
     def _error_lines(self) -> list[str]:
         lines: list[str] = []

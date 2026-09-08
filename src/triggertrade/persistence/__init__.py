@@ -2,6 +2,7 @@
 
 from .execution_store import ExecutionFill, ExecutionRecord, ExecutionStore
 from .futures_execution_store import FuturesExecutionRecord, FuturesExecutionStore
+from .daily_loss_store import DailyLossRecord, DailyLossStore
 from .instrument_catalog_store import InstrumentCatalogStore
 from .futures_position_store import FuturesClosedPositionRecord, FuturesPositionEvent, FuturesPositionRecord, FuturesPositionStore
 from .message_store import MessageRecord, MessageSeverity, MessageStore, MessageStoreError
@@ -37,6 +38,8 @@ __all__ = [
     "ExecutionFill",
     "ExecutionRecord",
     "ExecutionStore",
+    "DailyLossRecord",
+    "DailyLossStore",
     "FuturesExecutionRecord",
     "FuturesExecutionStore",
     "InstrumentCatalogStore",

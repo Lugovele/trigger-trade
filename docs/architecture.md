@@ -217,6 +217,18 @@ System History uses deterministic sections, bounded row counts, explicit
 truncation markers, and allowlist-style field selection from existing stores
 and read models.
 
+Daily Loss is an accounting-backed new-entry gate owned by the futures runtime
+and accounting persistence, not by the UI. When enabled in the current
+`TradingRulesVersion`, ACTIVE opening intents are evaluated against the
+current UTC-day realized net P&L from account-authoritative closed futures
+trades only. TEST simulation, Research Demo, and backtest rows must not affect
+the ACTIVE daily-loss latch. The day baseline is stable once established: use
+the earliest eligible equity snapshot after UTC day start when available, or a
+safe first-evaluation ACTIVE account equity value persisted for that day;
+otherwise fail closed for new entries only. A reached threshold latches for the
+rest of the UTC day and survives restart. Protective exits, manual closes,
+Close All, and reconciliation remain outside this gate.
+
 The registry is code-first. New Trigger Versions and Set Versions are introduced
 through reviewed code, not UI CRUD. Re-registering an existing exact
 `rule_id + version` or `set_id + version` is idempotent only when the stored

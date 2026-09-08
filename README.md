@@ -174,6 +174,15 @@ The shared bootstrap creates one factual `v1` from the existing futures runtime 
 
 The local dashboard Rules page is wired to this backend registry. It reads the exact current version, lists factual history, opens immutable historical detail, and saves changes only through the protected backend `Save as New Version` contract with stale edit detection. Coin search and catalog refresh go through the backend Bybit linear instrument catalog; the browser never calls Bybit or the database directly.
 
+Daily loss limit enforcement is accounting-backed for new ACTIVE entries when
+`daily_loss_limit_enabled=true`. The gate uses current UTC-day realized net P&L
+from account-authoritative futures closed trades, excludes TEST/backtest rows,
+uses a persisted day baseline from the first eligible equity snapshot or safe
+first-evaluation account equity, and blocks inclusively when realized net P&L
+is at or below the configured loss amount. Once reached, the block is latched
+for the rest of the UTC day and survives restart; existing positions continue
+their protective exits, manual closes, Close All, and reconciliation.
+
 ## Messages and System History
 
 Dashboard Messages are persisted user-facing operational messages, separate
@@ -186,9 +195,9 @@ The header Copy action requests a backend-built System History export and then
 copies the returned text to the clipboard. The export is a bounded, sanitized
 technical snapshot for debugging, audit, or AI-assisted analysis. It includes
 available portfolio, operator, Rules, Set/Trigger, execution, risk/decision, and
-error facts, omits fabricated Research history, and never accepts browser file
-paths or exposes raw logs, request headers, `.env` contents, cookies, tokens, or
-exchange credentials.
+error facts, including Daily Loss state when available. It omits fabricated
+Research history and never accepts browser file paths or exposes raw logs,
+request headers, `.env` contents, cookies, tokens, or exchange credentials.
 
 
 ## Bybit Linear Instrument Catalog

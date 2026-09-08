@@ -211,7 +211,22 @@ Unrealized P&L records its valuation source. Missing or stale mark/valuation
 data is unavailable, not zero. Equity drawdown uses real persisted equity
 snapshots only; synthetic series are forbidden.
 
-In this backend unit, `daily_loss_limit_enabled=true` fails closed until an accounting-backed daily realized-loss gate is wired into entry decisions. `max_positions_per_coin`, when enabled, is constrained to `1` because the approved lifecycle invariant is still one net position per symbol; pyramiding requires a later reviewed change.
+Daily loss limit enforcement is accounting-backed for new ACTIVE entries. When
+`daily_loss_limit_enabled=true`, futures runtime evaluates only actual opening
+intents against current UTC-day realized net P&L from account-authoritative
+closed futures trades, excluding TEST simulation, Research Demo, and backtest
+rows. The daily baseline is persisted and stable for the UTC day: it comes from
+the earliest eligible equity snapshot after UTC day start, or from a safe
+first-evaluation ACTIVE account equity value when no snapshot exists. Missing
+or uncertain accounting/baseline state fails closed for new entries only.
+
+The threshold is inclusive and latches for the rest of the UTC day once
+reached, surviving restart and operator Resume. The latch resets only with the
+next UTC day. Existing positions still run protective TP/SL monitoring,
+manual close, Close All, and reconciliation; daily loss does not force close or
+alter reduce-only close semantics. `max_positions_per_coin`, when enabled, is
+constrained to `1` because the approved lifecycle invariant is still one net
+position per symbol; pyramiding requires a later reviewed change.
 
 ## Portfolio Operator Contracts
 

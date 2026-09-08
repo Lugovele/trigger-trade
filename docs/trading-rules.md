@@ -384,7 +384,11 @@ Condition: `relative_volume >= 2.0 AND volume_percentile >= 90`. Both boundaries
 
 Failure behavior: fewer than 60 previous completed candles, missing current volume, stale candle, incomplete current candle, wrong symbol/timeframe, or zero median returns `NOT_CONFIRMED` and cannot create an order path. Parameters `60 / 2.0 / 90` are candidate TEST values only and are not validated profitable production rules. The ACTIVE set is unchanged.
 
-In this backend unit, `daily_loss_limit_enabled=true` fails closed until an accounting-backed daily realized-loss gate is wired into entry decisions. `max_positions_per_coin`, when enabled, is constrained to `1` because the approved lifecycle invariant is still one net position per symbol; pyramiding requires a later reviewed change.
+`daily_loss_limit_enabled=true` is enforced for new ACTIVE entries by an accounting-backed daily realized-loss gate. The gate uses current UTC-day realized net P&L from account-authoritative futures closed trades only, excluding TEST simulation, Research Demo, and backtest rows. It compares that net P&L with a stable persisted daily baseline from the earliest eligible equity snapshot after UTC day start, or a safe first-evaluation ACTIVE account equity value if no snapshot exists. If the baseline or accounting facts are missing or uncertain, new entries fail closed.
+
+The threshold is inclusive: `realized_net_pnl <= -(baseline_equity * daily_loss_limit_pct)` blocks new entries. Once reached, the block is latched for the rest of that UTC day, survives restart, and is not cleared by later profits or operator Resume. The next UTC day evaluates a fresh baseline. Switching to stricter current rules can block immediately against the shared day baseline; a previous same-day latch remains blocking. Existing positions continue TP, SL, manual close, Close All, mark monitoring, and reconciliation; there is no forced close.
+
+`max_positions_per_coin`, when enabled, is constrained to `1` because the approved lifecycle invariant is still one net position per symbol; pyramiding requires a later reviewed change.
 
 When the minimum net-edge gate is disabled, the current integration strategy does not require a demo expected gross move solely for net-edge calculation; direction and trigger/regime provenance still gate intent creation.
 
