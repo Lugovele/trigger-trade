@@ -15,10 +15,12 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from triggertrade.dashboard.read_model import DashboardReadModel
 from triggertrade.exchanges import BybitDemoClient
-from triggertrade.persistence import InstrumentCatalogStore, MessageStore, MessageStoreError, OperatorStateStore, TradingRulesStore
+from triggertrade.backtest import BacktestPlan
+from triggertrade.persistence import InstrumentCatalogStore, MessageStore, MessageStoreError, OperatorStateStore, ResearchStore, ResearchStoreError, TradingRulesStore, TriggerSetStore
 from triggertrade.rules import CoinRule, TradingRulesError, TradingRulesService
 from triggertrade.services.bootstrap import ensure_runtime_registry_for_env, merged_runtime_env, runtime_db_path
 from triggertrade.services.instrument_catalog import InstrumentCatalogService
+from triggertrade.services.research import ResearchService, ResearchServiceError
 from triggertrade.services.system_history import SystemHistoryExporter
 
 
@@ -37,6 +39,7 @@ class DashboardServer(ThreadingHTTPServer):
         message_store: MessageStore,
         trading_rules_service: TradingRulesService,
         instrument_catalog_service: InstrumentCatalogService,
+        research_service: ResearchService,
         operator_actions=None,
     ) -> None:
         super().__init__(server_address, handler_class)
@@ -45,6 +48,7 @@ class DashboardServer(ThreadingHTTPServer):
         self.message_store = message_store
         self.trading_rules_service = trading_rules_service
         self.instrument_catalog_service = instrument_catalog_service
+        self.research_service = research_service
         self.operator_actions = operator_actions
         self.operator_control_token = secrets.token_urlsafe(24)
 
@@ -91,6 +95,21 @@ class DashboardHandler(BaseHTTPRequestHandler):
             except Exception as exc:  # noqa: BLE001 - API returns unavailable instead of fake zero.
                 self._send_json({"available": False, "error": _safe_public_error(exc)}, HTTPStatus.SERVICE_UNAVAILABLE)
             return
+        if parsed.path == "/api/research":
+            self._send_json({"research": [_research_summary_payload(row) for row in self.server.read_model.list_research_summaries(limit=50)]})
+            return
+        if parsed.path.startswith("/api/research/"):
+            parts = [unquote(part) for part in parsed.path.strip("/").split("/")]
+            if len(parts) == 3 and parts[0] == "api" and parts[1] == "research":
+                payload = self.server.read_model.get_research_detail(parts[2])
+                if payload is None:
+                    self._send_json({"error": "research id not found"}, HTTPStatus.NOT_FOUND)
+                else:
+                    self._send_json(payload)
+                return
+            if len(parts) == 4 and parts[0] == "api" and parts[1] == "research" and parts[3] == "compare":
+                self._send_json(self.server.read_model.get_research_compare(parts[2]))
+                return
         if parsed.path == "/api/instruments/search":
             query = parse_qs(parsed.query).get("q", [""])[0]
             self._send_json(
@@ -188,6 +207,77 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path == "/api/research":
+            payload = self._read_json_body(max_bytes=4096)
+            if str(payload.get("token") or "") != self.server.operator_control_token:
+                self._send_json({"error": "operator token required"}, HTTPStatus.FORBIDDEN)
+                return
+            try:
+                record = self.server.research_service.create_research(
+                    set_id=str(payload.get("set_id") or ""),
+                    set_version=str(payload.get("set_version") or ""),
+                    rules_version_id=str(payload.get("rules_version_id") or ""),
+                    created_source="local_dashboard",
+                    created_at=datetime.now(UTC).isoformat(),
+                )
+            except ResearchServiceError as exc:
+                self._send_json({"error": _safe_public_error(exc)}, HTTPStatus.BAD_REQUEST)
+                return
+            self._send_json({"research": _research_record_payload(record)}, HTTPStatus.CREATED)
+            return
+        if parsed.path.startswith("/api/research/"):
+            parts = [unquote(part) for part in parsed.path.strip("/").split("/")]
+            payload = self._read_json_body(max_bytes=4096)
+            if str(payload.get("token") or "") != self.server.operator_control_token:
+                self._send_json({"error": "operator token required"}, HTTPStatus.FORBIDDEN)
+                return
+            try:
+                if len(parts) == 4 and parts[:2] == ["api", "research"] and parts[3] == "backtests":
+                    plan = _backtest_plan_from_payload(payload)
+                    run = self.server.research_service.run_backtest(
+                        research_id=parts[2],
+                        plan=plan,
+                        created_at=datetime.now(UTC),
+                    )
+                    self._send_json({"backtest": _research_run_payload(run)}, HTTPStatus.CREATED)
+                    return
+                if len(parts) == 6 and parts[:2] == ["api", "research"] and parts[3] == "backtests" and parts[5] == "select":
+                    record = self.server.research_service.select_backtest_run(parts[2], parts[4])
+                    self._send_json({"research": _research_record_payload(record)})
+                    return
+                if len(parts) == 5 and parts[:2] == ["api", "research"] and parts[3] == "demo" and parts[4] == "start":
+                    run = self.server.research_service.start_demo_run(parts[2], created_at=datetime.now(UTC).isoformat())
+                    status = HTTPStatus.CONFLICT if getattr(run, "status", None).value == "BLOCKED" else HTTPStatus.CREATED
+                    self._send_json({"demo": _research_run_payload(run)}, status)
+                    return
+                if len(parts) == 6 and parts[:2] == ["api", "research"] and parts[3] == "demo" and parts[5] == "stop":
+                    run = self.server.research_service.stop_demo_run(parts[2], parts[4], stopped_at=datetime.now(UTC).isoformat())
+                    self._send_json({"demo": _research_run_payload(run)})
+                    return
+                if len(parts) == 6 and parts[:2] == ["api", "research"] and parts[3] == "demo" and parts[5] == "select":
+                    record = self.server.research_service.select_demo_run(parts[2], parts[4])
+                    self._send_json({"research": _research_record_payload(record)})
+                    return
+                if len(parts) == 4 and parts[:2] == ["api", "research"] and parts[3] == "archive":
+                    record = self.server.research_service.archive_research(parts[2])
+                    self._send_json({"research": _research_record_payload(record)})
+                    return
+                if len(parts) == 5 and parts[:2] == ["api", "research"] and parts[3] == "decision" and parts[4] == "make-active":
+                    record = self.server.research_service.request_make_active(parts[2])
+                    self._send_json(
+                        {
+                            "research": _research_record_payload(record),
+                            "blocked": True,
+                            "reason": "make_active_activation_semantics_unapproved",
+                        },
+                        HTTPStatus.CONFLICT,
+                    )
+                    return
+            except (ResearchServiceError, ResearchStoreError, ValueError) as exc:
+                self._send_json({"error": _safe_public_error(exc)}, HTTPStatus.BAD_REQUEST)
+                return
+            self._send_json({"error": "research route not found"}, HTTPStatus.NOT_FOUND)
+            return
         if parsed.path == "/api/rules/versions":
             payload = self._read_json_body(max_bytes=16000)
             token = str(payload.get("token") or "")
@@ -542,6 +632,9 @@ def render_dashboard(
         "coins": read_model.search_rules_catalog_coins(),
     }
     messages = _messages_payload_from_model(read_model)
+    research = {
+        "summaries": tuple(_research_summary_payload(row) for row in read_model.list_research_summaries(limit=50)),
+    }
     return render_product_dashboard(
         initial_page=initial_page,
         operator_state=operator_state,
@@ -550,6 +643,7 @@ def render_dashboard(
         registry=registry,
         rules=rules,
         messages=messages,
+        research=research,
     )
 
 
@@ -567,6 +661,7 @@ def create_server(
     *,
     trading_rules_service: TradingRulesService | None = None,
     instrument_catalog_service: InstrumentCatalogService | None = None,
+    research_service: ResearchService | None = None,
     operator_actions=None,
 ) -> DashboardServer:
     if host != DEFAULT_HOST:
@@ -577,6 +672,12 @@ def create_server(
         TradingRulesStore(db_path),
         symbol_validator=catalog_service.validate_symbol,
     )
+    research_boundary = research_service or ResearchService(
+        store=ResearchStore(db_path),
+        trigger_set_store=TriggerSetStore(db_path),
+        trading_rules_store=TradingRulesStore(db_path),
+        message_store=MessageStore(db_path),
+    )
     server = DashboardServer(
         (host, port),
         DashboardHandler,
@@ -585,6 +686,7 @@ def create_server(
         message_store=MessageStore(db_path),
         trading_rules_service=rules_service,
         instrument_catalog_service=catalog_service,
+        research_service=research_boundary,
         operator_actions=operator_actions,
     )
     read_model.operator_control_token = server.operator_control_token
@@ -621,6 +723,69 @@ def _message_payload(row) -> dict[str, object]:
         "read_at": row.read_at,
         "metadata": row.metadata,
     }
+
+
+def _research_summary_payload(row) -> dict[str, object]:
+    return {
+        "research_id": row.research_id,
+        "status": row.status,
+        "set_id": row.set_id,
+        "set_version": row.set_version,
+        "rules_version_id": row.rules_version_id,
+        "rules_display_version": row.rules_display_version,
+        "selected_backtest_run_id": row.selected_backtest_run_id,
+        "selected_demo_run_id": row.selected_demo_run_id,
+        "decision": row.decision,
+        "updated_at": row.updated_at,
+    }
+
+
+def _research_record_payload(record) -> dict[str, object]:
+    return {
+        "research_id": record.research_id,
+        "created_at": record.created_at,
+        "updated_at": record.updated_at,
+        "status": record.status.value,
+        "set_id": record.set_id,
+        "set_version": record.set_version,
+        "rules_version_id": record.rules_version_id,
+        "rules_display_version": record.rules_display_version,
+        "selected_backtest_run_id": record.selected_backtest_run_id,
+        "selected_demo_run_id": record.selected_demo_run_id,
+        "decision": record.decision.value,
+        "decision_at": record.decision_at,
+        "archived_at": record.archived_at,
+        "made_active_at": record.made_active_at,
+        "created_source": record.created_source,
+        "schema_version": record.schema_version,
+    }
+
+
+def _research_run_payload(record) -> dict[str, object]:
+    payload = {
+        "research_id": record.research_id,
+        "run_id": record.run_id,
+        "created_at": record.created_at,
+        "updated_at": record.updated_at,
+        "status": record.status.value,
+        "selected_for_use": record.selected_for_use,
+        "metrics": record.metrics,
+    }
+    for name in (
+        "period_start",
+        "period_end",
+        "timeframe",
+        "engine_run_id",
+        "unavailable_reason",
+        "started_at",
+        "stopped_at",
+        "execution_scope_id",
+        "account_scope",
+        "blocked_reason",
+    ):
+        if hasattr(record, name):
+            payload[name] = getattr(record, name)
+    return payload
 
 
 def _messages_payload_from_model(read_model: DashboardReadModel) -> dict[str, object]:
@@ -744,6 +909,10 @@ def _decimal_value(value: object) -> Decimal:
     return parsed
 
 
+def _finite_decimal(value: object) -> Decimal:
+    return _decimal_value(value)
+
+
 def _optional_int(value: object) -> int | None:
     if value in {None, ""}:
         return None
@@ -757,6 +926,29 @@ def _bool_value(value: object) -> bool:
     if isinstance(value, bool):
         return value
     raise TradingRulesError("enabled flags require explicit boolean values")
+
+
+def _backtest_plan_from_payload(payload: dict) -> BacktestPlan:
+    start = _iso_datetime(str(payload.get("research_start") or payload.get("start") or ""))
+    end = _iso_datetime(str(payload.get("research_end") or payload.get("end") or ""))
+    return BacktestPlan(
+        symbol=str(payload.get("symbol") or "BTCUSDT").upper(),
+        category=str(payload.get("category") or "linear").lower(),
+        timeframe=str(payload.get("timeframe") or "1m"),
+        research_start=start,
+        research_end=end,
+        warmup_candles=int(payload.get("warmup_candles") or 60),
+    )
+
+
+def _iso_datetime(value: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError("invalid datetime") from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 def _safe_public_error(exc: Exception) -> str:

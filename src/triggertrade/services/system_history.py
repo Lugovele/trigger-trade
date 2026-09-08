@@ -17,6 +17,7 @@ EXPORT_LIMITS = {
     "trigger_sets": 12,
     "triggers": 20,
     "messages": 30,
+    "research": 20,
 }
 
 _SECRET_RE = re.compile(
@@ -40,6 +41,7 @@ class SystemHistoryExporter:
         sections.append(_section("SETS / TRIGGERS", self._sets_and_triggers_lines()))
         sections.append(_section("RULES", self._rules_lines()))
         sections.append(_section("INSTRUMENTS", self._instrument_lines()))
+        sections.append(_section("RESEARCH", self._research_lines()))
         sections.append(_section("RISK / DECISIONS", self._risk_lines()))
         sections.append(_section("ERRORS", self._error_lines()))
         return "TriggerTrade system history export\n\n" + "\n\n".join(sections).strip() + "\n"
@@ -91,6 +93,11 @@ class SystemHistoryExporter:
     def _instrument_lines(self) -> list[str]:
         catalog = _call(self.read_model, "get_rules_catalog_state")
         return [f"catalog: {_one_line(catalog)}"]
+
+    def _research_lines(self) -> list[str]:
+        research = _call(self.read_model, "list_research_summaries", limit=EXPORT_LIMITS["research"] + 1) or ()
+        lines = _row_lines("research", research, EXPORT_LIMITS["research"])
+        return lines or ["none_available: true"]
 
     def _risk_lines(self) -> list[str]:
         latest = _call(self.read_model, "get_latest_decision")

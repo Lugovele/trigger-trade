@@ -7,6 +7,18 @@ from .instrument_catalog_store import InstrumentCatalogStore
 from .futures_position_store import FuturesClosedPositionRecord, FuturesPositionEvent, FuturesPositionRecord, FuturesPositionStore
 from .message_store import MessageRecord, MessageSeverity, MessageStore, MessageStoreError
 from .operator_state_store import OperatorStateStore, OperatorTradingState, TradingState
+from .research_store import (
+    RESEARCH_SCHEMA_VERSION,
+    ResearchBacktestRunRecord,
+    ResearchBacktestStatus,
+    ResearchDecision,
+    ResearchDemoRunRecord,
+    ResearchDemoStatus,
+    ResearchRecord,
+    ResearchStatus,
+    ResearchStore,
+    ResearchStoreError,
+)
 from .trading_rules_store import TradingRulesStore
 from .runtime_store import (
     CandleLifecycle,
@@ -53,6 +65,16 @@ __all__ = [
     "FuturesPositionStore",
     "OperatorStateStore",
     "OperatorTradingState",
+    "RESEARCH_SCHEMA_VERSION",
+    "ResearchBacktestRunRecord",
+    "ResearchBacktestStatus",
+    "ResearchDecision",
+    "ResearchDemoRunRecord",
+    "ResearchDemoStatus",
+    "ResearchRecord",
+    "ResearchStatus",
+    "ResearchStore",
+    "ResearchStoreError",
     "RuntimeCheckpoint",
     "RuntimeStore",
     "RuntimeStoreError",

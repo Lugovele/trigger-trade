@@ -104,6 +104,11 @@ Exchange-specific adapters only.
 ### `persistence/`
 Signals, decisions, orders, fills, positions, and rule/config versions needed for traceability.
 
+Research records are backend-owned product state. They persist exact Trigger
+Set Version identity, exact Trading Rules Version identity, selected backtest
+and Demo run ids, decision state, archive state, and schema version. Research
+does not duplicate raw trade history from backtest/accounting tables.
+
 ### `dashboard/`
 Read-oriented monitoring surface. It must not become a second trading engine.
 
@@ -119,6 +124,17 @@ debugging, audit, or AI-assisted analysis. The browser must request the export
 from the backend and copy the returned sanitized text; it must not assemble the
 history from DOM state, read files directly, pass arbitrary paths, or expose a
 raw logs page.
+
+Research follows `Backtest -> Demo -> Compare -> Decision`. It is separate
+from the older runtime evidence lanes. Backtests reference immutable
+historical replay runs from backend-owned replay inputs, never browser-supplied
+candle arrays. If pinned rules require semantics the replay engine cannot fully
+honor, Research records unavailable evidence instead of substituting behavior.
+Demo is blocked unless Research-specific exchange and accounting isolation are
+positively available. Compare reports unavailable when selected Research Demo
+or overlapping ACTIVE benchmark facts are missing. Make Active does not change
+ACTIVE Trigger Sets or Trading Rules until exact activation semantics receive a
+separate reviewed implementation.
 
 ## Dependency direction
 
@@ -210,12 +226,13 @@ does not expose edit APIs.
 
 Messages and System History consume existing runtime/read-model facts. Message
 producers are limited to meaningful factual operational events, such as
-operator control results or backend service failures; they must not synthesize
-price monitoring or Research events where the backend has no support. Repeated
-equivalent events may use a dedupe key to avoid flooding user-facing storage.
-System History uses deterministic sections, bounded row counts, explicit
-truncation markers, and allowlist-style field selection from existing stores
-and read models.
+operator control results or backend service failures. Research producers are
+limited to factual state transitions such as backtest failure, Demo blocked, or
+decision needed; they must not synthesize performance or price monitoring.
+Repeated equivalent events may use a dedupe key to avoid flooding user-facing
+storage. System History uses deterministic sections, bounded row counts,
+explicit truncation markers, and allowlist-style field selection from existing
+stores and read models.
 
 Daily Loss is an accounting-backed new-entry gate owned by the futures runtime
 and accounting persistence, not by the UI. When enabled in the current

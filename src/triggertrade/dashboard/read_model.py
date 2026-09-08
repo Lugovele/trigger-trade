@@ -324,6 +324,20 @@ class BacktestRunRow:
 
 
 @dataclass(frozen=True)
+class ResearchSummaryRow:
+    research_id: str
+    status: str
+    set_id: str
+    set_version: str
+    rules_version_id: str
+    rules_display_version: str
+    selected_backtest_run_id: str | None
+    selected_demo_run_id: str | None
+    decision: str
+    updated_at: str
+
+
+@dataclass(frozen=True)
 class BaselineComparisonRow:
     candidate_set: str
     baseline_set: str
@@ -1719,6 +1733,103 @@ class DashboardReadModel:
             "run": _safe_dict(_json_dict(row["payload"])),
             "result": _safe_dict(_json_dict(row["result_payload"])),
         }
+
+    def list_research_summaries(self, *, limit: int = 50) -> tuple[ResearchSummaryRow, ...]:
+        if not self.db_path.exists():
+            return ()
+        try:
+            with self._connect() as conn:
+                if not _has_table(conn, "research_entities"):
+                    return ()
+                rows = conn.execute(
+                    """
+                    SELECT research_id, status, set_id, set_version, rules_version_id,
+                           rules_display_version, selected_backtest_run_id,
+                           selected_demo_run_id, decision, updated_at
+                    FROM research_entities
+                    ORDER BY updated_at DESC, research_id DESC
+                    LIMIT ?
+                    """,
+                    (max(1, min(int(limit), 100)),),
+                ).fetchall()
+        except (sqlite3.Error, ValueError):
+            return ()
+        return tuple(
+            ResearchSummaryRow(
+                research_id=row["research_id"],
+                status=row["status"],
+                set_id=row["set_id"],
+                set_version=row["set_version"],
+                rules_version_id=row["rules_version_id"],
+                rules_display_version=row["rules_display_version"],
+                selected_backtest_run_id=row["selected_backtest_run_id"],
+                selected_demo_run_id=row["selected_demo_run_id"],
+                decision=row["decision"],
+                updated_at=row["updated_at"],
+            )
+            for row in rows
+        )
+
+    def get_research_detail(self, research_id: str) -> dict[str, Any] | None:
+        safe_id = str(research_id)[:160]
+        if not safe_id or "/" in safe_id or "\\" in safe_id or not self.db_path.exists():
+            return None
+        try:
+            with self._connect() as conn:
+                if not _has_table(conn, "research_entities"):
+                    return None
+                research = _fetch_optional(conn, "SELECT * FROM research_entities WHERE research_id = ?", (safe_id,))
+                if research is None:
+                    return None
+                backtests = conn.execute(
+                    """
+                    SELECT *
+                    FROM research_backtest_runs
+                    WHERE research_id = ?
+                    ORDER BY created_at DESC, run_id DESC
+                    LIMIT 50
+                    """,
+                    (safe_id,),
+                ).fetchall()
+                demos = conn.execute(
+                    """
+                    SELECT *
+                    FROM research_demo_runs
+                    WHERE research_id = ?
+                    ORDER BY created_at DESC, run_id DESC
+                    LIMIT 50
+                    """,
+                    (safe_id,),
+                ).fetchall()
+        except sqlite3.Error:
+            return None
+        return {
+            "research": _safe_dict(dict(research)),
+            "backtests": tuple(_research_backtest_payload(row) for row in backtests),
+            "demos": tuple(_research_demo_payload(row) for row in demos),
+        }
+
+    def get_research_compare(self, research_id: str) -> dict[str, Any]:
+        try:
+            from triggertrade.persistence import MessageStore, ResearchStore, TradingRulesStore, TriggerSetStore
+            from triggertrade.services.research import ResearchService
+
+            result = ResearchService(
+                store=ResearchStore(self.db_path),
+                trigger_set_store=TriggerSetStore(self.db_path),
+                trading_rules_store=TradingRulesStore(self.db_path),
+                message_store=MessageStore(self.db_path),
+            ).compare(research_id)
+        except Exception:
+            return {"available": False, "reason": "research compare unavailable"}
+        return {
+            "available": result.available,
+            "reason": result.reason,
+            "overlap_period": result.overlap_period,
+            "research_demo": result.research_demo,
+            "active_benchmark": result.active_benchmark,
+            "difference": result.difference,
+        }
     def get_latest_futures_equity(self) -> FuturesEquityRow | None:
         if not self.db_path.exists():
             return None
@@ -3033,6 +3144,20 @@ def _trade_intent_view(strategy: dict[str, Any] | None) -> dict[str, Any] | None
 
 def _safe_dict(row: dict[str, Any]) -> dict[str, Any]:
     return {key: _redact_value(key, value) for key, value in row.items()}
+
+
+def _research_backtest_payload(row: sqlite3.Row) -> dict[str, Any]:
+    payload = _safe_dict(dict(row))
+    payload["selected_for_use"] = bool(payload.get("selected_for_use"))
+    payload["metrics"] = _safe_dict(_json_dict(payload.pop("metrics_json", "{}")))
+    return payload
+
+
+def _research_demo_payload(row: sqlite3.Row) -> dict[str, Any]:
+    payload = _safe_dict(dict(row))
+    payload["selected_for_use"] = bool(payload.get("selected_for_use"))
+    payload["metrics"] = _safe_dict(_json_dict(payload.pop("metrics_json", "{}")))
+    return payload
 
 
 def _redact_value(key: str, value: Any) -> Any:

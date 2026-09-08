@@ -188,10 +188,35 @@ The System History export endpoint is backend-built, protected, and does not
 accept file paths, shell commands, SQL snippets, or raw log-file selectors from
 the browser. It exports bounded structured text from existing read models and
 audit stores, marks truncated sections explicitly, and omits Research data
-until factual Research backend history exists. Export sanitization excludes
+unless factual Research backend history exists. Export sanitization excludes
 API keys, API secrets, authorization headers, cookies, session or CSRF tokens,
 `.env` material, raw exchange payloads, and private credentials. Auditing the
 export action records only action/result metadata, not the exported payload.
+
+## Research Safety
+
+Research backend state is non-execution product state unless a separately
+reviewed Research Demo execution bridge is present. Creating Research,
+selecting runs, archiving, and requesting comparison must not submit, cancel,
+amend, or reconcile orders and must not mutate ACTIVE positions or daily-loss
+latches.
+
+Research Demo start fails closed by default. It remains blocked when
+Research-specific exchange isolation is unavailable, when selected rules use
+Dynamic TP, or when selected rules require Daily Loss before isolated Research
+accounting exists. The service must not substitute Fixed TP, borrow ACTIVE
+daily-loss accounting, use production credentials, enable mainnet, or present a
+fake RUNNING Demo state.
+
+Research backtests also fail closed when the pinned Trading Rules Version uses
+semantics the current historical replay engine cannot fully honor. The
+dashboard may submit bounded plan parameters, but not raw candle arrays or
+filesystem paths; replay inputs are backend-owned.
+
+Make Active is not an execution or promotion path in this foundation. A Make
+Active request records a blocked decision with a factual reason and leaves
+ACTIVE Trigger Sets, Trading Rules, positions, orders, and execution state
+unchanged.
 
 ## Futures Accounting Safety
 

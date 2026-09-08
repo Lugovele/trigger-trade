@@ -7,6 +7,7 @@ from triggertrade.persistence import MessageStore, TradingRulesStore
 from triggertrade.persistence.futures_accounting_store import FuturesAccountingStore
 from triggertrade.rules import TradingRulesService
 from triggertrade.persistence.operator_state_store import OperatorStateStore
+from triggertrade.services.research import ResearchService
 from triggertrade.services.system_history import SystemHistoryExporter
 from tests.unit.test_dashboard_read_model import _empty_db, _save_buy_lifecycle
 
@@ -30,6 +31,7 @@ def test_system_history_export_contains_factual_sections_without_research_fabric
         "SETS / TRIGGERS",
         "RULES",
         "INSTRUMENTS",
+        "RESEARCH",
         "RISK / DECISIONS",
         "ERRORS",
     ):
@@ -38,7 +40,8 @@ def test_system_history_export_contains_factual_sections_without_research_fabric
     assert "PAUSE_ENTRIES" in text
     assert "rules_version_id" in text
     assert "triggertrade-futures-core" in text
-    assert "RESEARCH" not in text
+    assert "research: " not in text
+    assert "none_available: true" in text
 
 
 def test_system_history_export_includes_allowlisted_daily_loss_state(tmp_path):
@@ -75,7 +78,37 @@ def test_system_history_export_includes_allowlisted_daily_loss_state(tmp_path):
     assert "baseline_equity=100" in text
     assert "limit_amount=2.00" in text
     assert "raw" not in text
-    assert "RESEARCH" not in text
+    assert "RESEARCH" in text
+
+
+def test_system_history_export_includes_bounded_factual_research(tmp_path):
+    from triggertrade.persistence import MessageStore, ResearchStore, TriggerSetStore, bootstrap_current_trigger_sets
+
+    db = _empty_db(tmp_path)
+    bootstrap_current_trigger_sets(TriggerSetStore(db))
+    config = load_config({"TRIGGERTRADE_RUNTIME_DB_PATH": str(db), "TRIGGERTRADE_WATCHLIST": "BTCUSDT", "TRIGGERTRADE_RUNTIME_SYMBOL": "BTCUSDT"})
+    rules = TradingRulesService(TradingRulesStore(db))
+    current = rules.ensure_initial_version(config)
+    service = ResearchService(
+        store=ResearchStore(db),
+        trigger_set_store=TriggerSetStore(db),
+        trading_rules_store=TradingRulesStore(db),
+        message_store=MessageStore(db),
+    )
+    record = service.create_research(
+        set_id="triggertrade-futures-core",
+        set_version="v1",
+        rules_version_id=current.rules_version_id,
+        created_at="2026-09-08T12:00:00+00:00",
+    )
+
+    text = SystemHistoryExporter(read_model=DashboardReadModel(db)).build_export()
+
+    assert "RESEARCH" in text
+    assert record.research_id in text
+    assert "triggertrade-futures-core" in text
+    assert current.rules_version_id in text
+    assert "Research backend" not in text
 
 
 def test_system_history_export_sanitizes_secret_like_values(tmp_path):
@@ -186,6 +219,10 @@ def test_system_history_export_requests_bounded_registry_and_rules_reads():
 
         def get_rules_catalog_state(self):
             return None
+
+        def list_research_summaries(self, *, limit=None):
+            assert limit == 21
+            return ()
 
         def get_latest_decision(self):
             return None

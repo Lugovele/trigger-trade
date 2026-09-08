@@ -195,9 +195,36 @@ The header Copy action requests a backend-built System History export and then
 copies the returned text to the clipboard. The export is a bounded, sanitized
 technical snapshot for debugging, audit, or AI-assisted analysis. It includes
 available portfolio, operator, Rules, Set/Trigger, execution, risk/decision, and
-error facts, including Daily Loss state when available. It omits fabricated
-Research history and never accepts browser file paths or exposes raw logs,
-request headers, `.env` contents, cookies, tokens, or exchange credentials.
+Research facts, including Daily Loss state when available. It never accepts
+browser file paths or exposes raw logs, request headers, `.env` contents,
+cookies, tokens, or exchange credentials.
+
+## Research Backend
+
+Research is now a backend-owned product entity with persistent records for the
+approved lifecycle:
+
+```text
+Backtest -> Demo -> Compare -> Decision
+```
+
+Each Research record pins an exact Trigger Set identity
+(`set_id + set_version`) and an exact `rules_version_id`; the backend does not
+accept `current`, `latest`, or display-version-only selectors. Backtest runs
+reuse the existing immutable historical replay engine with backend-owned replay
+inputs; the browser cannot submit candle arrays as evidence. Research stores
+only references to the engine run plus bounded metrics in the Research record.
+Raw backtest trades remain in the existing backtest/accounting evidence stores.
+If the pinned Trading Rules Version contains semantics the current replay engine
+cannot fully honor, such as Dynamic TP or isolated Research Daily Loss,
+Research records an unavailable backtest instead of substituting behavior.
+
+Research Demo orchestration is fail-closed in this foundation. Demo start is
+blocked unless Research-specific execution and accounting isolation can be
+positively established. Dynamic TP rules are not substituted with Fixed TP, and
+Rules requiring Daily Loss block Research Demo until isolated Research
+accounting exists. Make Active records a blocked decision request only; no
+Research path promotes Trigger Sets or Rules to ACTIVE.
 
 
 ## Bybit Linear Instrument Catalog
