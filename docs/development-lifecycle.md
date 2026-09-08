@@ -26,6 +26,37 @@ APPROVED_FOR_COMMIT
 
 Tests are evidence. Tests do not replace reviewer approval.
 
+## Security change review
+
+Use `triggertrade_security_change_reviewer` for security-relevant development changes. It participates in the normal review/remediation model and may run in two phases:
+
+- `PRE_CHANGE` before implementation when planning or architecture information is available;
+- `POST_CHANGE` after implementation and validation, against the actual diff/current working tree.
+
+Require it when a change affects exchange API integration, authenticated external APIs, secrets, sensitive environment variables, paper/test/live boundaries, live-mode enablement, execution authority, private exchange/account/order/fill data, risk controls whose failure could permit consequential execution, kill switches, network clients, HTTP/WebSocket/webhook/callback behavior, authentication, authorization, privileged routes, subprocess/shell execution, sensitive filesystem access, logging/diagnostics, persistence of sensitive or execution-critical state, deployment/CI/container/network exposure, TLS/security boundaries, material security dependencies, startup/bootstrap secret loading or live activation, untrusted input reaching consequential operations, unsafe serialization/deserialization, consequential retry/idempotency, or security-control configuration.
+
+Do not require this reviewer for purely cosmetic, documentation-only, or unrelated low-risk changes unless the actual diff crosses a security boundary. `SECURITY_CHANGE_APPROVED` means only that the reviewed change has no unresolved security findings within scope; it does not mean TriggerTrade is secure and does not replace final change review.
+
+## Agent security review
+
+Use `triggertrade_agent_security_reviewer` when a change affects agent `.toml` files, agent instructions, agent registration, orchestrator routing, sandbox/write/network/filesystem/tool permissions, shell permissions, environment or secret access, Git permissions, automations, persistent agent tasks, reviewer/remediation authority, agent-to-agent delegation, prompt/context authority boundaries, untrusted context sources, model-driven consequential actions, or an agent's ability to reach exchange credentials or live execution paths.
+
+The reviewer verifies least privilege, read-only reviewer boundaries, no remediation self-approval, no silent permission widening, no production credential access without explicit need and authorization, preservation of Git policy, and isolation from live trading side effects.
+
+## Application security audit
+
+Use `triggertrade_security_auditor` only for broad repository-level security audit workflows: explicit user request, requested periodic audit, preparation for broader live/deployment exposure, major architecture/security-boundary change, suspected credential leak, security incident, repeated systemic change-level findings, or an orchestrator-identified risk too broad for one diff.
+
+Do not insert the auditor into every ordinary change lifecycle. Audit output is not a substitute for security change review, architecture review, trading-rules review, UX review, or general pre-commit review. Audit status must not directly produce `APPROVED_FOR_COMMIT`; remediation items become scoped changes that go through the applicable normal reviewers.
+
+## Test planning
+
+Use `triggertrade_test_planner` when a change is broad, risky, or has unclear
+validation coverage. It is read-only and may propose focused, adjacent,
+integration, migration, security, or regression tests. Test planning is support
+evidence only: it does not replace architecture, trading-rules, UX, security,
+agent-security, or final change review.
+
 ## Architecture review
 
 Use before implementation when a change affects:
@@ -90,6 +121,10 @@ REMEDIATION_COMPLETE_PENDING_REVIEW
 ```
 
 The same originating reviewer then re-reviews.
+
+This same-originating-reviewer loop applies to architecture, trading-rules, UX, security change, agent-security, and general change findings. Audit-driven remediation must be converted into a scoped normal change; the auditor does not replace the required change-level reviewers.
+
+`APPROVED_FOR_COMMIT` requires approval from every reviewer required by the specific change after any remediation. Tests, security change approval, agent-security approval, UX approval, trading-rules approval, architecture approval, and audit status are not standalone commit approval.
 
 ## Repository-state checks
 

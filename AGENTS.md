@@ -92,6 +92,25 @@ For material runtime changes:
 
 `repository state -> architecture review -> implementation -> focused tests -> adjacent tests -> change review -> remediation -> same-originating-reviewer re-review -> APPROVED_FOR_COMMIT`
 
+Available reviewers:
+
+- `triggertrade_architecture_reviewer`: read-only structure/boundary review; status `NEXT_LAYER_APPROVED`, `ARCHITECTURE_CHANGES_REQUIRED`, or `BLOCKED`.
+- `triggertrade_trading_rules_reviewer`: read-only trading-semantic review for triggers, strategy, sizing, exits, exposure, and execution eligibility; status `TRADING_RULES_APPROVED`, `TRADING_RULE_CHANGES_REQUIRED`, or `TRADING_RULES_BLOCKED`.
+- `triggertrade_ux_reviewer`: read-only UX/fidelity review for frontend or materially user-facing state presentation; status `UX_APPROVED`, `UX_CHANGES_REQUIRED`, or `UX_BLOCKED`.
+- `triggertrade_security_change_reviewer`: read-only per-change application security review when a change touches secrets, authenticated APIs, execution authority, privileged routes, safety controls, network exposure, sensitive persistence/logging, or other security boundaries; status `SECURITY_CHANGE_APPROVED`, `SECURITY_CHANGES_REQUIRED`, or `SECURITY_BLOCKED`.
+- `triggertrade_agent_security_reviewer`: read-only review for agent definitions, routing, permissions, approval boundaries, delegation, automation, and agent access to secrets or live execution paths; status `AGENT_SECURITY_APPROVED`, `AGENT_SECURITY_CHANGES_REQUIRED`, or `AGENT_SECURITY_BLOCKED`.
+- `triggertrade_security_auditor`: read-only broad application-security audit for explicit/periodic/systemic audit workflows; audit status is not commit approval.
+- `triggertrade_change_reviewer`: read-only final pre-commit review; status `APPROVED_FOR_COMMIT`, `CHANGES_REQUIRED`, or `BLOCKED`.
+- `triggertrade_test_planner`: read-only test planning support; never replaces reviewer approval.
+
+`triggertrade_review_remediation_agent` may make scoped fixes for reviewer findings but cannot approve its own work. Every specialist finding returns to the same originating reviewer after remediation. General change review and tests cannot bypass a required specialist approval.
+
 For frontend changes, dashboard changes, or backend changes with material user-facing UX/state-presentation impact, insert `triggertrade_ux_reviewer -> remediation if required -> same triggertrade_ux_reviewer re-review` after validation and before change review. UX review is not required for backend-only changes with no material user-facing effect.
+
+For security-relevant development changes, insert `triggertrade_security_change_reviewer` before implementation when planning evidence is available and again after validation against the actual diff. Use `triggertrade_review_remediation_agent` for findings, then return to the same security change reviewer.
+
+For agent definition, permission, sandbox, routing, automation, delegation, approval-boundary, Git-authority, or agent access-to-secrets/live-execution changes, insert `triggertrade_agent_security_reviewer -> remediation if required -> same triggertrade_agent_security_reviewer re-review`.
+
+Use `triggertrade_security_auditor` only for explicit or periodic broad application-security audits and systemic security concerns. Audit status is not commit approval and does not replace change-level reviewers.
 
 Tests are evidence, not reviewer approval.

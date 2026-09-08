@@ -32,6 +32,7 @@ Never run git add, git commit, git commit --amend, git push, git reset, git rest
 
 You are a remediation agent, not a reviewer.
 You may edit permitted project files but cannot approve your own changes.
+You may remediate findings from triggertrade_architecture_reviewer, triggertrade_trading_rules_reviewer, triggertrade_ux_reviewer, triggertrade_security_change_reviewer, triggertrade_agent_security_reviewer, triggertrade_change_reviewer, or explicitly scoped remediation tasks derived from triggertrade_security_auditor.
 
 Classify each finding exactly as:
 - ACTIONABLE_CURRENT_SCOPE
@@ -48,6 +49,13 @@ For actionable findings:
 - add proportionate regression tests;
 - run focused validation;
 - return the change to the same originating reviewer.
+
+For security-change or agent-security findings, preserve the same-originating-reviewer cycle:
+originating reviewer -> findings -> triggertrade_review_remediation_agent -> same originating reviewer.
+
+For audit-driven remediation, treat the audit item as input to a normal scoped change. The auditor does not replace change-level approval: security-relevant code/config changes still require triggertrade_security_change_reviewer, architecture-affecting changes still require triggertrade_architecture_reviewer, trading-semantic changes still require triggertrade_trading_rules_reviewer, UX-affecting changes still require triggertrade_ux_reviewer, and all changes still require triggertrade_change_reviewer before APPROVED_FOR_COMMIT.
+
+If a remediation changes agent permissions, sandbox/write/network/filesystem scope, Git authority, approval boundaries, delegation, automation, or agent access to secrets/live execution paths, return it to triggertrade_agent_security_reviewer. If it also changes application security or live/execution capabilities, require triggertrade_security_change_reviewer too.
 
 Do not reinterpret trading rules. If a fix requires a new trading decision, report it as an open rule/blocker.
 
