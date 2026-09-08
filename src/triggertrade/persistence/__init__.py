@@ -4,6 +4,7 @@ from .execution_store import ExecutionFill, ExecutionRecord, ExecutionStore
 from .futures_execution_store import FuturesExecutionRecord, FuturesExecutionStore
 from .instrument_catalog_store import InstrumentCatalogStore
 from .futures_position_store import FuturesClosedPositionRecord, FuturesPositionEvent, FuturesPositionRecord, FuturesPositionStore
+from .message_store import MessageRecord, MessageSeverity, MessageStore, MessageStoreError
 from .operator_state_store import OperatorStateStore, OperatorTradingState, TradingState
 from .trading_rules_store import TradingRulesStore
 from .runtime_store import (
@@ -39,6 +40,10 @@ __all__ = [
     "FuturesExecutionRecord",
     "FuturesExecutionStore",
     "InstrumentCatalogStore",
+    "MessageRecord",
+    "MessageSeverity",
+    "MessageStore",
+    "MessageStoreError",
     "FuturesClosedPositionRecord",
     "FuturesPositionEvent",
     "FuturesPositionRecord",

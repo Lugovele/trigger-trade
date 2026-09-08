@@ -15,10 +15,11 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from triggertrade.dashboard.read_model import DashboardReadModel
 from triggertrade.exchanges import BybitDemoClient
-from triggertrade.persistence import InstrumentCatalogStore, OperatorStateStore, TradingRulesStore
+from triggertrade.persistence import InstrumentCatalogStore, MessageStore, MessageStoreError, OperatorStateStore, TradingRulesStore
 from triggertrade.rules import CoinRule, TradingRulesError, TradingRulesService
 from triggertrade.services.bootstrap import ensure_runtime_registry_for_env, merged_runtime_env, runtime_db_path
 from triggertrade.services.instrument_catalog import InstrumentCatalogService
+from triggertrade.services.system_history import SystemHistoryExporter
 
 
 DEFAULT_HOST = "127.0.0.1"
@@ -33,6 +34,7 @@ class DashboardServer(ThreadingHTTPServer):
         *,
         read_model: DashboardReadModel,
         operator_store: OperatorStateStore,
+        message_store: MessageStore,
         trading_rules_service: TradingRulesService,
         instrument_catalog_service: InstrumentCatalogService,
         operator_actions=None,
@@ -40,6 +42,7 @@ class DashboardServer(ThreadingHTTPServer):
         super().__init__(server_address, handler_class)
         self.read_model = read_model
         self.operator_store = operator_store
+        self.message_store = message_store
         self.trading_rules_service = trading_rules_service
         self.instrument_catalog_service = instrument_catalog_service
         self.operator_actions = operator_actions
@@ -68,6 +71,25 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": "trading rules version not found"}, HTTPStatus.NOT_FOUND)
             else:
                 self._send_json(payload)
+            return
+        if parsed.path == "/api/messages":
+            try:
+                messages = [_message_payload(row) for row in self.server.message_store.list_messages(limit=50)]
+                self._send_json(
+                    {
+                        "available": True,
+                        "messages": messages,
+                        "unread_count": self.server.message_store.get_unread_message_count(),
+                    }
+                )
+            except Exception as exc:  # noqa: BLE001 - API returns unavailable instead of fake empty/zero state.
+                self._send_json({"available": False, "error": _safe_public_error(exc)}, HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+        if parsed.path == "/api/messages/unread-count":
+            try:
+                self._send_json({"available": True, "unread_count": self.server.message_store.get_unread_message_count()})
+            except Exception as exc:  # noqa: BLE001 - API returns unavailable instead of fake zero.
+                self._send_json({"available": False, "error": _safe_public_error(exc)}, HTTPStatus.SERVICE_UNAVAILABLE)
             return
         if parsed.path == "/api/instruments/search":
             query = parse_qs(parsed.query).get("q", [""])[0]
@@ -201,6 +223,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
             result = self.server.instrument_catalog_service.refresh_instrument_catalog()
             status = HTTPStatus.OK if result.status == "OK" else HTTPStatus.SERVICE_UNAVAILABLE
+            if result.status != "OK":
+                _record_message(
+                    self.server.message_store,
+                    severity="WARNING",
+                    title="Instrument catalog refresh failed",
+                    body="Instrument catalog refresh did not complete successfully.",
+                    source="local_dashboard",
+                    dedupe_key=f"instrument_refresh:{result.status}",
+                    metadata={"status": result.status, "error": result.error},
+                )
             self._send_json(
                 {
                     "status": result.status,
@@ -213,6 +245,53 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 },
                 status,
             )
+            return
+        if parsed.path == "/api/messages/mark-read":
+            payload = self._read_json_body(max_bytes=4096)
+            token = str(payload.get("token") or "")
+            if token != self.server.operator_control_token:
+                self._send_json({"error": "operator token required"}, HTTPStatus.FORBIDDEN)
+                return
+            raw_ids = payload.get("message_ids")
+            if not isinstance(raw_ids, list) or not all(isinstance(item, str) for item in raw_ids):
+                self._send_json({"error": "message_ids must be a list of ids"}, HTTPStatus.BAD_REQUEST)
+                return
+            try:
+                changed = self.server.message_store.mark_read(raw_ids)
+            except MessageStoreError as exc:
+                self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                return
+            self._send_json({"changed": changed, "unread_count": self.server.message_store.get_unread_message_count()})
+            return
+        if parsed.path == "/api/system-history/export":
+            payload = self._read_json_body(max_bytes=2048)
+            token = str(payload.get("token") or "")
+            if token != self.server.operator_control_token:
+                self._send_json({"error": "operator token required"}, HTTPStatus.FORBIDDEN)
+                return
+            try:
+                text = SystemHistoryExporter(
+                    read_model=self.server.read_model,
+                    operator_store=self.server.operator_store,
+                    message_store=self.server.message_store,
+                ).build_export()
+                self.server.operator_store.record_operator_action(
+                    action="SYSTEM_HISTORY_EXPORTED",
+                    target="CLIPBOARD",
+                    result="SUCCESS",
+                    source="local_dashboard",
+                )
+                self._send_json({"format": "text/plain", "text": text})
+            except Exception as exc:  # noqa: BLE001 - export failures are surfaced and audited without leaking payloads.
+                error = _safe_public_error(exc)
+                self.server.operator_store.record_operator_action(
+                    action="SYSTEM_HISTORY_EXPORTED",
+                    target="CLIPBOARD",
+                    result="FAILED",
+                    source="local_dashboard",
+                    error=error,
+                )
+                self._send_json({"error": error}, HTTPStatus.SERVICE_UNAVAILABLE)
             return
         if parsed.path in {"/operator/pause", "/operator/resume", "/operator/close-one", "/operator/close-all"}:
             length = int(self.headers.get("Content-Length", "0") or "0")
@@ -232,6 +311,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     result="SUCCESS",
                     source="local_dashboard",
                 )
+                _record_message(
+                    self.server.message_store,
+                    severity="ATTENTION",
+                    title="New entries paused",
+                    body="New entries were paused from the dashboard. Existing positions remain active.",
+                    source="local_dashboard",
+                    dedupe_key="operator:PAUSE_ENTRIES:ACTIVE",
+                )
             elif parsed.path.endswith("/resume"):
                 self.server.operator_store.resume(reason="confirmed local Resume")
                 self.server.operator_store.record_operator_action(
@@ -239,6 +326,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     target="ACTIVE",
                     result="SUCCESS",
                     source="local_dashboard",
+                )
+                _record_message(
+                    self.server.message_store,
+                    severity="INFO",
+                    title="New entries resumed",
+                    body="New entries were resumed from the dashboard.",
+                    source="local_dashboard",
+                    dedupe_key="operator:RESUME_ENTRIES:ACTIVE",
                 )
             elif parsed.path.endswith("/close-one"):
                 position_id = values.get("position_id", [""])[0][:160]
@@ -256,6 +351,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         source="local_dashboard",
                         error=error,
                     )
+                    _record_message(
+                        self.server.message_store,
+                        severity="ERROR",
+                        title="Close One failed",
+                        body="Close One could not run because no execution bridge is attached.",
+                        source="local_dashboard",
+                        entity_type="position",
+                        entity_id=position_id,
+                        dedupe_key=f"operator:CLOSE_ONE:FAILED:{position_id}",
+                    )
                     self._send_html(render_not_found(error), HTTPStatus.SERVICE_UNAVAILABLE)
                     return
                 try:
@@ -268,6 +373,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         result="FAILED",
                         source="local_dashboard",
                         error=error,
+                    )
+                    _record_message(
+                        self.server.message_store,
+                        severity="ERROR",
+                        title="Close One failed",
+                        body="Close One failed from the dashboard.",
+                        source="local_dashboard",
+                        entity_type="position",
+                        entity_id=position_id,
+                        dedupe_key=f"operator:CLOSE_ONE:FAILED:{position_id}:{error[:80]}",
                     )
                     self._send_html(render_not_found(error), HTTPStatus.SERVICE_UNAVAILABLE)
                     return
@@ -296,6 +411,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         source="local_dashboard",
                         error=error,
                     )
+                    _record_message(
+                        self.server.message_store,
+                        severity="ERROR",
+                        title="Close All failed",
+                        body="Close All could not run because no execution bridge is attached.",
+                        source="local_dashboard",
+                        dedupe_key="operator:CLOSE_ALL:FAILED:no_bridge",
+                    )
                     self._send_html(render_not_found(error), HTTPStatus.SERVICE_UNAVAILABLE)
                     return
                 try:
@@ -308,6 +431,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         result="FAILED",
                         source="local_dashboard",
                         error=error,
+                    )
+                    _record_message(
+                        self.server.message_store,
+                        severity="ERROR",
+                        title="Close All failed",
+                        body="Close All failed from the dashboard.",
+                        source="local_dashboard",
+                        dedupe_key=f"operator:CLOSE_ALL:FAILED:{error[:80]}",
                     )
                     self._send_html(render_not_found(error), HTTPStatus.SERVICE_UNAVAILABLE)
                     return
@@ -410,6 +541,7 @@ def render_dashboard(
         "catalog": _catalog_state_payload(read_model),
         "coins": read_model.search_rules_catalog_coins(),
     }
+    messages = _messages_payload_from_model(read_model)
     return render_product_dashboard(
         initial_page=initial_page,
         operator_state=operator_state,
@@ -417,6 +549,7 @@ def render_dashboard(
         portfolio=portfolio,
         registry=registry,
         rules=rules,
+        messages=messages,
     )
 
 
@@ -449,6 +582,7 @@ def create_server(
         DashboardHandler,
         read_model=read_model,
         operator_store=OperatorStateStore(db_path),
+        message_store=MessageStore(db_path),
         trading_rules_service=rules_service,
         instrument_catalog_service=catalog_service,
         operator_actions=operator_actions,
@@ -469,6 +603,46 @@ def _close_all_positions(operator_actions):
         return operator_actions.close_all_positions(scope="ACTIVE")
     except TypeError:
         return operator_actions.close_all_positions()
+
+
+def _message_payload(row) -> dict[str, object]:
+    return {
+        "message_id": row.message_id,
+        "created_at": row.created_at,
+        "time": row.created_at,
+        "type": row.type,
+        "severity": row.severity.value,
+        "title": row.title,
+        "body": row.body,
+        "source": row.source,
+        "entity_type": row.entity_type,
+        "entity_id": row.entity_id,
+        "is_read": row.is_read,
+        "read_at": row.read_at,
+        "metadata": row.metadata,
+    }
+
+
+def _messages_payload_from_model(read_model: DashboardReadModel) -> dict[str, object]:
+    db_path = getattr(read_model, "db_path", None) or getattr(read_model, "_db_path", None) or getattr(read_model, "path", None)
+    if db_path is None:
+        return {"available": False, "messages": (), "unread_count": None, "error": "message store unavailable"}
+    try:
+        store = MessageStore(db_path)
+        return {
+            "available": True,
+            "messages": tuple(_message_payload(row) for row in store.list_messages(limit=50)),
+            "unread_count": store.get_unread_message_count(),
+        }
+    except Exception as exc:  # noqa: BLE001 - UI must show unavailable, not fake empty state.
+        return {"available": False, "messages": (), "unread_count": None, "error": _safe_public_error(exc)}
+
+
+def _record_message(store: MessageStore, **kwargs) -> None:
+    try:
+        store.create_message(**kwargs)
+    except Exception:  # noqa: BLE001 - message persistence must not change operator action results.
+        return
 
 
 def create_server_from_env(

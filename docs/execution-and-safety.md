@@ -176,6 +176,23 @@ Catalog refresh failures preserve the last valid cache. If no valid catalog exis
 
 The dashboard catalog refresh button calls the backend catalog service only. The browser receives normalized public catalog state and tradeable symbols, not Bybit URLs, credentials, request headers, or raw private data.
 
+## Messages and History Export Safety
+
+Dashboard Messages are persisted separately from raw runtime logs. They are
+short user-facing operational facts with stable ids and bounded reads. Read
+state updates require the protected local dashboard token, reject malformed or
+unknown ids, and do not call trading, execution, reconciliation, exchange, or
+configuration-changing code.
+
+The System History export endpoint is backend-built, protected, and does not
+accept file paths, shell commands, SQL snippets, or raw log-file selectors from
+the browser. It exports bounded structured text from existing read models and
+audit stores, marks truncated sections explicitly, and omits Research data
+until factual Research backend history exists. Export sanitization excludes
+API keys, API secrets, authorization headers, cookies, session or CSRF tokens,
+`.env` material, raw exchange payloads, and private credentials. Auditing the
+export action records only action/result metadata, not the exported payload.
+
 ## Futures Accounting Safety
 
 Futures accounting consumes explicit execution/fill/funding/equity facts and

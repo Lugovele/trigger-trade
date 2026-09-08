@@ -106,10 +106,16 @@ class TradingRulesStore:
             ).fetchone()
         return None if row is None else _row_to_version(row, current_id)
 
-    def list_versions(self) -> tuple[TradingRulesVersion, ...]:
+    def list_versions(self, *, limit: int | None = None) -> tuple[TradingRulesVersion, ...]:
+        safe_limit = None if limit is None else max(1, min(int(limit), 500))
+        limit_clause = "" if safe_limit is None else " LIMIT ?"
+        params = () if safe_limit is None else (safe_limit,)
         with self._connect() as conn:
             current_id = self._current_id(conn)
-            rows = conn.execute("SELECT * FROM trading_rules_versions ORDER BY version_number DESC, created_at DESC").fetchall()
+            rows = conn.execute(
+                f"SELECT * FROM trading_rules_versions ORDER BY version_number DESC, created_at DESC{limit_clause}",
+                params,
+            ).fetchall()
         return tuple(_row_to_version(row, current_id) for row in rows)
 
     def record_usage(self, usage: TradingRulesUsage) -> bool:

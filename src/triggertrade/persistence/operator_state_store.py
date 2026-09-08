@@ -133,14 +133,19 @@ class OperatorStateStore:
             )
         return OperatorActionAudit(action, changed_at, target, result, source, error)
 
-    def operator_action_rows(self) -> tuple[OperatorActionAudit, ...]:
+    def operator_action_rows(self, *, limit: int | None = None) -> tuple[OperatorActionAudit, ...]:
+        safe_limit = None if limit is None else max(1, min(int(limit), 500))
+        limit_clause = "" if safe_limit is None else " LIMIT ?"
+        params = () if safe_limit is None else (safe_limit,)
         with self._connect() as conn:
             rows = conn.execute(
-                """
+                f"""
                 SELECT changed_at, action, target, result, source, error
                 FROM operator_action_audit
                 ORDER BY changed_at DESC, id DESC
-                """
+                {limit_clause}
+                """,
+                params,
             ).fetchall()
         return tuple(
             OperatorActionAudit(

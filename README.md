@@ -174,6 +174,22 @@ The shared bootstrap creates one factual `v1` from the existing futures runtime 
 
 The local dashboard Rules page is wired to this backend registry. It reads the exact current version, lists factual history, opens immutable historical detail, and saves changes only through the protected backend `Save as New Version` contract with stale edit detection. Coin search and catalog refresh go through the backend Bybit linear instrument catalog; the browser never calls Bybit or the database directly.
 
+## Messages and System History
+
+Dashboard Messages are persisted user-facing operational messages, separate
+from raw technical logs. They survive restart, use stable message ids, expose a
+factual unread count, and persist read/unread state. Opening the Messages page
+loads backend rows and marks the visible unread messages read through a
+protected non-trading backend write contract.
+
+The header Copy action requests a backend-built System History export and then
+copies the returned text to the clipboard. The export is a bounded, sanitized
+technical snapshot for debugging, audit, or AI-assisted analysis. It includes
+available portfolio, operator, Rules, Set/Trigger, execution, risk/decision, and
+error facts, omits fabricated Research history, and never accepts browser file
+paths or exposes raw logs, request headers, `.env` contents, cookies, tokens, or
+exchange credentials.
+
 
 ## Bybit Linear Instrument Catalog
 

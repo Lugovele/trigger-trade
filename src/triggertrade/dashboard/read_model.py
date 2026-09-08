@@ -839,9 +839,12 @@ class DashboardReadModel:
     def get_test_overview(self) -> OverviewView:
         return self._overview("TEST")
 
-    def list_set_summaries(self) -> tuple[SetSummaryView, ...]:
+    def list_set_summaries(self, *, limit: int | None = None) -> tuple[SetSummaryView, ...]:
         if not self.db_path.exists():
             return ()
+        safe_limit = None if limit is None else max(1, min(int(limit), 500))
+        limit_clause = "" if safe_limit is None else " LIMIT ?"
+        params = () if safe_limit is None else (safe_limit,)
         try:
             with self._connect() as conn:
                 if not _registry_tables_present(conn):
@@ -863,7 +866,8 @@ class DashboardReadModel:
                       created_at DESC,
                       set_id,
                       version
-                    """
+                    """ + limit_clause,
+                    params,
                 ).fetchall()
                 return tuple(
                     SetSummaryView(
@@ -884,9 +888,12 @@ class DashboardReadModel:
         except sqlite3.Error:
             return ()
 
-    def list_trigger_catalog(self) -> tuple[TriggerCatalogRow, ...]:
+    def list_trigger_catalog(self, *, limit: int | None = None) -> tuple[TriggerCatalogRow, ...]:
         if not self.db_path.exists():
             return ()
+        safe_limit = None if limit is None else max(1, min(int(limit), 500))
+        limit_clause = "" if safe_limit is None else " LIMIT ?"
+        params = () if safe_limit is None else (safe_limit,)
         try:
             with self._connect() as conn:
                 if not _registry_tables_present(conn):
@@ -897,7 +904,8 @@ class DashboardReadModel:
                     FROM rule_definitions
                     WHERE rule_type = 'trigger'
                     ORDER BY rule_id, version
-                    """
+                    """ + limit_clause,
+                    params,
                 ).fetchall()
                 return tuple(
                     TriggerCatalogRow(
@@ -983,12 +991,12 @@ class DashboardReadModel:
             return None
         return _rules_version_payload(current, _rules_used_in(current, self.db_path))
 
-    def list_rules_version_payloads(self) -> tuple[dict[str, Any], ...]:
+    def list_rules_version_payloads(self, *, limit: int | None = None) -> tuple[dict[str, Any], ...]:
         if not self.db_path.exists():
             return ()
         try:
             store = TradingRulesStore(self.db_path)
-            versions = store.list_versions()
+            versions = store.list_versions(limit=limit)
         except Exception:
             return ()
         return tuple(_rules_version_summary_payload(version, _rules_used_in(version, self.db_path)) for version in versions)

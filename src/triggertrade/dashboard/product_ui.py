@@ -815,6 +815,138 @@ def _rules_used_in_label(used_in: Any) -> str:
     return "; ".join(labels) if labels else "-"
 
 
+def _messages_section_html(messages: dict[str, Any] | None) -> str:
+    payload = messages or {"available": False, "messages": (), "unread_count": None}
+    rows = payload.get("messages") or ()
+    if not payload.get("available", False):
+        body = '<tr><td colspan="4" class="placeholder">Messages unavailable.</td></tr>'
+    elif not rows:
+        body = '<tr><td colspan="4" class="placeholder">No messages.</td></tr>'
+    else:
+        body = "".join(
+            "<tr"
+            + ("" if row.get("is_read") else ' class="unread-message"')
+            + f' data-message-id="{_h(row.get("message_id"))}">'
+            + f"<td>{_h(_display_time(row.get('created_at')))}</td>"
+            + f"<td><div class=\"coin\">{_h(row.get('title') or row.get('body'))}</div><div class=\"meta\">{_h(row.get('body'))}</div></td>"
+            + f"<td><span class=\"badge {_message_badge_class(row.get('severity'))}\">{_h(row.get('severity'))}</span></td>"
+            + f"<td>{_h('Read' if row.get('is_read') else 'Unread')}</td></tr>"
+            for row in rows
+        )
+    return (
+        '<section class="page" id="messages">\n'
+        '  <div class="panel">\n'
+        '    <div class="panelhead"><div><div class="title">Messages</div>'
+        '<div class="meta">User-facing operational messages from the backend.</div></div>'
+        '<div class="meta" id="messagesState">Backend messages</div></div>\n'
+        '    <div class="tablewrap">\n'
+        '      <table>\n'
+        '        <thead><tr><th>Time</th><th>Message</th><th>Type</th><th>State</th></tr></thead>\n'
+        f'        <tbody id="messagesBody">{body}</tbody>\n'
+        "      </table>\n"
+        "    </div>\n"
+        "  </div>\n"
+        "</section>\n"
+    )
+
+
+def _messages_wiring_script(messages: dict[str, Any] | None, token: str) -> str:
+    payload = json.dumps(_safe_payload(messages or {"available": False, "messages": (), "unread_count": None}), ensure_ascii=False).replace("</", "<\\/")
+    token_json = json.dumps(token)
+    return f"""
+<script id="triggertrade-messages-history-read-model">
+(function(){{
+  const initial = {payload};
+  const token = {token_json};
+  let messagesState = initial;
+  const badge = document.getElementById("messageUnreadBadge");
+  const body = document.getElementById("messagesBody");
+  const state = document.getElementById("messagesState");
+  function html(v){{ return String(v ?? "").replace(/[&<>"']/g, ch => ({{"&":"&amp;","<":"&lt;",">":"&gt;","\\\"":"&quot;","'":"&#39;"}}[ch])); }}
+  function badgeClass(severity){{ const s=String(severity||"").toUpperCase(); if(s==="ERROR")return"red"; if(s==="WARNING"||s==="ATTENTION")return"amber"; return"blue"; }}
+  function renderBadge(count, available=true){{
+    if(!badge)return;
+    if(!available){{ badge.textContent="!"; badge.style.display="inline-block"; return; }}
+    const value=Number(count||0);
+    if(value>0){{ badge.textContent=String(value); badge.style.display="inline-block"; }}
+    else {{ badge.textContent=""; badge.style.display="none"; }}
+  }}
+  function renderMessages(data){{
+    messagesState=data;
+    renderBadge(data.unread_count, data.available !== false);
+    if(state)state.textContent=data.available===false ? "Unavailable" : `${{(data.messages||[]).length}} shown`;
+    if(!body)return;
+    if(data.available===false){{ body.innerHTML='<tr><td colspan="4" class="placeholder">Messages unavailable.</td></tr>'; return; }}
+    const rows=data.messages||[];
+    if(!rows.length){{ body.innerHTML='<tr><td colspan="4" class="placeholder">No messages.</td></tr>'; return; }}
+    body.innerHTML=rows.map(m=>`<tr data-message-id="${{html(m.message_id)}}" class="${{m.is_read ? "" : "unread-message"}}"><td>${{html(m.time || m.created_at || "-")}}</td><td><div class="coin">${{html(m.title || m.body)}}</div><div class="meta">${{html(m.body)}}</div></td><td><span class="badge ${{badgeClass(m.severity)}}">${{html(m.severity || m.type)}}</span></td><td>${{m.is_read ? "Read" : "Unread"}}</td></tr>`).join("");
+  }}
+  async function refreshUnread(){{
+    const res=await fetch("/api/messages/unread-count");
+    const data=await res.json();
+    renderBadge(data.unread_count, res.ok && data.available !== false);
+  }}
+  async function loadMessages(){{
+    const res=await fetch("/api/messages");
+    const data=await res.json();
+    if(!res.ok){{ renderMessages({{available:false,messages:[],unread_count:null,error:data.error}}); return; }}
+    renderMessages(data);
+    const unread=(data.messages||[]).filter(m=>!m.is_read).map(m=>m.message_id);
+    if(unread.length){{
+      const mark=await fetch("/api/messages/mark-read", {{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{token,message_ids:unread}})}});
+      if(mark.ok){{ const result=await mark.json(); renderBadge(result.unread_count, true); }}
+    }}
+  }}
+  const baseShowPage=window.showPage;
+  function feedback(text){{
+    let node=document.getElementById("systemHistoryCopyState");
+    if(!node){{ node=document.createElement("span"); node.id="systemHistoryCopyState"; node.className="meta"; document.querySelector(".actions")?.appendChild(node); }}
+    node.textContent=text;
+    setTimeout(()=>{{ if(node.textContent===text)node.textContent=""; }}, 2600);
+  }}
+  window.openMessages = async function(){{
+    if(typeof baseShowPage === "function") baseShowPage("messages");
+    try{{ await loadMessages(); }}catch(e){{ renderMessages({{available:false,messages:[],unread_count:null,error:"unavailable"}}); }}
+  }};
+  window.copySystemHistory = async function(){{
+    try{{
+      const res=await fetch("/api/system-history/export", {{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{token}})}});
+      const data=await res.json();
+      if(!res.ok || !data.text){{ feedback("History unavailable"); return; }}
+      await navigator.clipboard.writeText(data.text);
+      feedback("Copied");
+    }}catch(e){{ feedback("Copy failed"); }}
+  }};
+  if(baseShowPage){{
+    window.showPage=function(id){{ if(id==="messages"){{ window.openMessages(); return; }} baseShowPage(id); }};
+  }}
+  renderMessages(initial);
+}})();
+</script>
+"""
+
+
+def _strip_messages_fixtures(html: str, messages: dict[str, Any] | None) -> str:
+    html = html.replace('<span class="message-count" aria-hidden="true">+2</span>', '<span class="message-count" id="messageUnreadBadge" aria-hidden="true" style="display:none"></span>', 1)
+    html = html.replace('title="Copy logs" aria-label="Copy logs"', 'title="Copy system history" aria-label="Copy system history"', 1)
+    html = html.replace('onclick="copySystemHistory()">⧉</button>', 'onclick="copySystemHistory()" data-export-contract="TriggerTrade system history export">⧉</button>', 1)
+    return _replace_between(html, '<section class="page" id="messages">', '<div class="modalbg" id="newResearchModal">', _messages_section_html(messages) + "\n")
+
+
+def _message_badge_class(value: Any) -> str:
+    severity = str(value or "").upper()
+    if severity == "ERROR":
+        return "red"
+    if severity in {"WARNING", "ATTENTION"}:
+        return "amber"
+    return "blue"
+
+
+def _display_time(value: Any) -> str:
+    text = str(value or "-")
+    return text[11:16] if len(text) >= 16 and "T" in text else text
+
+
 def _replace_between(html: str, start_marker: str, end_marker: str, replacement: str) -> str:
     start = html.find(start_marker)
     end = html.find(end_marker, start + len(start_marker)) if start >= 0 else -1
@@ -836,6 +968,7 @@ def render_product_dashboard(
     portfolio: dict[str, Any] | None = None,
     registry: dict[str, Any] | None = None,
     rules: dict[str, Any] | None = None,
+    messages: dict[str, Any] | None = None,
 ) -> str:
     page = initial_page if initial_page in _ALLOWED_PAGES else "portfolio"
     startup = ["window.showPage && window.showPage(" + json.dumps(page) + ");"]
@@ -857,6 +990,7 @@ def render_product_dashboard(
         html = _strip_registry_fixtures(html, registry)
     if rules is not None:
         html = _strip_rules_fixtures(html, rules)
+    html = _strip_messages_fixtures(html, messages)
     html = html.replace(
         ".placeholder{padding:50px 20px;text-align:center;color:var(--muted);font-size:11px}",
         ".placeholder{padding:50px 20px;text-align:center;color:var(--muted);font-size:11px}\n"
@@ -873,6 +1007,7 @@ def render_product_dashboard(
         + _portfolio_wiring_script(portfolio)
         + _registry_wiring_script(registry)
         + _rules_wiring_script(rules, operator_control_token)
+        + _messages_wiring_script(messages, operator_control_token)
     )
     return html.replace(marker, script + marker)
 

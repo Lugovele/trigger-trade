@@ -1,6 +1,7 @@
 ﻿from triggertrade.dashboard.__main__ import render_dashboard
 from triggertrade.dashboard.product_ui import render_product_dashboard
 from triggertrade.dashboard.read_model import DashboardReadModel
+from triggertrade.persistence import MessageStore
 from tests.unit.test_dashboard_read_model import _empty_db
 
 
@@ -16,7 +17,7 @@ def test_dashboard_uses_approved_product_shell_and_nav(tmp_path):
     assert '>TriggerTrade<' in html
     assert 'class="message-count"' in html
     assert 'title="Messages"' in html
-    assert 'title="Copy logs"' in html
+    assert 'title="Copy system history"' in html
     assert 'title="Settings"' in html
     assert 'class="tabsbar"' in html
     assert 'data-page="portfolio"' in html
@@ -225,14 +226,26 @@ def test_research_pages_modal_runs_compare_and_decision_match_target(tmp_path):
 
 
 def test_messages_copy_and_mobile_structure_are_present(tmp_path):
-    html = _html(tmp_path, initial_page="messages")
+    db = _empty_db(tmp_path)
+    MessageStore(db).create_message(
+        severity="ATTENTION",
+        title="New entries paused",
+        body="New entries were paused from the dashboard.",
+        source="unit",
+        created_at="2026-09-08T10:00:00+00:00",
+    )
+    html = render_dashboard(DashboardReadModel(db), initial_page="messages")
 
     assert 'id="messages"' in html
     assert 'Messages' in html
     assert 'openMessages' in html
-    assert 'openMessages' in html
     assert 'copySystemHistory' in html
+    assert '/api/system-history/export' in html
+    assert '/api/messages/mark-read' in html
     assert 'TriggerTrade system history export' in html
+    assert 'New entries paused' in html
+    assert 'BTCUSDT is approaching its configured Stop Loss level.' not in html
+    assert 'No critical account issues detected.' not in html
     assert '@media(max-width:760px)' in html
     assert '@media(max-width:620px)' in html
     assert '.tablewrap{overflow:auto}' in html

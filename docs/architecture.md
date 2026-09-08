@@ -107,6 +107,19 @@ Signals, decisions, orders, fills, positions, and rule/config versions needed fo
 ### `dashboard/`
 Read-oriented monitoring surface. It must not become a second trading engine.
 
+Messages are a dashboard-facing operational read model, not a raw log viewer.
+They live in their own persistence table with stable ids, explicit
+INFO/ATTENTION/WARNING/ERROR vocabulary, deterministic newest-first listing,
+and persisted read/unread state. Opening the Messages surface may mark the
+currently returned unread rows read through a protected backend write that has
+no trading or execution side effects.
+
+System History export is a separate backend-owned technical snapshot for later
+debugging, audit, or AI-assisted analysis. The browser must request the export
+from the backend and copy the returned sanitized text; it must not assemble the
+history from DOM state, read files directly, pass arbitrary paths, or expose a
+raw logs page.
+
 ## Dependency direction
 
 Preferred:
@@ -194,6 +207,15 @@ rather than silently collapsed to one winner. Legacy or incomplete registry
 metadata is surfaced as unavailable/unknown, not replaced by dashboard
 fixtures. Used Trigger Versions remain immutable/read-only and the dashboard
 does not expose edit APIs.
+
+Messages and System History consume existing runtime/read-model facts. Message
+producers are limited to meaningful factual operational events, such as
+operator control results or backend service failures; they must not synthesize
+price monitoring or Research events where the backend has no support. Repeated
+equivalent events may use a dedupe key to avoid flooding user-facing storage.
+System History uses deterministic sections, bounded row counts, explicit
+truncation markers, and allowlist-style field selection from existing stores
+and read models.
 
 The registry is code-first. New Trigger Versions and Set Versions are introduced
 through reviewed code, not UI CRUD. Re-registering an existing exact
