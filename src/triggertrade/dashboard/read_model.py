@@ -630,6 +630,47 @@ class DashboardReadModel:
             error=row["error"],
         )
 
+    def list_runtime_recovery_events(self, limit: int = 20) -> tuple[dict[str, str | None], ...]:
+        if not self.db_path.exists():
+            return ()
+        safe_limit = max(1, min(int(limit), 50))
+        try:
+            with self._connect() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT lane, symbol, timeframe, candle_id, candle_open_time,
+                           trigger_set_id, trigger_set_version, status,
+                           processed_at, error
+                    FROM runtime_lane_lifecycles
+                    WHERE status = 'stale_entry_suppressed'
+                       OR error LIKE 'recovery_%'
+                    ORDER BY COALESCE(processed_at, candle_open_time) DESC, candle_id DESC
+                    LIMIT ?
+                    """,
+                    (safe_limit,),
+                ).fetchall()
+        except sqlite3.Error:
+            rows = ()
+        events = [_safe_dict(dict(row)) for row in rows]
+        try:
+            with self._connect() as conn:
+                message_rows = conn.execute(
+                    """
+                    SELECT created_at, severity, title, body, source,
+                           entity_type, entity_id
+                    FROM user_messages
+                    WHERE source = 'futures_runtime'
+                      AND entity_type = 'runtime_checkpoint'
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                    """,
+                    (safe_limit,),
+                ).fetchall()
+        except sqlite3.Error:
+            message_rows = ()
+        events.extend(_safe_dict(dict(row)) for row in message_rows)
+        return tuple(events[:safe_limit])
+
     def get_demo_readiness(self) -> DemoReadinessView:
         if not self.db_path.exists():
             return DemoReadinessView(
@@ -2975,6 +3016,7 @@ def _futures_lane_status_is_success(status: str, error: str | None) -> bool:
         "test_simulated",
         "completed",
         "active_execution_paused",
+        "stale_entry_suppressed",
     }
 
 

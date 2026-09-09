@@ -93,6 +93,21 @@ On restart:
 4. mark uncertain state explicitly;
 5. resume new trading only when critical state is consistent.
 
+For Bybit Demo linear futures, completed-candle checkpoint recovery is explicit.
+The ACTIVE lane loads its persisted `runtime_lane_state` checkpoint and expects
+the next completed 1m candle to be contiguous. If the normal recent-candle
+window cannot prove continuity, the runtime fetches bounded historical linear
+klines, validates every missing completed candle in order, and replays them
+oldest to newest through the approved trigger/rules evidence path. Historical
+recovery is not permission to open a stale trade: entry opportunities from
+missed candles are persisted as `stale_entry_suppressed`, while normal
+execution resumes from the next fresh completed candle after recovery catches
+up. The checkpoint is advanced only after the recovered candle lifecycle row is
+persisted, so a crash during recovery resumes at the first uncommitted candle.
+Missing candles, conflicting duplicates, out-of-order pages, oversized gaps, or
+checkpoints ahead of exchange evidence fail closed and keep readiness degraded
+or blocked.
+
 ## Paper/live parity
 
 Paper mode should exercise the same trigger, strategy, risk, intent, persistence, and UI paths.
@@ -230,6 +245,11 @@ Heartbeat rows are persisted by stable component id. A new observation replaces
 the previous heartbeat for that component and stores only bounded diagnostic
 metadata. Unknown status values and path-like component ids are rejected. A
 missing or stale heartbeat is degraded/unavailable evidence, not success.
+During checkpoint recovery the runtime heartbeat remains non-green until the
+gap is either fully recovered or explicitly fails. After successful recovery,
+the runtime refreshes the ACTIVE account snapshot through the existing
+signal-independent account path so Portfolio freshness does not wait for a new
+signal.
 
 The optional Demo soak harness is explicit opt-in through
 `RUN_TRIGGERTRADE_DEMO_SOAK=1`. It runs bounded cycles only against Bybit Demo

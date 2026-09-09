@@ -213,6 +213,17 @@ restart can recover the latest known liveness state without accumulating an
 unbounded log stream. System History includes the readiness rollup and bounded
 heartbeat rows for later diagnosis.
 
+On futures runtime restart, the ACTIVE lane checkpoint is the source of truth
+for completed-candle continuity. If recent Bybit Demo candles no longer include
+the next expected candle, the runtime uses bounded historical linear kline
+backfill, validates that every completed 1m candle from checkpoint+1 through
+the latest completed candle is present, then replays them oldest to newest.
+Recovered historical signals are recorded as recovery evidence but cannot place
+late entry orders; normal execution resumes only after the checkpoint catches
+up to fresh completed candles. Missing, conflicting, out-of-order, oversized,
+or checkpoint-ahead data leaves readiness degraded/blocked instead of silently
+skipping candles.
+
 The futures runtime refreshes the ACTIVE Bybit Demo account snapshot once per
 normal completed-candle cycle, before signal evaluation. This keeps Portfolio
 `Total`, `Available`, `Unrealized P&L`, and account freshness factual during

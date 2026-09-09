@@ -137,6 +137,20 @@ one latest heartbeat row with an allowlisted status and bounded metadata, so
 restart can recover the latest known liveness signal without converting
 heartbeats into an unbounded technical log stream.
 
+The futures runtime treats `runtime_lane_state` as the monotonic checkpoint for
+each lane, symbol, timeframe, and Trigger Set Version. `runtime_lane_lifecycles`
+is the corresponding audit/readiness evidence. If restart detects that the next
+expected completed candle is no longer in the recent market-data window, the
+runtime performs bounded Bybit Demo linear historical backfill, validates
+complete 1m continuity from the persisted checkpoint through the latest
+completed candle, and processes the recovered candles oldest to newest. The
+checkpoint advances only after the lane lifecycle for that candle is persisted,
+so restart after partial recovery resumes from the last committed candle.
+Recovered historical entry opportunities are recorded as
+`stale_entry_suppressed` and do not submit late orders; fresh trading resumes
+only after continuity is restored. Missing, conflicting, out-of-order,
+oversized, or checkpoint-ahead data fails closed and keeps readiness non-green.
+
 Research follows `Backtest -> Demo -> Compare -> Decision`. It is separate
 from the older runtime evidence lanes. Backtests reference immutable
 historical replay runs from backend-owned replay inputs, never browser-supplied

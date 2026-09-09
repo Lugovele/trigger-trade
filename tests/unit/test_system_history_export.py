@@ -3,7 +3,7 @@ from decimal import Decimal
 from triggertrade.accounting import EquitySnapshot
 from triggertrade.dashboard.read_model import DashboardReadModel
 from triggertrade.config import load_config
-from triggertrade.persistence import MessageStore, TradingRulesStore
+from triggertrade.persistence import LaneCandleLifecycle, MessageStore, RuntimeStore, TradingRulesStore
 from triggertrade.persistence.futures_accounting_store import FuturesAccountingStore
 from triggertrade.rules import TradingRulesService
 from triggertrade.persistence.operator_state_store import OperatorStateStore
@@ -112,6 +112,41 @@ def test_system_history_export_includes_bounded_factual_research(tmp_path):
     assert "source_research_id" in text
     assert current.rules_version_id in text
     assert "Research backend" not in text
+
+
+def test_system_history_export_includes_checkpoint_recovery_evidence(tmp_path):
+    db = _empty_db(tmp_path)
+    MessageStore(db).create_message(
+        severity="INFO",
+        title="Runtime checkpoint recovery completed",
+        body="Futures runtime recovered 5 completed candle(s).",
+        source="futures_runtime",
+        entity_type="runtime_checkpoint",
+        entity_id="triggertrade-futures-core:v1",
+        dedupe_key="checkpoint-recovery-completed:unit",
+        created_at="2026-09-08T12:06:00+00:00",
+    )
+    RuntimeStore(db).save_lane_lifecycle(
+        LaneCandleLifecycle(
+            lane="ACTIVE",
+            symbol="BTCUSDT",
+            timeframe="1m",
+            candle_id="BTCUSDT:1m:2026-09-08T12:04:00+00:00",
+            candle_open_time="2026-09-08T12:04:00+00:00",
+            trigger_set_id="triggertrade-futures-core",
+            trigger_set_version="v1",
+            status="stale_entry_suppressed",
+            processed_at="2026-09-08T12:05:01+00:00",
+            error="recovery_backfill_no_stale_execution",
+        )
+    )
+
+    text = SystemHistoryExporter(read_model=DashboardReadModel(db)).build_export()
+
+    assert "runtime_recovery:" in text
+    assert "stale_entry_suppressed" in text
+    assert "recovery_backfill_no_stale_execution" in text
+    assert "Runtime checkpoint recovery completed" in text
 
 
 def test_system_history_export_sanitizes_secret_like_values(tmp_path):
