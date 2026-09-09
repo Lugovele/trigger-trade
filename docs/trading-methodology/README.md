@@ -46,6 +46,9 @@ A rule may move to `REJECTED` at any stage.
 
 - `data/` — authoritative raw-data universe and normalization contract on which
   future metrics, regimes, setups, triggers, and Trading Rule Sets depend.
+- `metrics/` — authoritative derived-variable vocabulary used by future
+  market-state models, conditions, research hypotheses, triggers, Trading Rule
+  Sets, and performance diagnostics.
 - `contracts/TRADING_RULE_SET.md` — canonical methodology object.
 - `contracts/AGENT_HANDOFF_CONTRACT.md` — inter-agent handoff contract.
 - `contracts/REVIEW_AND_PROMOTION_CONTRACT.md` — evidence and promotion gates.

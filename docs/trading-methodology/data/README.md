@@ -38,3 +38,16 @@ Trading Rule Set
   TriggerTrade trigger-evidence path.
 - The raw-data catalog is the authoritative dependency boundary for future
   metric definitions.
+
+## Forward dependency
+
+```text
+data
+↓
+metrics
+↓
+future market states / conditions
+```
+
+The next methodology layer is `../metrics/`, which defines derived metrics that
+depend on this raw-data foundation.
