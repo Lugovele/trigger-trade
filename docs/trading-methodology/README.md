@@ -52,6 +52,8 @@ A rule may move to `REJECTED` at any stage.
 - `triggers/` — authoritative trigger contract for deterministic rules built
   directly from canonical metrics and used as the atomic building blocks of
   future Sets.
+- `sets/` — authoritative Set contract for combining approved Triggers into
+  deterministic market configurations before the separate Rules layer.
 - `contracts/TRADING_RULE_SET.md` — canonical methodology object.
 - `contracts/AGENT_HANDOFF_CONTRACT.md` — inter-agent handoff contract.
 - `contracts/REVIEW_AND_PROMOTION_CONTRACT.md` — evidence and promotion gates.

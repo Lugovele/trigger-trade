@@ -34,6 +34,8 @@ Triggers
 ↓
 Sets
 ↓
+Rules
+↓
 Research
 ↓
 Trading Rule Sets
@@ -57,3 +59,20 @@ Trading Rule Sets
 - Multi-timeframe trigger definitions are allowed.
 - Backtest and live evaluation must use the same timing and availability
   semantics.
+
+## Forward Dependency
+
+```text
+data
+↓
+metrics
+↓
+triggers
+↓
+sets
+↓
+future rules
+```
+
+The next methodology layer is `../sets/`, where approved Triggers become
+deterministic market configurations before the separate Rules layer.

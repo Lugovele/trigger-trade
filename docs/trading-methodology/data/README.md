@@ -50,7 +50,9 @@ metrics
 ↓
 triggers
 ↓
-future sets
+sets
+↓
+future rules
 ```
 
 The next methodology layer is `../metrics/`, which defines derived metrics that

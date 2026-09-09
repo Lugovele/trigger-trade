@@ -52,6 +52,8 @@ metrics
 triggers
 ↓
 sets
+↓
+future rules
 ```
 
 The next methodology layer is `../triggers/`, where canonical metric instances
