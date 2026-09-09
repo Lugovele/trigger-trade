@@ -18,6 +18,7 @@ from triggertrade.rules.trading import (
     semantic_hash,
     validate_rules_draft,
 )
+from triggertrade.persistence.trace_store import TraceStore
 
 
 class TradingRulesStore:
@@ -57,6 +58,7 @@ class TradingRulesStore:
                 """,
                 (TRADING_RULES_SCOPE_LIVE, version.rules_version_id, created_at),
             )
+        self._audit_rules_event("RULES_VERSION_BECAME_CURRENT", version, created_at, created_source, None)
         return self.get_current()  # type: ignore[return-value]
 
     def create_next_version(
@@ -87,6 +89,8 @@ class TradingRulesStore:
                 "UPDATE trading_rules_current SET rules_version_id = ?, updated_at = ? WHERE scope = ?",
                 (version.rules_version_id, created_at, TRADING_RULES_SCOPE_LIVE),
             )
+        self._audit_rules_event("RULES_VERSION_CREATED", version, created_at, created_source, created_from_version_id)
+        self._audit_rules_event("RULES_VERSION_BECAME_CURRENT", version, created_at, created_source, created_from_version_id)
         return self.get_current()  # type: ignore[return-value]
 
     def get_current(self) -> TradingRulesVersion | None:
@@ -265,6 +269,39 @@ class TradingRulesStore:
         conn = sqlite3.connect(self.path)
         conn.row_factory = sqlite3.Row
         return conn
+
+    def _audit_rules_event(
+        self,
+        event_type: str,
+        version: TradingRulesVersion,
+        created_at: str,
+        source: str,
+        previous_rules_version_id: str | None,
+    ) -> None:
+        try:
+            TraceStore(self.path).record_audit_event(
+                event_type=event_type,
+                source_type="USER_OPERATOR" if source.startswith("local") or source == "unit" else "SYSTEM",
+                source_id=source,
+                scope=TRADING_RULES_SCOPE_LIVE,
+                entity_type="trading_rules_version",
+                entity_id=version.rules_version_id,
+                related_entity_type="previous_rules_version",
+                related_entity_id=previous_rules_version_id,
+                rules_version_id=version.rules_version_id,
+                result="CURRENT" if event_type.endswith("CURRENT") else "CREATED",
+                reason_code=version.change_summary,
+                safe_metadata={
+                    "display_version": version.version,
+                    "created_from_version_id": previous_rules_version_id,
+                    "config_hash": version.config_hash,
+                    "schema_version": version.schema_version,
+                    "change_summary": version.change_summary,
+                },
+                created_at=created_at,
+            )
+        except Exception:
+            return
 
 
 _VERSION_COLUMNS = (

@@ -29,7 +29,7 @@ from .runtime_store import (
     RuntimeStore,
     RuntimeStoreError,
 )
-from .trace_store import TraceStore
+from .trace_store import AuditEvent, TraceStore
 from .trigger_set_store import (
     ActiveTradingPair,
     TriggerSetStore,
@@ -82,6 +82,7 @@ __all__ = [
     "RuntimeStore",
     "RuntimeStoreError",
     "TraceStore",
+    "AuditEvent",
     "TradingRulesStore",
     "TradingState",
     "ActiveTradingPair",

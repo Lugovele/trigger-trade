@@ -262,6 +262,18 @@ def test_research_demo_stop_select_compare_and_make_active_promotes_exact_pair(t
         "set_version": "v2-test",
         "rules_version_id": pinned_rules.rules_version_id,
     }
+    audit_types = {event.event_type for event in TraceStore(db).list_audit_events(limit=20, entity_id=research.research_id)}
+    assert {
+        "RESEARCH_CREATED",
+        "DEMO_RUN_STARTED",
+        "DEMO_RUN_STOPPED",
+        "DEMO_SELECTED_FOR_USE",
+        "RESEARCH_MADE_ACTIVE",
+    }.issubset(audit_types)
+    promoted_audit = TraceStore(db).list_audit_events(limit=10, event_type="RESEARCH_MADE_ACTIVE")[0]
+    assert promoted_audit.set_id == "triggertrade-futures-candidate"
+    assert promoted_audit.set_version == "v2-test"
+    assert promoted_audit.rules_version_id == pinned_rules.rules_version_id
 
 
 def test_make_active_blocks_running_demo_without_changing_pair(tmp_path):

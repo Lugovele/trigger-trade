@@ -21,6 +21,7 @@ EXPORT_LIMITS = {
     "readiness_checks": 20,
     "heartbeats": 20,
     "runtime_recovery": 20,
+    "audit_events": 50,
 }
 
 _SECRET_RE = re.compile(
@@ -46,6 +47,7 @@ class SystemHistoryExporter:
         sections.append(_section("INSTRUMENTS", self._instrument_lines()))
         sections.append(_section("RESEARCH", self._research_lines()))
         sections.append(_section("RISK / DECISIONS", self._risk_lines()))
+        sections.append(_section("AUDIT TRAIL", self._audit_lines()))
         sections.append(_section("ERRORS", self._error_lines()))
         return "TriggerTrade system history export\n\n" + "\n\n".join(sections).strip() + "\n"
 
@@ -116,6 +118,11 @@ class SystemHistoryExporter:
         latest = _call(self.read_model, "get_latest_decision")
         daily_loss = _call(self.read_model, "get_daily_loss_state")
         return [f"latest_decision: {_one_line(latest)}", f"daily_loss: {_one_line(daily_loss)}"]
+
+    def _audit_lines(self) -> list[str]:
+        events = _call(self.read_model, "list_audit_events", limit=EXPORT_LIMITS["audit_events"] + 1) or ()
+        lines = _row_lines("audit_event", events, EXPORT_LIMITS["audit_events"])
+        return lines or ["none_available: true"]
 
     def _error_lines(self) -> list[str]:
         lines: list[str] = []

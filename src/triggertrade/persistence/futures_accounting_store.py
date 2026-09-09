@@ -10,6 +10,7 @@ import sqlite3
 
 from triggertrade.accounting import ClosedTradeResult, EquitySnapshot, FuturesFillEvent, FuturesFundingEvent
 from triggertrade.execution.futures import PositionState
+from triggertrade.persistence.trace_store import TraceStore
 
 
 class FuturesAccountingStore:
@@ -32,6 +33,7 @@ class FuturesAccountingStore:
                 f"INSERT INTO futures_accounting_fills ({', '.join(_FILL_COLUMNS)}) VALUES ({', '.join('?' for _ in _FILL_COLUMNS)})",
                 values,
             )
+        self._audit_fill(event)
         return True
 
     def record_funding(self, event: FuturesFundingEvent) -> bool:
@@ -46,6 +48,7 @@ class FuturesAccountingStore:
                 f"INSERT INTO futures_accounting_funding ({', '.join(_FUNDING_COLUMNS)}) VALUES ({', '.join('?' for _ in _FUNDING_COLUMNS)})",
                 values,
             )
+        self._audit_funding(event)
         return True
 
     def record_closed_trade(self, result: ClosedTradeResult) -> bool:
@@ -60,6 +63,7 @@ class FuturesAccountingStore:
                 f"INSERT INTO futures_closed_trades ({', '.join(_CLOSED_TRADE_COLUMNS)}) VALUES ({', '.join('?' for _ in _CLOSED_TRADE_COLUMNS)})",
                 values,
             )
+        self._audit_closed_trade(result)
         return True
 
     def record_equity_snapshot(self, snapshot: EquitySnapshot) -> bool:
@@ -74,6 +78,7 @@ class FuturesAccountingStore:
                 f"INSERT INTO futures_equity_snapshots ({', '.join(_EQUITY_COLUMNS)}) VALUES ({', '.join('?' for _ in _EQUITY_COLUMNS)})",
                 values,
             )
+        self._audit_equity(snapshot)
         return True
 
     def list_fills(self, trade_id: str) -> tuple[FuturesFillEvent, ...]:
@@ -242,6 +247,111 @@ class FuturesAccountingStore:
         conn = sqlite3.connect(self.path)
         conn.row_factory = sqlite3.Row
         return conn
+
+    def _audit_fill(self, event: FuturesFillEvent) -> None:
+        try:
+            TraceStore(self.path).record_audit_event(
+                event_type="FILL_RECORDED",
+                source_type="ACCOUNTING",
+                source_id=event.source,
+                scope=event.source,
+                entity_type="futures_fill",
+                entity_id=event.event_id,
+                related_entity_type="trade",
+                related_entity_id=event.trade_id,
+                set_id=event.trigger_set_id,
+                set_version=event.trigger_set_version,
+                position_id=event.trade_id,
+                order_id=event.execution_id,
+                result=event.action,
+                reason_code=event.regime_label,
+                safe_metadata={
+                    "symbol": event.symbol,
+                    "direction": event.direction.value,
+                    "quantity": str(event.quantity),
+                    "price": str(event.price),
+                    "fee": str(event.fee),
+                    "fee_asset": event.fee_asset,
+                    "settlement_asset": event.settlement_asset,
+                },
+                created_at=event.occurred_at,
+            )
+        except Exception:
+            return
+
+    def _audit_funding(self, event: FuturesFundingEvent) -> None:
+        try:
+            TraceStore(self.path).record_audit_event(
+                event_type="FUNDING_RECORDED",
+                source_type="ACCOUNTING",
+                source_id=event.source,
+                scope=event.source,
+                entity_type="futures_funding",
+                entity_id=event.event_id,
+                related_entity_type="trade",
+                related_entity_id=event.trade_id,
+                result="RECORDED",
+                safe_metadata={
+                    "symbol": event.symbol,
+                    "direction": event.direction.value,
+                    "amount": str(event.amount),
+                    "asset": event.asset,
+                    "funding_rate": None if event.funding_rate is None else str(event.funding_rate),
+                },
+                created_at=event.funding_time,
+            )
+        except Exception:
+            return
+
+    def _audit_closed_trade(self, result: ClosedTradeResult) -> None:
+        try:
+            TraceStore(self.path).record_audit_event(
+                event_type="ACCOUNTING_CLOSED_TRADE_RECORDED",
+                source_type="ACCOUNTING",
+                source_id=result.evidence_source,
+                scope=result.evidence_source,
+                entity_type="futures_closed_trade",
+                entity_id=result.trade_id,
+                set_id=result.trigger_set_id,
+                set_version=result.trigger_set_version,
+                result="CLOSED",
+                safe_metadata={
+                    "symbol": result.symbol,
+                    "direction": result.direction.value,
+                    "quantity": str(result.quantity),
+                    "net_pnl": str(result.net_pnl),
+                    "gross_pnl": str(result.gross_pnl),
+                    "fees": str(result.entry_fee + result.exit_fee + result.other_fees),
+                    "funding": str(result.funding),
+                    "accounting_version": result.accounting_version,
+                },
+                created_at=result.closed_at,
+            )
+        except Exception:
+            return
+
+    def _audit_equity(self, snapshot: EquitySnapshot) -> None:
+        try:
+            TraceStore(self.path).record_audit_event(
+                event_type="ACCOUNT_SNAPSHOT_RECORDED",
+                source_type="ACCOUNTING",
+                source_id=snapshot.source,
+                scope=snapshot.source,
+                entity_type="account_snapshot",
+                entity_id=snapshot.snapshot_id,
+                result="RECORDED",
+                safe_metadata={
+                    "equity": str(snapshot.equity),
+                    "available_margin": str(snapshot.available_margin),
+                    "used_margin": str(snapshot.used_margin),
+                    "unrealized_pnl": str(snapshot.unrealized_pnl),
+                    "realized_pnl": str(snapshot.realized_pnl),
+                    "accounting_version": snapshot.accounting_version,
+                },
+                created_at=snapshot.observed_at,
+            )
+        except Exception:
+            return
 
 
 _FILL_COLUMNS = tuple(asdict(FuturesFillEvent("", "", "", "", PositionState.LONG, "", Decimal("0"), Decimal("1"), Decimal("0"), "USDT", "")).keys())

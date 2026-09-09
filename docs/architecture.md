@@ -109,6 +109,14 @@ Set Version identity, exact Trading Rules Version identity, selected backtest
 and Demo run ids, decision state, archive state, and schema version. Research
 does not duplicate raw trade history from backtest/accounting tables.
 
+`audit_events` is the canonical append-only audit index for material
+cross-domain transitions. It records compact event identities, source/scope,
+entity and related entity ids, exact Set/Rules/Trigger/Research/order/position
+links where available, result, reason code, schema version, and sanitized
+metadata. It is not a raw log table and it does not replace domain tables:
+orders, fills, positions, accounting, Rules, Sets, Research, Messages, and
+runtime lane lifecycles remain authoritative for their own facts.
+
 ### `dashboard/`
 Read-oriented monitoring surface. It must not become a second trading engine.
 
@@ -158,9 +166,12 @@ candle arrays. If pinned rules require semantics the replay engine cannot fully
 honor, Research records unavailable evidence instead of substituting behavior.
 Demo is blocked unless Research-specific exchange and accounting isolation are
 positively available. Compare reports unavailable when selected Research Demo
-or overlapping ACTIVE benchmark facts are missing. Make Active does not change
-ACTIVE Trigger Sets or Trading Rules until exact activation semantics receive a
-separate reviewed implementation.
+or overlapping ACTIVE benchmark facts are missing. Make Active changes ACTIVE
+Trigger Sets and Trading Rules only through backend-owned atomic promotion of
+the exact Research-pinned Set Version plus Trading Rules Version. Successful
+promotion preserves existing position attribution and records Research,
+message, System History, and audit-trail evidence; blocked promotion records a
+factual reason without partial activation.
 
 ## Dependency direction
 
@@ -258,7 +269,9 @@ decision needed; they must not synthesize performance or price monitoring.
 Repeated equivalent events may use a dedupe key to avoid flooding user-facing
 storage. System History uses deterministic sections, bounded row counts,
 explicit truncation markers, and allowlist-style field selection from existing
-stores and read models.
+stores, read models, and audit events. The export must not perform arbitrary
+file or SQL reads, expose raw exchange payloads, print secret material, or turn
+the dashboard into a raw log viewer.
 
 Daily Loss is an accounting-backed new-entry gate owned by the futures runtime
 and accounting persistence, not by the UI. When enabled in the current

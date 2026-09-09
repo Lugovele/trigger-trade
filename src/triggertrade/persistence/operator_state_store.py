@@ -8,6 +8,8 @@ from enum import StrEnum
 from pathlib import Path
 import sqlite3
 
+from triggertrade.persistence.trace_store import TraceStore
+
 
 class TradingState(StrEnum):
     TRADING_ENABLED = "TRADING_ENABLED"
@@ -90,6 +92,16 @@ class OperatorStateStore:
                 """,
                 (changed_at, previous.state.value, state.value, source, reason),
             )
+        self._audit_operator_event(
+            event_type="OPERATOR_TRADING_STATE_CHANGED",
+            action=state.value,
+            target="ACTIVE",
+            result=state.value,
+            source=source,
+            changed_at=changed_at,
+            error=None,
+            metadata={"previous_state": previous.state.value, "new_state": state.value, "reason": reason},
+        )
         return OperatorTradingState(state, changed_at, source, reason)
 
     def audit_rows(self) -> tuple[OperatorTradingState, ...]:
@@ -131,6 +143,16 @@ class OperatorStateStore:
                 """,
                 (changed_at, action, target, result, source, error),
             )
+        self._audit_operator_event(
+            event_type=f"OPERATOR_{action.upper()}",
+            action=action,
+            target=target,
+            result=result,
+            source=source,
+            changed_at=changed_at,
+            error=error,
+            metadata={"action": action, "target": target},
+        )
         return OperatorActionAudit(action, changed_at, target, result, source, error)
 
     def operator_action_rows(self, *, limit: int | None = None) -> tuple[OperatorActionAudit, ...]:
@@ -202,6 +224,36 @@ class OperatorStateStore:
         conn = sqlite3.connect(self.path)
         conn.row_factory = sqlite3.Row
         return conn
+
+    def _audit_operator_event(
+        self,
+        *,
+        event_type: str,
+        action: str,
+        target: str | None,
+        result: str,
+        source: str,
+        changed_at: str,
+        error: str | None,
+        metadata: dict,
+    ) -> None:
+        try:
+            TraceStore(self.path).record_audit_event(
+                event_type=event_type,
+                source_type="USER_OPERATOR",
+                source_id=source,
+                scope="ACTIVE",
+                entity_type="operator_action",
+                entity_id=f"{action}:{target or 'ACTIVE'}:{changed_at}",
+                related_entity_type=None if target is None else "target",
+                related_entity_id=target,
+                result=result,
+                reason_code=error,
+                safe_metadata=metadata,
+                created_at=changed_at,
+            )
+        except Exception:
+            return
 
 
 def _now() -> str:

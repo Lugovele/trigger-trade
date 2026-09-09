@@ -8,6 +8,8 @@ import json
 from pathlib import Path
 import sqlite3
 
+from triggertrade.persistence.trace_store import TraceStore
+
 
 @dataclass(frozen=True)
 class FuturesPositionRecord:
@@ -112,6 +114,7 @@ class FuturesPositionStore:
                 f"INSERT INTO futures_positions ({', '.join(_POSITION_COLUMNS)}) VALUES ({', '.join('?' for _ in _POSITION_COLUMNS)})",
                 _position_values(record),
             )
+        self._audit_position_event("POSITION_OPENED", record, created_at=record.opened_at, result=record.status)
         return record
 
     def mark_closing(self, position_id: str, close_intent_id: str, close_risk_decision_id: str, close_reason: str) -> FuturesPositionRecord:
@@ -132,7 +135,10 @@ class FuturesPositionStore:
                 """,
                 (close_intent_id, close_risk_decision_id, close_reason, position_id),
             )
-        return self.get_position(position_id)  # type: ignore[return-value]
+        updated = self.get_position(position_id)  # type: ignore[assignment]
+        if updated is not None:
+            self._audit_position_event("POSITION_CLOSING", updated, created_at=updated.updated_at, result=updated.status, reason=close_reason)
+        return updated  # type: ignore[return-value]
 
     def mark_open(self, position_id: str, updated_at: str) -> FuturesPositionRecord:
         with self._connect() as conn:
@@ -140,7 +146,10 @@ class FuturesPositionStore:
                 "UPDATE futures_positions SET status = 'OPEN', updated_at = ? WHERE position_id = ? AND status = 'UNKNOWN'",
                 (updated_at, position_id),
             )
-        return self.get_position(position_id)  # type: ignore[return-value]
+        updated = self.get_position(position_id)  # type: ignore[assignment]
+        if updated is not None:
+            self._audit_position_event("POSITION_OPEN_CONFIRMED", updated, created_at=updated_at, result=updated.status)
+        return updated  # type: ignore[return-value]
 
     def update_open_fill(
         self,
@@ -162,7 +171,10 @@ class FuturesPositionStore:
                 """,
                 (current_qty, entry_price, position_value, status, updated_at, position_id),
             )
-        return self.get_position(position_id)  # type: ignore[return-value]
+        updated = self.get_position(position_id)  # type: ignore[assignment]
+        if updated is not None:
+            self._audit_position_event("POSITION_FILL_UPDATED", updated, created_at=updated_at, result=updated.status)
+        return updated  # type: ignore[return-value]
 
     def attach_close_execution(self, position_id: str, close_execution_id: str) -> FuturesPositionRecord:
         with self._connect() as conn:
@@ -170,7 +182,10 @@ class FuturesPositionStore:
                 "UPDATE futures_positions SET close_execution_id = ?, updated_at = datetime('now') WHERE position_id = ?",
                 (close_execution_id, position_id),
             )
-        return self.get_position(position_id)  # type: ignore[return-value]
+        updated = self.get_position(position_id)  # type: ignore[assignment]
+        if updated is not None:
+            self._audit_position_event("POSITION_CLOSE_ATTACHED", updated, created_at=updated.updated_at, result=updated.status)
+        return updated  # type: ignore[return-value]
 
     def mark_closed(self, position_id: str, closed_at: str) -> FuturesPositionRecord:
         with self._connect() as conn:
@@ -178,7 +193,10 @@ class FuturesPositionStore:
                 "UPDATE futures_positions SET status = 'CLOSED', closed_at = ?, current_qty = '0', updated_at = ? WHERE position_id = ?",
                 (closed_at, closed_at, position_id),
             )
-        return self.get_position(position_id)  # type: ignore[return-value]
+        updated = self.get_position(position_id)  # type: ignore[assignment]
+        if updated is not None:
+            self._audit_position_event("POSITION_CLOSED", updated, created_at=closed_at, result=updated.status)
+        return updated  # type: ignore[return-value]
 
     def save_closed_position(self, record: FuturesClosedPositionRecord) -> bool:
         with self._connect() as conn:
@@ -192,6 +210,7 @@ class FuturesPositionStore:
                 f"INSERT INTO futures_closed_positions ({', '.join(_CLOSED_COLUMNS)}) VALUES ({', '.join('?' for _ in _CLOSED_COLUMNS)})",
                 values,
             )
+        self._audit_closed_position(record)
         return True
 
     def get_closed_position(self, position_id: str) -> FuturesClosedPositionRecord | None:
@@ -211,6 +230,7 @@ class FuturesPositionStore:
                 "INSERT INTO futures_position_events (event_id, position_id, event_type, occurred_at, reason, execution_id, error) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 values,
             )
+        self._audit_position_lifecycle_event(event)
         return True
 
     def get_position(self, position_id: str, conn: sqlite3.Connection | None = None) -> FuturesPositionRecord | None:
@@ -382,6 +402,103 @@ class FuturesPositionStore:
         conn = sqlite3.connect(self.path)
         conn.row_factory = sqlite3.Row
         return conn
+
+    def _audit_position_event(
+        self,
+        event_type: str,
+        record: FuturesPositionRecord,
+        *,
+        created_at: str,
+        result: str,
+        reason: str | None = None,
+    ) -> None:
+        try:
+            TraceStore(self.path).record_audit_event(
+                event_type=event_type,
+                source_type="POSITION_LIFECYCLE",
+                source_id=record.evidence_source,
+                scope=record.evidence_source,
+                entity_type="futures_position",
+                entity_id=record.position_id,
+                related_entity_type="trade",
+                related_entity_id=record.trade_id,
+                set_id=record.trigger_set_id,
+                set_version=record.trigger_set_version,
+                rules_version_id=record.rules_version_id,
+                position_id=record.position_id,
+                order_id=record.close_execution_id or record.open_execution_id,
+                result=result,
+                reason_code=reason or record.close_reason,
+                safe_metadata={
+                    "symbol": record.symbol,
+                    "side": record.side,
+                    "qty": record.current_qty,
+                    "entry_price": record.entry_price,
+                    "tp_price": record.tp_price,
+                    "sl_price": record.sl_price,
+                    "leverage": record.leverage,
+                    "strategy_rule_id": record.strategy_rule_id,
+                    "strategy_rule_version": record.strategy_rule_version,
+                    "risk_rule_version": record.risk_rule_version,
+                    "protective_exit_version": record.protective_exit_version,
+                },
+                created_at=created_at,
+            )
+        except Exception:
+            return
+
+    def _audit_closed_position(self, record: FuturesClosedPositionRecord) -> None:
+        try:
+            TraceStore(self.path).record_audit_event(
+                event_type="POSITION_CLOSED_RECORDED",
+                source_type="POSITION_LIFECYCLE",
+                source_id=record.evidence_source,
+                scope=record.evidence_source,
+                entity_type="futures_closed_position",
+                entity_id=record.position_id,
+                related_entity_type="trade",
+                related_entity_id=record.trade_id,
+                set_id=record.trigger_set_id,
+                set_version=record.trigger_set_version,
+                rules_version_id=record.rules_version_id,
+                position_id=record.position_id,
+                result="CLOSED",
+                reason_code=record.close_reason,
+                safe_metadata={
+                    "symbol": record.symbol,
+                    "direction": record.direction,
+                    "qty": record.qty,
+                    "entry_vwap": record.entry_vwap,
+                    "exit_vwap": record.exit_vwap,
+                    "net_pnl": record.net_pnl,
+                    "duration_seconds": record.duration_seconds,
+                    "accounting_version": record.accounting_version,
+                },
+                created_at=record.closed_at,
+            )
+        except Exception:
+            return
+
+    def _audit_position_lifecycle_event(self, event: FuturesPositionEvent) -> None:
+        try:
+            TraceStore(self.path).record_audit_event(
+                event_type=f"POSITION_EVENT_{event.event_type}",
+                source_type="POSITION_LIFECYCLE",
+                source_id=event.event_id,
+                scope="ACTIVE",
+                entity_type="futures_position_event",
+                entity_id=event.event_id,
+                related_entity_type="futures_position",
+                related_entity_id=event.position_id,
+                position_id=event.position_id,
+                order_id=event.execution_id,
+                result=event.event_type,
+                reason_code=event.error or event.reason,
+                safe_metadata={"reason": event.reason, "execution_id": event.execution_id},
+                created_at=event.occurred_at,
+            )
+        except Exception:
+            return
 
 
 _POSITION_COLUMNS = tuple(field.name for field in fields(FuturesPositionRecord))

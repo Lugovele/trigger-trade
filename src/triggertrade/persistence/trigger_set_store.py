@@ -22,6 +22,7 @@ from triggertrade.trigger_sets import (
     TriggerSetVersion,
 )
 from triggertrade.rules.trading import TRADING_RULES_SCOPE_LIVE, TradingRulesVersion, draft_from_json
+from triggertrade.persistence.trace_store import TraceStore
 
 
 class TriggerSetStoreError(RuntimeError):
@@ -247,6 +248,7 @@ class TriggerSetStore:
                     """,
                     (trigger_set.set_id, trigger_set.version, rule_id, rule_version, position),
                 )
+        self._audit_set_event("SET_VERSION_REGISTERED", trigger_set, trigger_set.created_at, "REGISTERED", trigger_set.provenance)
         return "registered"
 
     def transition_status(
@@ -277,6 +279,7 @@ class TriggerSetStore:
                 (status.value, set_id, version),
             )
             _insert_transition(conn, current, status, changed_at, reason)
+        self._audit_set_event("SET_ACTIVATED" if status is TriggerSetStatus.ACTIVE else "SET_ARCHIVED", current, changed_at, status.value, reason)
         return self.get_set(set_id, version)  # type: ignore[return-value]
 
     def get_active_set(
@@ -504,6 +507,21 @@ class TriggerSetStore:
                 "SELECT status, payload FROM recommendations WHERE recommendation_id = ?",
                 (recommendation_id,),
             ).fetchone()
+        try:
+            TraceStore(self.path).record_audit_event(
+                event_type=f"RECOMMENDATION_{target}",
+                source_type="USER_OPERATOR",
+                source_id="trigger_set_store",
+                scope="RESEARCH",
+                entity_type="recommendation",
+                entity_id=recommendation_id,
+                result=target,
+                reason_code=reason,
+                safe_metadata={"previous_status": current, "new_status": target},
+                created_at=changed_at,
+            )
+        except Exception:
+            pass
         return _recommendation_from_row(updated)
 
     def list_recommendations(self) -> tuple[Recommendation, ...]:
@@ -686,6 +704,39 @@ class TriggerSetStore:
         conn = sqlite3.connect(self.path)
         conn.row_factory = sqlite3.Row
         return conn
+
+    def _audit_set_event(
+        self,
+        event_type: str,
+        trigger_set: TriggerSetVersion,
+        created_at: str,
+        result: str,
+        reason: str,
+    ) -> None:
+        try:
+            TraceStore(self.path).record_audit_event(
+                event_type=event_type,
+                source_type="SYSTEM" if event_type == "SET_VERSION_REGISTERED" else "USER_OPERATOR",
+                source_id="trigger_set_store",
+                scope=trigger_set.status.value,
+                entity_type="trigger_set_version",
+                entity_id=f"{trigger_set.set_id}@{trigger_set.version}",
+                set_id=trigger_set.set_id,
+                set_version=trigger_set.version,
+                result=result,
+                reason_code=reason,
+                safe_metadata={
+                    "symbol": trigger_set.symbol,
+                    "timeframe": trigger_set.timeframe,
+                    "strategy_version": trigger_set.strategy_version,
+                    "risk_profile_version": trigger_set.risk_profile_version,
+                    "rule_versions": trigger_set.rule_versions,
+                    "composition_hash": composition_hash(trigger_set),
+                },
+                created_at=created_at,
+            )
+        except Exception:
+            return
 
 
 def bootstrap_current_trigger_sets(store: TriggerSetStore, *, created_at: str = "2026-09-05T00:00:00+00:00") -> RegistrySyncReport:

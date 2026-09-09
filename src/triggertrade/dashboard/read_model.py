@@ -535,6 +535,26 @@ class LogRow:
     status: str
 
 
+@dataclass(frozen=True)
+class AuditEventRow:
+    created_at: str
+    event_type: str
+    source_type: str
+    scope: str
+    entity_type: str
+    entity_id: str
+    result: str
+    reason_code: str | None
+    set_id: str | None
+    set_version: str | None
+    rules_version_id: str | None
+    research_id: str | None
+    run_id: str | None
+    position_id: str | None
+    order_id: str | None
+    safe_metadata: dict[str, Any]
+
+
 class DashboardReadModel:
     def __init__(self, db_path: str | Path) -> None:
         self.db_path = Path(db_path)
@@ -670,6 +690,48 @@ class DashboardReadModel:
             message_rows = ()
         events.extend(_safe_dict(dict(row)) for row in message_rows)
         return tuple(events[:safe_limit])
+
+    def list_audit_events(self, limit: int = 50) -> tuple[AuditEventRow, ...]:
+        if not self.db_path.exists():
+            return ()
+        safe_limit = max(1, min(int(limit), 250))
+        try:
+            with self._connect() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT created_at, event_type, source_type, scope, entity_type,
+                           entity_id, result, reason_code, set_id, set_version,
+                           rules_version_id, research_id, run_id, position_id,
+                           order_id, safe_metadata
+                    FROM audit_events
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT ?
+                    """,
+                    (safe_limit,),
+                ).fetchall()
+        except sqlite3.Error:
+            return ()
+        return tuple(
+            AuditEventRow(
+                created_at=row["created_at"],
+                event_type=row["event_type"],
+                source_type=row["source_type"],
+                scope=row["scope"],
+                entity_type=row["entity_type"],
+                entity_id=row["entity_id"],
+                result=row["result"],
+                reason_code=row["reason_code"],
+                set_id=row["set_id"],
+                set_version=row["set_version"],
+                rules_version_id=row["rules_version_id"],
+                research_id=row["research_id"],
+                run_id=row["run_id"],
+                position_id=row["position_id"],
+                order_id=row["order_id"],
+                safe_metadata=_safe_dict(_json_dict(row["safe_metadata"])),
+            )
+            for row in rows
+        )
 
     def get_demo_readiness(self) -> DemoReadinessView:
         if not self.db_path.exists():

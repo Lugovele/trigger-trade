@@ -1134,6 +1134,77 @@ class FuturesDualLaneRuntime:
                 rules_evaluation=rules_evaluation,
             )
         )
+        self._record_lane_audit_event(
+            lane=lane,
+            trigger_set=trigger_set,
+            completed=completed,
+            status=status,
+            signal_id=signal_id,
+            intent_id=intent_id,
+            risk_decision_id=risk_decision_id,
+            execution_intent_id=execution_intent_id,
+            processed_at=processed_at,
+            error=error,
+            regime_context=regime_context,
+            rules_version_id=rules_version_id,
+            rules_evaluation=rules_evaluation,
+        )
+
+    def _record_lane_audit_event(
+        self,
+        *,
+        lane: Lane,
+        trigger_set: TriggerSetVersion,
+        completed: CompletedCandle,
+        status: str,
+        signal_id: str | None,
+        intent_id: str | None,
+        risk_decision_id: str | None,
+        execution_intent_id: str | None,
+        processed_at: str | None,
+        error: str | None,
+        regime_context: MarketRegimeContext | None,
+        rules_version_id: str | None,
+        rules_evaluation: dict[str, str | None] | None,
+    ) -> None:
+        event_type = _audit_event_type_for_lane_status(status)
+        if event_type is None:
+            return
+        result = "REJECTED" if event_type == "ENTRY_REJECTED" else status.upper()
+        try:
+            self._trace_store.record_audit_event(
+                event_type=event_type,
+                source_type="RUNTIME",
+                source_id=completed.candle_id,
+                scope=lane.value,
+                entity_type="runtime_candle",
+                entity_id=completed.candle_id,
+                related_entity_type="trade_intent" if intent_id else "signal" if signal_id else None,
+                related_entity_id=intent_id or signal_id,
+                set_id=trigger_set.set_id,
+                set_version=trigger_set.version,
+                rules_version_id=rules_version_id,
+                position_id=None,
+                order_id=execution_intent_id,
+                result=result,
+                reason_code=error or status,
+                safe_metadata={
+                    "symbol": completed.symbol,
+                    "timeframe": completed.timeframe,
+                    "candle_open_time": completed.open_time.isoformat(),
+                    "status": status,
+                    "signal_id": signal_id,
+                    "intent_id": intent_id,
+                    "risk_decision_id": risk_decision_id,
+                    "execution_intent_id": execution_intent_id,
+                    "regime_context_id": None if regime_context is None else regime_context.context_id,
+                    "regime_state": None if regime_context is None or regime_context.label is None else regime_context.label.value,
+                    "rules_evaluation": rules_evaluation or {},
+                },
+                created_at=processed_at or completed.open_time.isoformat(),
+            )
+        except Exception:
+            return
 
     def _checkpoint_lane(self, lane: Lane, trigger_set: TriggerSetVersion, completed: CompletedCandle) -> None:
         self._runtime_store.lane_checkpoint(
@@ -1224,6 +1295,20 @@ def _heartbeat_outcome(result: FuturesDualLaneResult) -> tuple[str, str]:
     if "active_execution_paused" in lane_reasons:
         return "BLOCKED", "active_execution_paused"
     return "RUNNING", "cycle completed"
+
+
+def _audit_event_type_for_lane_status(status: str) -> str | None:
+    return {
+        "no_signal": "SET_EVALUATED",
+        "no_intent": "ENTRY_REJECTED",
+        "risk_rejected": "ENTRY_REJECTED",
+        "active_execution_paused": "ENTRY_REJECTED",
+        "stale_entry_suppressed": "STALE_ENTRY_SUPPRESSED",
+        "completed": "RUNTIME_DECISION_COMPLETED",
+        "execution_unknown": "ORDER_UNKNOWN",
+        "execution_error": "ORDER_REJECTED",
+        "test_simulated": "TEST_TRADE_SIMULATED",
+    }.get(status)
 
 
 def _candle_open_time(candle) -> datetime:

@@ -208,6 +208,17 @@ API keys, API secrets, authorization headers, cookies, session or CSRF tokens,
 `.env` material, raw exchange payloads, and private credentials. Auditing the
 export action records only action/result metadata, not the exported payload.
 
+The structured audit trail records material facts only after the owning domain
+write succeeds. Trigger evaluations, trade intents, risk approvals/rejections,
+execution status transitions, position lifecycle events, accounting facts,
+operator actions, Rules/Set lifecycle changes, Research transitions, Make
+Active promotion/blocking, and checkpoint recovery evidence can be correlated
+through ids and exact Set/Rules/Trigger identities. Existing records remain
+authoritative; audit events provide causal navigation and bounded export
+evidence. Secret-like metadata keys and values are redacted before persistence
+or export, and repeated idempotent writes cannot mutate an existing audit
+event with the same id.
+
 ## Research Safety
 
 Research backend state is non-execution product state unless a separately
@@ -228,10 +239,12 @@ semantics the current historical replay engine cannot fully honor. The
 dashboard may submit bounded plan parameters, but not raw candle arrays or
 filesystem paths; replay inputs are backend-owned.
 
-Make Active is not an execution or promotion path in this foundation. A Make
-Active request records a blocked decision with a factual reason and leaves
-ACTIVE Trigger Sets, Trading Rules, positions, orders, and execution state
-unchanged.
+Make Active is a governed non-ordering promotion path. A successful request
+atomically activates the exact Research-pinned Trigger Set Version and Trading
+Rules Version, records the previous active pair, and leaves existing
+positions, orders, fills, and Research evidence unchanged. A blocked request
+records a factual reason and must not partially activate either side of the
+pair.
 
 ## Demo Readiness and Heartbeat
 

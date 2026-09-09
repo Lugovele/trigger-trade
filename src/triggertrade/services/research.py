@@ -13,7 +13,7 @@ from triggertrade.analytics import TradePerformanceFact, compute_futures_perform
 from triggertrade.backtest import BacktestPlan, BacktestResult, HistoricalCandle, run_backtest
 from triggertrade.config import AppConfig
 from triggertrade.market_data import FuturesInstrumentMetadata
-from triggertrade.persistence import MessageStore, TradingRulesStore, TriggerSetStore
+from triggertrade.persistence import MessageStore, TraceStore, TradingRulesStore, TriggerSetStore
 from triggertrade.persistence.research_store import (
     ResearchBacktestRunRecord,
     ResearchBacktestStatus,
@@ -72,6 +72,7 @@ class ResearchService:
         self._trigger_set_store = trigger_set_store
         self._trading_rules_store = trading_rules_store
         self._message_store = message_store
+        self._trace_store = TraceStore(store.path)
         self._config = config
         self._instrument = instrument
         self._demo_isolation = demo_isolation or ResearchDemoIsolation()
@@ -97,6 +98,14 @@ class ResearchService:
             rules_display_version=rules.version,
             created_source=created_source,
             created_at=created_at,
+        )
+        self._audit_research_event(
+            "RESEARCH_CREATED",
+            record,
+            result="CREATED",
+            source_id=created_source,
+            created_at=record.created_at,
+            metadata={"rules_display_version": record.rules_display_version},
         )
         return record
 
@@ -154,6 +163,15 @@ class ResearchService:
                 entity_id=research.research_id,
                 dedupe_key=f"research:{research.research_id}:backtest_failed:{_public_reason(str(exc))}",
             )
+            self._audit_research_run_event(
+                "BACKTEST_RUN_FAILED",
+                research,
+                run_id=record.run_id,
+                result=record.status.value,
+                reason=record.unavailable_reason,
+                created_at=record.created_at,
+                metadata={"period_start": record.period_start, "period_end": record.period_end, "timeframe": record.timeframe},
+            )
             return record
         status = ResearchBacktestStatus.COMPLETED if result.closed_trades > 0 else ResearchBacktestStatus.COMPLETED_NO_TRADES
         record = self._store.add_backtest_run(
@@ -166,10 +184,25 @@ class ResearchService:
             metrics=_backtest_metrics(result),
             created_at=(created_at or datetime.now(UTC)).isoformat(),
         )
+        self._audit_research_run_event(
+            "BACKTEST_RUN_COMPLETED",
+            research,
+            run_id=record.run_id,
+            result=record.status.value,
+            created_at=record.created_at,
+            metadata={
+                "period_start": record.period_start,
+                "period_end": record.period_end,
+                "timeframe": record.timeframe,
+                "metrics": record.metrics,
+            },
+        )
         return record
 
     def select_backtest_run(self, research_id: str, run_id: str) -> ResearchRecord:
-        return self._store.select_backtest_run(research_id, run_id)
+        record = self._store.select_backtest_run(research_id, run_id)
+        self._audit_research_event("BACKTEST_SELECTED_FOR_USE", record, result="SELECTED", run_id=run_id)
+        return record
 
     def start_demo_run(self, research_id: str, *, created_at: str | None = None) -> ResearchDemoRunRecord:
         research = self._required_research(research_id)
@@ -187,13 +220,32 @@ class ResearchService:
             account_scope=self._demo_isolation.account_scope or scope,
             created_at=now,
         )
+        self._audit_research_run_event(
+            "DEMO_RUN_STARTED",
+            research,
+            run_id=record.run_id,
+            result=record.status.value,
+            created_at=record.created_at,
+            metadata={"execution_scope_id": record.execution_scope_id, "account_scope": record.account_scope},
+        )
         return record
 
     def stop_demo_run(self, research_id: str, run_id: str, *, stopped_at: str | None = None) -> ResearchDemoRunRecord:
-        return self._store.stop_demo_run(research_id, run_id, stopped_at=stopped_at)
+        record = self._store.stop_demo_run(research_id, run_id, stopped_at=stopped_at)
+        research = self._required_research(research_id)
+        self._audit_research_run_event(
+            "DEMO_RUN_STOPPED",
+            research,
+            run_id=record.run_id,
+            result=record.status.value,
+            created_at=record.stopped_at or record.created_at,
+            metadata={"started_at": record.started_at, "stopped_at": record.stopped_at},
+        )
+        return record
 
     def select_demo_run(self, research_id: str, run_id: str) -> ResearchRecord:
         record = self._store.select_demo_run(research_id, run_id)
+        self._audit_research_event("DEMO_SELECTED_FOR_USE", record, result="SELECTED", run_id=run_id)
         self._message(
             severity="ATTENTION",
             title="Research decision needed",
@@ -205,7 +257,9 @@ class ResearchService:
         return record
 
     def archive_research(self, research_id: str) -> ResearchRecord:
-        return self._store.archive_research(research_id)
+        record = self._store.archive_research(research_id)
+        self._audit_research_event("RESEARCH_ARCHIVED", record, result="ARCHIVED", created_at=record.updated_at)
+        return record
 
     def request_make_active(self, research_id: str) -> ResearchRecord:
         return self.make_active(research_id)
@@ -399,6 +453,14 @@ class ResearchService:
         if record is None:
             raise ResearchServiceError("research id not found after promotion")
         if blocked_reason is not None:
+            self._audit_research_event(
+                "RESEARCH_MAKE_ACTIVE_BLOCKED",
+                record,
+                result="BLOCKED",
+                reason=blocked_reason,
+                created_at=record.decision_at or decided_at,
+                metadata={"decision": record.decision.value},
+            )
             self._message(
                 severity="WARNING",
                 title="Research promotion blocked",
@@ -409,6 +471,22 @@ class ResearchService:
                 metadata={"reason": blocked_reason},
             )
         elif not already_active:
+            self._audit_research_event(
+                "RESEARCH_MADE_ACTIVE",
+                record,
+                result="MADE_ACTIVE",
+                created_at=record.made_active_at or decided_at,
+                metadata={
+                    "promoted_set_id": record.promoted_set_id,
+                    "promoted_set_version": record.promoted_set_version,
+                    "promoted_rules_version_id": record.promoted_rules_version_id,
+                    "previous_active_set_id": record.previous_active_set_id,
+                    "previous_active_set_version": record.previous_active_set_version,
+                    "previous_rules_version_id": record.previous_rules_version_id,
+                    "promotion_result_metadata": record.promotion_result_metadata,
+                },
+                event_id=f"audit-research-made-active-{record.research_id}",
+            )
             self._message(
                 severity="ATTENTION",
                 title="Research promoted",
@@ -483,6 +561,15 @@ class ResearchService:
             unavailable_reason=reason,
             created_at=created_at,
         )
+        self._audit_research_run_event(
+            "BACKTEST_RUN_BLOCKED",
+            research,
+            run_id=record.run_id,
+            result=record.status.value,
+            reason=reason,
+            created_at=record.created_at,
+            metadata={"period_start": record.period_start, "period_end": record.period_end, "timeframe": record.timeframe},
+        )
         self._message(
             severity="WARNING",
             title="Research backtest unavailable",
@@ -505,6 +592,15 @@ class ResearchService:
             status=ResearchDemoStatus.BLOCKED,
             blocked_reason=reason,
             created_at=created_at,
+        )
+        self._audit_research_run_event(
+            "DEMO_RUN_BLOCKED",
+            research,
+            run_id=record.run_id,
+            result=record.status.value,
+            reason=reason,
+            created_at=record.created_at,
+            metadata={"blocked_reason": reason},
         )
         self._message(
             severity="WARNING",
@@ -557,6 +653,75 @@ class ResearchService:
             return
         try:
             self._message_store.create_message(source="research_service", **kwargs)
+        except Exception:
+            return
+
+    def _audit_research_event(
+        self,
+        event_type: str,
+        record: ResearchRecord,
+        *,
+        result: str,
+        source_id: str = "research_service",
+        reason: str | None = None,
+        run_id: str | None = None,
+        created_at: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        event_id: str | None = None,
+    ) -> None:
+        try:
+            self._trace_store.record_audit_event(
+                event_type=event_type,
+                source_type="RESEARCH",
+                source_id=source_id,
+                scope="RESEARCH",
+                entity_type="research",
+                entity_id=record.research_id,
+                set_id=record.set_id,
+                set_version=record.set_version,
+                rules_version_id=record.rules_version_id,
+                research_id=record.research_id,
+                run_id=run_id,
+                result=result,
+                reason_code=reason,
+                safe_metadata=metadata or {},
+                created_at=created_at or record.updated_at,
+                event_id=event_id,
+            )
+        except Exception:
+            return
+
+    def _audit_research_run_event(
+        self,
+        event_type: str,
+        research: ResearchRecord,
+        *,
+        run_id: str,
+        result: str,
+        reason: str | None = None,
+        created_at: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        try:
+            self._trace_store.record_audit_event(
+                event_type=event_type,
+                source_type="RESEARCH",
+                source_id="research_service",
+                scope="RESEARCH",
+                entity_type="research_run",
+                entity_id=run_id,
+                related_entity_type="research",
+                related_entity_id=research.research_id,
+                set_id=research.set_id,
+                set_version=research.set_version,
+                rules_version_id=research.rules_version_id,
+                research_id=research.research_id,
+                run_id=run_id,
+                result=result,
+                reason_code=reason,
+                safe_metadata=metadata or {},
+                created_at=created_at,
+            )
         except Exception:
             return
 

@@ -8,6 +8,7 @@ import sqlite3
 from typing import Iterable
 
 from triggertrade.execution.contracts import OrderStatus
+from triggertrade.persistence.trace_store import TraceStore
 
 
 @dataclass(frozen=True)
@@ -84,7 +85,8 @@ class FuturesExecutionStore:
                 if collided is not None:
                     return collided, False
                 raise
-            return record, True
+        self._audit_execution_event("ORDER_RESERVED", record, created_at=record.created_at)
+        return record, True
 
     def update(self, record: FuturesExecutionRecord) -> FuturesExecutionRecord:
         with self._connect() as conn:
@@ -128,6 +130,7 @@ class FuturesExecutionStore:
                     record.intent_id,
                 ),
             )
+        self._audit_execution_event(_execution_audit_type(record.status), record, created_at=record.updated_at)
         return record
 
     def get_by_intent(self, intent_id: str, conn: sqlite3.Connection | None = None) -> FuturesExecutionRecord | None:
@@ -218,6 +221,41 @@ class FuturesExecutionStore:
         conn.row_factory = sqlite3.Row
         return conn
 
+    def _audit_execution_event(self, event_type: str, record: FuturesExecutionRecord, *, created_at: str) -> None:
+        try:
+            TraceStore(self.path).record_audit_event(
+                event_type=event_type,
+                source_type="EXECUTION",
+                source_id=record.client_order_id,
+                scope=record.lane or "ACTIVE",
+                entity_type="futures_order",
+                entity_id=record.intent_id,
+                related_entity_type="risk_decision",
+                related_entity_id=record.risk_decision_id,
+                set_id=record.trigger_set_id,
+                set_version=record.trigger_set_version,
+                order_id=record.exchange_order_id or record.client_order_id,
+                result=record.status.value.upper(),
+                reason_code=record.last_error_code or record.reconciliation_state,
+                safe_metadata={
+                    "symbol": record.symbol,
+                    "category": record.category,
+                    "position_action": record.position_action,
+                    "exchange_side": record.exchange_side,
+                    "order_type": record.order_type,
+                    "requested_qty": record.requested_qty,
+                    "requested_price": record.requested_price,
+                    "leverage": record.leverage,
+                    "exchange_status": record.exchange_status,
+                    "reconciliation_state": record.reconciliation_state,
+                    "margin_mode": record.margin_mode,
+                    "position_mode": record.position_mode,
+                },
+                created_at=created_at,
+            )
+        except Exception:
+            return
+
 
 def _record_values(record: FuturesExecutionRecord) -> tuple[str | None, ...]:
     return (
@@ -279,3 +317,17 @@ def _row_to_record(row: sqlite3.Row) -> FuturesExecutionRecord:
         trigger_set_id=row["trigger_set_id"],
         trigger_set_version=row["trigger_set_version"],
     )
+
+
+def _execution_audit_type(status: OrderStatus) -> str:
+    return {
+        OrderStatus.CREATED: "ORDER_CREATED",
+        OrderStatus.SUBMITTING: "ORDER_SUBMITTING",
+        OrderStatus.SUBMITTED: "ORDER_SUBMITTED",
+        OrderStatus.PARTIALLY_FILLED: "ORDER_PARTIALLY_FILLED",
+        OrderStatus.FILLED: "ORDER_FILLED",
+        OrderStatus.CANCEL_PENDING: "ORDER_CANCEL_REQUESTED",
+        OrderStatus.CANCELLED: "ORDER_CANCELLED",
+        OrderStatus.REJECTED: "ORDER_REJECTED",
+        OrderStatus.UNKNOWN: "ORDER_UNKNOWN",
+    }[status]

@@ -1,3 +1,4 @@
+from dataclasses import replace
 from decimal import Decimal
 import json
 from urllib.parse import parse_qs, urlparse
@@ -28,7 +29,7 @@ from triggertrade.exchanges import BybitApiError, BybitDemoClient
 from triggertrade.market_data import ContractCategory, FuturesAccountState, FuturesInstrumentMetadata, RegimeCapability
 from triggertrade.market_data.bybit import parse_linear_instrument
 from triggertrade.market_data.futures import MarketRegimeContext
-from triggertrade.persistence import FuturesExecutionStore, OperatorStateStore, TradingState
+from triggertrade.persistence import FuturesExecutionStore, OperatorStateStore, TraceStore, TradingState
 from scripts.bybit_demo_futures_lifecycle_smoke import _intent as lifecycle_smoke_intent
 
 
@@ -384,6 +385,37 @@ def test_paused_idempotent_retry_reconciles_existing_futures_record(tmp_path):
 
     assert result.status is OrderStatus.FILLED
     assert service._adapter.create_calls == 0
+
+
+def test_futures_execution_status_updates_emit_bounded_audit_events(tmp_path):
+    db = tmp_path / "futures.sqlite3"
+    store = FuturesExecutionStore(db)
+    record, created = store.reserve(_record())
+
+    submitted = store.update(
+        replace(
+            record,
+            status=OrderStatus.SUBMITTED,
+            exchange_order_id="ex-order-1",
+            exchange_status="New",
+            updated_at="2026-09-08T12:00:02+00:00",
+        )
+    )
+    cancelled = store.update(
+        replace(
+            submitted,
+            status=OrderStatus.CANCELLED,
+            exchange_status="Cancelled",
+            reconciliation_state="cancelled",
+            updated_at="2026-09-08T12:00:03+00:00",
+        )
+    )
+
+    events = TraceStore(db).list_audit_events(limit=10, entity_id=cancelled.intent_id)
+
+    assert created is True
+    assert {event.event_type for event in events} >= {"ORDER_RESERVED", "ORDER_SUBMITTED", "ORDER_CANCELLED"}
+    assert events[0].order_id == "ex-order-1"
 
 
 def test_idempotency_timeout_reconcile_does_not_duplicate(tmp_path):

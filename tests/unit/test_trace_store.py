@@ -1,7 +1,10 @@
 from decimal import Decimal
 
 from triggertrade.execution import OrderType, RiskDecision, Side, TradeIntent
+import pytest
+
 from triggertrade.persistence import TraceStore
+from triggertrade.persistence.trace_store import TraceStoreError
 from triggertrade.triggers import Signal, SignalType
 
 
@@ -48,3 +51,76 @@ def test_trace_store_reconstructs_signal_strategy_and_risk(tmp_path):
     assert trace["signals"][0]["signal_id"] == "sig-1"
     assert trace["strategy"]["strategy_rule_id"] == "STR-001"
     assert trace["risk"]["risk_decision_id"] == "risk-1"
+
+    events = store.list_audit_events(limit=10)
+    assert {event.event_type for event in events} == {"TRIGGER_EVALUATED"}
+    assert events[0].entity_id == "sig-1"
+
+
+def test_audit_events_are_append_only_idempotent_and_sanitized(tmp_path):
+    store = TraceStore(tmp_path / "trace.sqlite3")
+
+    first = store.record_audit_event(
+        event_type="operator_action",
+        source_type="user_operator",
+        source_id="unit",
+        scope="active",
+        entity_type="operator_action",
+        entity_id="pause:2026-09-08T12:00:00+00:00",
+        result="success",
+        reason_code="Authorization: Bearer secret-token",
+        safe_metadata={"symbol": "BTCUSDT", "api_secret": "unit-secret-value"},
+        created_at="2026-09-08T12:00:00+00:00",
+        event_id="audit-unit-1",
+    )
+    second = store.record_audit_event(
+        event_type="operator_action",
+        source_type="user_operator",
+        source_id="unit",
+        scope="active",
+        entity_type="operator_action",
+        entity_id="pause:2026-09-08T12:00:00+00:00",
+        result="success",
+        reason_code="Authorization: Bearer secret-token",
+        safe_metadata={"symbol": "BTCUSDT", "api_secret": "unit-secret-value"},
+        created_at="2026-09-08T12:00:00+00:00",
+        event_id="audit-unit-1",
+    )
+
+    assert first == second
+    assert store.list_audit_events(limit=10)[0].reason_code == "[redacted]"
+    assert store.list_audit_events(limit=10)[0].safe_metadata["redacted_field_1"] == "[redacted]"
+
+    with pytest.raises(TraceStoreError, match="immutable audit event conflict"):
+        store.record_audit_event(
+            event_type="operator_action",
+            source_type="user_operator",
+            source_id="unit",
+            scope="active",
+            entity_type="operator_action",
+            entity_id="pause:2026-09-08T12:00:00+00:00",
+            result="failed",
+            created_at="2026-09-08T12:00:00+00:00",
+            event_id="audit-unit-1",
+        )
+
+
+def test_audit_event_listing_is_bounded_and_filterable(tmp_path):
+    store = TraceStore(tmp_path / "trace.sqlite3")
+    for index in range(300):
+        store.record_audit_event(
+            event_type="entry_rejected" if index % 2 else "set_evaluated",
+            source_type="runtime",
+            scope="active",
+            entity_type="runtime_candle",
+            entity_id=f"BTCUSDT:1m:2026-09-08T12:{index:03d}:00+00:00",
+            result="recorded",
+            created_at=f"2026-09-08T12:{index:03d}:00+00:00",
+        )
+
+    all_events = store.list_audit_events(limit=999)
+    rejected = store.list_audit_events(limit=20, event_type="ENTRY_REJECTED")
+
+    assert len(all_events) == 250
+    assert len(rejected) == 20
+    assert {event.event_type for event in rejected} == {"ENTRY_REJECTED"}

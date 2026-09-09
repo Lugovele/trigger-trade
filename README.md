@@ -200,6 +200,17 @@ Research facts, including Daily Loss state when available. It never accepts
 browser file paths or exposes raw logs, request headers, `.env` contents,
 cookies, tokens, or exchange credentials.
 
+Material runtime and operator transitions also write append-only structured
+audit events. The audit trail is a compact causal index over existing
+authoritative records, not a replacement for orders, fills, positions, Rules,
+Sets, Research, Messages, or accounting tables. Events include stable ids,
+source/scope, entity identity, Set/Rules/Trigger pins where available, result,
+reason code, and sanitized metadata. System History includes the latest
+bounded audit slice with truncation markers so an operator can connect
+trigger/set evaluation, entry approval or rejection, execution,
+reconciliation, Research, recovery, and operator actions without dumping the
+whole database.
+
 ## Demo Health and Soak Harness
 
 The dashboard exposes a read-only `/api/readiness` contract with
@@ -266,8 +277,11 @@ Research Demo orchestration is fail-closed in this foundation. Demo start is
 blocked unless Research-specific execution and accounting isolation can be
 positively established. Dynamic TP rules are not substituted with Fixed TP, and
 Rules requiring Daily Loss block Research Demo until isolated Research
-accounting exists. Make Active records a blocked decision request only; no
-Research path promotes Trigger Sets or Rules to ACTIVE.
+accounting exists. Make Active promotes exactly the Research-pinned Trigger
+Set Version plus Trading Rules Version atomically when eligibility passes. It
+does not rewrite Research evidence or existing positions, and it records
+promotion evidence in Research state, Messages, System History, and the audit
+trail.
 
 
 ## Bybit Linear Instrument Catalog

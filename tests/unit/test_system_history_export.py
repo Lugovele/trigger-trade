@@ -1,9 +1,10 @@
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from triggertrade.accounting import EquitySnapshot
 from triggertrade.dashboard.read_model import DashboardReadModel
 from triggertrade.config import load_config
-from triggertrade.persistence import LaneCandleLifecycle, MessageStore, RuntimeStore, TradingRulesStore
+from triggertrade.persistence import LaneCandleLifecycle, MessageStore, RuntimeStore, TraceStore, TradingRulesStore
 from triggertrade.persistence.futures_accounting_store import FuturesAccountingStore
 from triggertrade.rules import TradingRulesService
 from triggertrade.persistence.operator_state_store import OperatorStateStore
@@ -33,6 +34,7 @@ def test_system_history_export_contains_factual_sections_without_research_fabric
         "INSTRUMENTS",
         "RESEARCH",
         "RISK / DECISIONS",
+        "AUDIT TRAIL",
         "ERRORS",
     ):
         assert section in text
@@ -46,6 +48,7 @@ def test_system_history_export_contains_factual_sections_without_research_fabric
 
 def test_system_history_export_includes_allowlisted_daily_loss_state(tmp_path):
     db = _empty_db(tmp_path)
+    today = datetime.now(UTC).date().isoformat()
     config = load_config({"TRIGGERTRADE_RUNTIME_DB_PATH": str(db), "TRIGGERTRADE_WATCHLIST": "BTCUSDT", "TRIGGERTRADE_RUNTIME_SYMBOL": "BTCUSDT"})
     rules = TradingRulesService(TradingRulesStore(db))
     rules.ensure_initial_version(config)
@@ -57,7 +60,7 @@ def test_system_history_export_includes_allowlisted_daily_loss_state(tmp_path):
     FuturesAccountingStore(db).record_equity_snapshot(
         EquitySnapshot(
             snapshot_id="daily-loss-export-equity",
-            observed_at="2026-09-08T00:00:01+00:00",
+            observed_at=f"{today}T00:00:01+00:00",
             source="exchange_wallet",
             wallet_balance=Decimal("100"),
             equity=Decimal("100"),
@@ -147,6 +150,35 @@ def test_system_history_export_includes_checkpoint_recovery_evidence(tmp_path):
     assert "stale_entry_suppressed" in text
     assert "recovery_backfill_no_stale_execution" in text
     assert "Runtime checkpoint recovery completed" in text
+
+
+def test_system_history_export_includes_bounded_audit_trail(tmp_path):
+    db = _empty_db(tmp_path)
+    trace = TraceStore(db)
+    for index in range(55):
+        trace.record_audit_event(
+            event_type="ENTRY_REJECTED",
+            source_type="RUNTIME",
+            scope="ACTIVE",
+            entity_type="risk_decision",
+            entity_id=f"risk-{index}",
+            set_id="triggertrade-futures-core",
+            set_version="v1",
+            rules_version_id="rules-v1",
+            result="REJECTED",
+            reason_code="no_signal",
+            safe_metadata={"authorization": "Bearer unit-token", "symbol": "BTCUSDT"},
+            created_at=f"2026-09-08T12:{index:02d}:00+00:00",
+        )
+
+    text = SystemHistoryExporter(read_model=DashboardReadModel(db)).build_export()
+
+    assert "AUDIT TRAIL" in text
+    assert "audit_event:" in text
+    assert "ENTRY_REJECTED" in text
+    assert "audit_event_truncated: true; showing latest 50" in text
+    assert "unit-token" not in text
+    assert "[redacted]" in text
 
 
 def test_system_history_export_sanitizes_secret_like_values(tmp_path):
@@ -264,6 +296,10 @@ def test_system_history_export_requests_bounded_registry_and_rules_reads():
 
         def get_latest_decision(self):
             return None
+
+        def list_audit_events(self, *, limit=None):
+            assert limit == 51
+            return ()
 
     text = SystemHistoryExporter(read_model=GuardedReadModel()).build_export()
 
