@@ -26,6 +26,7 @@ The project is intentionally small. The infrastructure exists to keep money-movi
 - `docs/execution-and-safety.md`
 - `docs/development-lifecycle.md`
 - `docs/mvp-scope.md`
+- `docs/trading-methodology/README.md`
 
 ## Local Dashboard
 
