@@ -280,6 +280,34 @@ snapshot remains the latest factual Portfolio evidence, account readiness
 degrades or becomes unavailable, and new entries cannot proceed with fabricated
 fresh account state.
 
+## Backup and Restore Safety
+
+Backup is operational recovery state, not a System History export. The backup
+service snapshots only the configured runtime SQLite database with SQLite's
+online backup API and stores the result in ignored local `backups/` files with a
+safe manifest. The manifest records a UTC backup id, source DB name, size,
+duration, SHA-256 checksum, SQLite integrity result, table counts, and whether
+forbidden secret-like material was detected. It does not include `.env`, API
+credentials, private keys, external credential files, pytest artifacts, or raw
+logs.
+
+Restore verification is isolated by design. A backup id resolves only within
+the managed backup directory; traversal and arbitrary absolute paths are
+rejected. Verification checks checksum and SQLite integrity before copying to
+`.tmp/restore-verification/`, then opens that restored copy through the same
+persistence stores/read models used by the runtime and dashboard. The workflow
+compares critical identities such as active Set Version, current Rules Version,
+version counts, Research counts, order/fill/position/accounting counts,
+Messages, operator state, and Audit Trail counts. It never overwrites the
+active DB automatically.
+
+A restored DB is a historical snapshot. Account, market, heartbeat, readiness,
+and catalog freshness must be refreshed before operation. If the backup
+contains open or unknown positions/orders, restoration must remain
+reconciliation-required and new entries must stay fail-closed until Bybit Demo
+exchange state is reconciled. Retention is intentionally manual for now;
+scheduled backup and destructive retention policy are future operational work.
+
 ## Futures Accounting Safety
 
 Futures accounting consumes explicit execution/fill/funding/equity facts and

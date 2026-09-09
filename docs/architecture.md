@@ -145,6 +145,19 @@ one latest heartbeat row with an allowlisted status and bounded metadata, so
 restart can recover the latest known liveness signal without converting
 heartbeats into an unbounded technical log stream.
 
+Operational backup is a separate persistence concern from System History. The
+backup workflow snapshots the configured runtime SQLite database with
+SQLite-safe backup semantics, writes a small manifest beside the backup, and
+restores only to an isolated verification copy. The runtime DB remains the
+source for immutable Rules versions, Trigger/Set versions, the active Set +
+Rules pair, Research evidence, execution/accounting state, operator state,
+Messages, and audit events. Heartbeat, readiness, and catalog cache rows may be
+present in the snapshot, but restored copies must treat those as historical
+evidence that requires fresh runtime checks before operation. Restore
+verification opens the isolated DB through the real stores/read models and
+compares critical identities/counts; it never silently overwrites the active
+DB, never takes browser-supplied file paths, and never uploads backups.
+
 The futures runtime treats `runtime_lane_state` as the monotonic checkpoint for
 each lane, symbol, timeframe, and Trigger Set Version. `runtime_lane_lifecycles`
 is the corresponding audit/readiness evidence. If restart detects that the next

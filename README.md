@@ -211,6 +211,32 @@ trigger/set evaluation, entry approval or rejection, execution,
 reconciliation, Research, recovery, and operator actions without dumping the
 whole database.
 
+## Backup and Restore
+
+Operational backups are separate from System History. Backup snapshots preserve
+the local SQLite persistence state needed to recover product continuity:
+immutable Rules and Trigger Set histories, the active Set + Rules pair,
+Research evidence, orders, fills, positions, accounting, operator state,
+Messages, and the structured audit trail. System History remains the bounded
+human/AI-readable diagnostic export; it is not a restore point.
+
+`BackupService` creates SQLite-consistent snapshots with the SQLite backup API
+into ignored local `backups/` files and writes a safe JSON manifest containing
+the backup id, UTC timestamp, source DB name, SHA-256 checksum, integrity-check
+result, table counts, size, duration, and `contains_secrets=false`. It never
+backs up `.env`, credentials, private keys, pytest temp state, or arbitrary
+browser-supplied paths. Restore verification copies a verified backup only into
+an isolated ignored location such as `.tmp/restore-verification/`, opens it
+through the real persistence stores/read models, compares critical identities,
+and refuses corrupted, checksum-mismatched, missing, or traversal-style backup
+ids.
+
+Restoring a backup that contains open or unknown execution state is not enough
+to resume trading. Stop the runtime, verify the backup, restore manually only
+after preserving the damaged DB, start in a safe/reconciliation-first posture,
+refresh account/market/readiness evidence, reconcile Bybit Demo state, and keep
+new entries fail-closed until reconciliation is complete.
+
 ## Demo Health and Soak Harness
 
 The dashboard exposes a read-only `/api/readiness` contract with

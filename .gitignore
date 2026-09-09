@@ -45,6 +45,7 @@ dist/
 Thumbs.db
 
 # Runtime state, logs, and local data
+/backups/
 logs/
 *.log
 runtime/
