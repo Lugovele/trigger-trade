@@ -491,6 +491,12 @@ class RuntimeStore:
             _add_column_if_missing(conn, "runtime_lane_lifecycles", "rules_evaluation", "TEXT")
             conn.execute(
                 """
+                CREATE INDEX IF NOT EXISTS idx_runtime_lane_lifecycles_processed
+                ON runtime_lane_lifecycles(processed_at DESC)
+                """
+            )
+            conn.execute(
+                """
                 CREATE TABLE IF NOT EXISTS market_regime_evaluations (
                     context_id TEXT PRIMARY KEY,
                     symbol TEXT NOT NULL,

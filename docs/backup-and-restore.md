@@ -91,3 +91,6 @@ completes.
 
 Retention is intentionally manual in this unit. Scheduled backup automation and
 destructive retention cleanup require a separate operational lifecycle review.
+See `docs/data-integrity-and-retention.md` for the current table/category
+classification. Backup inclusion is broader than retention class because a
+backup is a recovery snapshot, not an archive policy.

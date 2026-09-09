@@ -237,6 +237,24 @@ after preserving the damaged DB, start in a safe/reconciliation-first posture,
 refresh account/market/readiness evidence, reconcile Bybit Demo state, and keep
 new entries fail-closed until reconciliation is complete.
 
+## Data Integrity and Retention
+
+TriggerTrade classifies persistence into explicit retention groups instead of
+deleting historical evidence to control growth. Rules, Trigger Versions, Set
+Versions, Research evidence, orders, fills, positions, accounting, operator
+actions, and material Audit Trail events are permanent evidence. Messages,
+equity snapshots, runtime recovery summaries, and current operator state are
+long-term operational state. Instrument catalog rows are reconstructable cache,
+while component heartbeats are ephemeral runtime evidence.
+
+`run_database_integrity_audit()` is a read-only service for SQLite integrity,
+foreign-key checks, orphan/dangling reference checks, duplicate semantic
+identity checks, enum/timestamp sanity, active pair integrity, row counts,
+growth classification, and query-plan review. It prints no record payloads and
+does not repair or delete data. Automatic destructive retention is intentionally
+not enabled; future archival or downsampling requires a separate reviewed
+lifecycle.
+
 ## Demo Health and Soak Harness
 
 The dashboard exposes a read-only `/api/readiness` contract with

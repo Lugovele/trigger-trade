@@ -158,6 +158,16 @@ verification opens the isolated DB through the real stores/read models and
 compares critical identities/counts; it never silently overwrites the active
 DB, never takes browser-supplied file paths, and never uploads backups.
 
+Database integrity auditing is read-only and retention-aware. The audit service
+inspects SQLite integrity, foreign-key checks, required orphan relationships,
+semantic duplicate risks, active pair coherence, enum/timestamp validity, row
+counts, query plans, and table retention class. It deliberately does not repair
+semantic data, does not delete historical trading or Research evidence, and
+does not introduce a parallel source of truth. Permanent evidence stays in its
+own owning domain tables; high-frequency runtime observations are classified
+separately so future archive/downsample work can be reviewed without touching
+immutable histories.
+
 The futures runtime treats `runtime_lane_state` as the monotonic checkpoint for
 each lane, symbol, timeframe, and Trigger Set Version. `runtime_lane_lifecycles`
 is the corresponding audit/readiness evidence. If restart detects that the next

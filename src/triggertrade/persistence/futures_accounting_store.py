@@ -242,6 +242,12 @@ class FuturesAccountingStore:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_futures_equity_observed
+                ON futures_equity_snapshots(observed_at DESC, snapshot_id DESC)
+                """
+            )
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path)

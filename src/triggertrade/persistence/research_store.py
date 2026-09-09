@@ -549,7 +549,13 @@ class ResearchStore:
             )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_research_updated ON research_entities(updated_at DESC)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_research_backtests_created ON research_backtest_runs(created_at DESC)")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_research_backtests_research_created ON research_backtest_runs(research_id, created_at DESC)"
+            )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_research_demo_created ON research_demo_runs(created_at DESC)")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_research_demo_research_created ON research_demo_runs(research_id, created_at DESC)"
+            )
             _ensure_column(conn, "research_entities", "promoted_set_id", "TEXT")
             _ensure_column(conn, "research_entities", "promoted_set_version", "TEXT")
             _ensure_column(conn, "research_entities", "promoted_rules_version_id", "TEXT")
