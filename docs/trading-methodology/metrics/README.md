@@ -12,11 +12,11 @@ Normalized TriggerTrade Raw Data
         ↓
 Derived Metrics
         ↓
-Composite Market States / Conditions
-        ↓
-Hypotheses
-        ↓
 Triggers
+        ↓
+Sets
+        ↓
+Research
         ↓
 Trading Rule Sets
 ```
@@ -41,3 +41,18 @@ Trading Rule Sets
   explicitly defined as a metric in the catalog.
 - Presence of a metric in the catalog does not imply that it is a proven
   trading edge.
+
+## Forward Dependency
+
+```text
+data
+↓
+metrics
+↓
+triggers
+↓
+sets
+```
+
+The next methodology layer is `../triggers/`, where canonical metric instances
+become explicit evaluable rules through deterministic comparison semantics.

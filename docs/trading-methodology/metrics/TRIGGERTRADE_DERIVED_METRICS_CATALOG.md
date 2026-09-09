@@ -1308,9 +1308,12 @@ This baseline has been reviewed against the following requirements; future revis
 
 # 7. Next methodology layer
 
-After the metric catalog baseline, the methodology should define **Composite Market States / Conditions**, not triggers immediately.
+After the metric catalog baseline, the methodology defines triggers directly
+from approved metrics and explicit comparison semantics. Sets may later combine
+triggers; no separate mandatory Composite Market State or Condition layer is
+required.
 
-Examples of future condition families:
+Examples of future research themes:
 
 ```text
 PRICE_OI_RELATIONSHIP
@@ -1581,12 +1584,13 @@ Retained metrics that may be used for benchmarks or hypothesis-specific research
 
 No metric tier implies trading profitability.
 No metric becomes a trigger merely because it is available in the catalog.
-No event predicate such as crossover, breakout, reclaim, threshold breach, divergence confirmation, or multi-timeframe alignment becomes an atomic metric merely because it is calculated from metrics. Such predicates belong to Composite Market States / Conditions or later hypothesis/trigger layers.
+No event predicate such as crossover, breakout, reclaim, threshold breach, divergence confirmation, or multi-timeframe alignment becomes an atomic metric merely because it is calculated from metrics. Such predicates belong to future trigger definitions or set/research layers when explicitly specified.
 
 The promotion path remains:
 
 Metric defined
-→ hypothesis formulated
+→ trigger definition specified
+→ Set or hypothesis formulated
 → research candidate
 → backtested evidence
 → subsequent methodology lifecycle stages

@@ -4,7 +4,7 @@ This directory defines the methodology data foundation for TriggerTrade.
 
 The data layer establishes the raw exchange-data universe, normalization
 requirements, historical testability constraints, and dependency boundary that
-future metrics, regimes, setups, triggers, and Trading Rule Sets must trace back
+future metrics, triggers, Sets, Research, and Trading Rule Sets must trace back
 to.
 
 Conceptual sequence:
@@ -16,11 +16,13 @@ Normalized TriggerTrade Raw Data
         ↓
 Derived Metrics
         ↓
-Market Interpretation
+Triggers
         ↓
-Regime / Setup / Trigger
+Sets
         ↓
-Trading Rule Set
+Research
+        ↓
+Trading Rule Sets
 ```
 
 ## Catalogs
@@ -46,7 +48,9 @@ data
 ↓
 metrics
 ↓
-future market states / conditions
+triggers
+↓
+future sets
 ```
 
 The next methodology layer is `../metrics/`, which defines derived metrics that
