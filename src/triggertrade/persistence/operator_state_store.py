@@ -6,9 +6,16 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
+import re
 import sqlite3
 
 from triggertrade.persistence.trace_store import TraceStore
+
+
+_SECRET_RE = re.compile(
+    r"(api[_-]?key|api[_-]?secret|authorization|bearer|cookie|csrf|session|token|password|credential|signature|\.env)",
+    re.I,
+)
 
 
 class TradingState(StrEnum):
@@ -134,6 +141,7 @@ class OperatorStateStore:
         changed_at: str | None = None,
     ) -> OperatorActionAudit:
         changed_at = changed_at or _now()
+        clean_error = _safe_error(error)
         with self._connect() as conn:
             conn.execute(
                 """
@@ -141,7 +149,7 @@ class OperatorStateStore:
                     changed_at, action, target, result, source, error
                 ) VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (changed_at, action, target, result, source, error),
+                (changed_at, action, target, result, source, clean_error),
             )
         self._audit_operator_event(
             event_type=f"OPERATOR_{action.upper()}",
@@ -150,10 +158,10 @@ class OperatorStateStore:
             result=result,
             source=source,
             changed_at=changed_at,
-            error=error,
+            error=clean_error,
             metadata={"action": action, "target": target},
         )
-        return OperatorActionAudit(action, changed_at, target, result, source, error)
+        return OperatorActionAudit(action, changed_at, target, result, source, clean_error)
 
     def operator_action_rows(self, *, limit: int | None = None) -> tuple[OperatorActionAudit, ...]:
         safe_limit = None if limit is None else max(1, min(int(limit), 500))
@@ -258,3 +266,10 @@ class OperatorStateStore:
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _safe_error(value: str | None) -> str | None:
+    if value is None:
+        return None
+    text = " ".join(str(value).replace("\x00", "").split())[:500]
+    return "[redacted]" if _SECRET_RE.search(text) else text

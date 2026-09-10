@@ -218,6 +218,36 @@ class FuturesDualLaneRuntime:
             self._recover_active_unresolved(instrument, active_account)
             self._monitor_active_positions(instrument, active_account)
 
+        test_sets = tuple(self._trigger_set_store.list_testing_sets(self._config.futures_runtime.symbol, "1m"))
+        active_already_processed = (
+            active_set is not None
+            and _lane_already_processed(
+                self._runtime_store,
+                lane=Lane.ACTIVE,
+                trigger_set=active_set,
+                completed=completed,
+            )
+        )
+        already_processed_test_sets = tuple(
+            trigger_set
+            for trigger_set in test_sets
+            if _lane_already_processed(
+                self._runtime_store,
+                lane=Lane.TEST,
+                trigger_set=trigger_set,
+                completed=completed,
+            )
+        )
+        if active_already_processed and len(already_processed_test_sets) == len(test_sets):
+            self._checkpoint_lane(Lane.ACTIVE, active_set, completed)
+            for trigger_set in test_sets:
+                self._checkpoint_lane(Lane.TEST, trigger_set, completed)
+            return FuturesDualLaneResult(
+                completed.candle_id,
+                (RuntimeCycleResult(completed.candle_id, None, skipped_reason="already_processed"),),
+                tuple(RuntimeCycleResult(completed.candle_id, None, skipped_reason="already_processed") for _ in test_sets),
+            )
+
         event = futures_event_from_completed_candle(
             completed=completed,
             source="bybit_demo_linear_kline",
@@ -264,7 +294,7 @@ class FuturesDualLaneRuntime:
                 candles=candles,
                 regime_context=regime_context,
             )
-            for trigger_set in self._trigger_set_store.list_testing_sets(event.symbol, event.timeframe)
+            for trigger_set in test_sets
         )
         return FuturesDualLaneResult(completed.candle_id, active_results, test_results)
 
@@ -1602,6 +1632,24 @@ def _lane_checkpoint(store: RuntimeStore, lane: Lane, trigger_set: TriggerSetVer
         trigger_set_id=trigger_set.set_id,
         trigger_set_version=trigger_set.version,
     )
+
+
+def _lane_already_processed(
+    store: RuntimeStore,
+    *,
+    lane: Lane,
+    trigger_set: TriggerSetVersion,
+    completed: CompletedCandle,
+) -> bool:
+    existing = store.get_lane_lifecycle(
+        lane=lane.value,
+        symbol=completed.symbol,
+        timeframe=completed.timeframe,
+        candle_id=completed.candle_id,
+        trigger_set_id=trigger_set.set_id,
+        trigger_set_version=trigger_set.version,
+    )
+    return existing is not None and existing.status in _RECOVERY_SUCCESS_STATUSES
 
 
 def _is_futures_set(trigger_set: TriggerSetVersion) -> bool:

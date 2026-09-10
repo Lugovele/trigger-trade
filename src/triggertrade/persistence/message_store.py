@@ -43,7 +43,7 @@ class MessageRecord:
 
 _ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,120}$")
 _SECRET_RE = re.compile(
-    r"(api[_-]?key|api[_-]?secret|authorization|bearer|cookie|csrf|session|token|password|credential|\.env)",
+    r"(api[_-]?key|api[_-]?secret|authorization|bearer|cookie|csrf|session|token|password|credential|signature|\.env)",
     re.I,
 )
 

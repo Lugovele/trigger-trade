@@ -172,6 +172,27 @@ def test_secret_like_material_inside_db_blocks_backup(tmp_path):
         BackupService(db, backup_dir=tmp_path / "backups").create_backup(created_at="2026-09-09T03:06:00+00:00")
 
 
+def test_secret_like_material_after_first_scan_page_blocks_backup(tmp_path):
+    db = _seed_operational_db(tmp_path)
+    with sqlite3.connect(db) as conn:
+        for index in range(501):
+            body = "routine message"
+            if index == 500:
+                body = "signature=unit-secret-signature"
+            conn.execute(
+                """
+                INSERT INTO user_messages(
+                    message_id, created_at, type, severity, title, body, source,
+                    entity_type, entity_id, is_read, read_at, dedupe_key, expires_at, metadata_json
+                ) VALUES (?, ?, 'INFO', 'INFO', 'scan', ?, 'unit', NULL, NULL, 0, NULL, NULL, NULL, '{}')
+                """,
+                (f"msg_scan_{index}", f"2026-09-09T04:{index % 60:02d}:00+00:00", body),
+            )
+
+    with pytest.raises(BackupRestoreError, match="forbidden secret-like material"):
+        BackupService(db, backup_dir=tmp_path / "backups").create_backup(created_at="2026-09-09T04:00:00+00:00")
+
+
 def _seed_operational_db(tmp_path, *, include_open_position: bool = False):
     db = tmp_path / "triggertrade.sqlite3"
     config = load_config({"TRIGGERTRADE_RUNTIME_DB_PATH": str(db), "TRIGGERTRADE_WATCHLIST": "BTCUSDT"})

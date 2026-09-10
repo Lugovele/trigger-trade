@@ -77,3 +77,18 @@ def test_secret_like_metadata_and_body_are_redacted(tmp_path):
     assert row.body == "[redacted]"
     assert row.metadata["api_secret"] == "[redacted]"
     assert row.metadata["symbol"] == "BTCUSDT"
+
+
+def test_signature_like_message_fields_are_redacted(tmp_path):
+    store = MessageStore(tmp_path / "messages.sqlite3")
+
+    row = store.create_message(
+        body="signature=unit-signature",
+        severity="ERROR",
+        source="unit",
+        metadata={"signature": "unit-signature", "symbol": "BTCUSDT"},
+    )
+
+    assert row.body == "[redacted]"
+    assert row.metadata["signature"] == "[redacted]"
+    assert row.metadata["symbol"] == "BTCUSDT"

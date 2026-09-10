@@ -423,7 +423,7 @@ def _secret_findings(conn: sqlite3.Connection) -> tuple[str, ...]:
             if "TEXT" in str(column["type"] if isinstance(column, sqlite3.Row) else column[2]).upper()
         ]
         for column in text_columns:
-            rows = conn.execute(f'SELECT "{column}" FROM "{table}" WHERE "{column}" IS NOT NULL LIMIT 500').fetchall()
+            rows = conn.execute(f'SELECT "{column}" FROM "{table}" WHERE "{column}" IS NOT NULL')
             for row in rows:
                 value = str(row[0])
                 if _SECRET_VALUE_RE.search(value):

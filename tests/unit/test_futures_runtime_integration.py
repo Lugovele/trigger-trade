@@ -227,6 +227,59 @@ def test_no_gap_restart_is_idempotent_and_does_not_backfill(tmp_path):
     assert client.linear_historical_calls == 0
 
 
+def test_already_processed_restart_does_not_rewrite_market_regime(tmp_path):
+    path = tmp_path / "runtime.sqlite3"
+    store = RuntimeStore(path)
+    trigger_sets = TriggerSetStore(path)
+    bootstrap_current_trigger_sets(trigger_sets)
+    active_set = trigger_sets.get_active_set("BTCUSDT", "1m")
+    assert active_set is not None
+    test_sets = trigger_sets.list_testing_sets("BTCUSDT", "1m")
+    latest_open = datetime(2026, 9, 5, 13, 9, tzinfo=UTC)
+    latest_candle_id = f"BTCUSDT:1m:{latest_open.isoformat()}"
+    completed_at = "2026-09-05T13:10:00+00:00"
+    store.lane_checkpoint(_lane_checkpoint(latest_open))
+    store.save_market_regime(
+        MarketRegimeContext(
+            context_id="regime-existing",
+            symbol="BTCUSDT",
+            timeframe="1m",
+            observed_at=completed_at,
+            capability=RegimeCapability.AVAILABLE,
+            label=MarketRegimeLabel.SIDEWAYS,
+            input_snapshot={"existing": "true"},
+        )
+    )
+    for lane, trigger_set in ((Lane.ACTIVE, active_set), *((Lane.TEST, item) for item in test_sets)):
+        store.save_lane_lifecycle(
+            LaneCandleLifecycle(
+                lane=lane.value,
+                symbol="BTCUSDT",
+                timeframe="1m",
+                candle_id=latest_candle_id,
+                candle_open_time=latest_open.isoformat(),
+                trigger_set_id=trigger_set.set_id,
+                trigger_set_version=trigger_set.version,
+                status="no_signal",
+                processed_at="2026-09-05T13:10:01+00:00",
+                regime_context_id="regime-existing",
+                regime_state="SIDEWAYS",
+            )
+        )
+
+    result = _runtime(
+        tmp_path,
+        path=path,
+        client=LinearOnlyMarketClient(candles=_flat_candles(start_minute=7, count=3), historical_candles=_flat_candles(count=10)),
+        clock=lambda: datetime(2026, 9, 5, 13, 10, 30, tzinfo=UTC),
+    ).process_once()
+
+    assert result.skipped_reason is None
+    assert result.active[0].skipped_reason == "already_processed"
+    assert all(item.skipped_reason == "already_processed" for item in result.test)
+    assert store.latest_market_regime("BTCUSDT", "1m").input_snapshot == {"existing": "true"}
+
+
 def test_recovery_suppresses_stale_historical_entry_orders(tmp_path):
     path = tmp_path / "runtime.sqlite3"
     RuntimeStore(path).lane_checkpoint(_lane_checkpoint(datetime(2026, 9, 5, 13, 4, tzinfo=UTC)))

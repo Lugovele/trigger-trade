@@ -95,6 +95,27 @@ def test_operator_pause_default_persistence_and_resume(tmp_path):
     assert len(OperatorStateStore(db).audit_rows()) == 2
 
 
+def test_operator_action_error_is_sanitized_before_persistence(tmp_path):
+    db = tmp_path / "operator.sqlite3"
+    store = OperatorStateStore(db)
+
+    row = store.record_operator_action(
+        action="CLOSE_ALL",
+        target="ACTIVE",
+        result="FAILED",
+        source="unit",
+        error="Authorization: Bearer unit-secret signature=unit-signature",
+        changed_at="2026-09-05T01:10:00+00:00",
+    )
+
+    audit_row = store.operator_action_rows(limit=1)[0]
+    event = TraceStore(db).list_audit_events(limit=1)[0]
+
+    assert row.error == "[redacted]"
+    assert audit_row.error == "[redacted]"
+    assert event.reason_code == "[redacted]"
+
+
 def test_active_execution_blocked_while_paused_but_reconciliation_continues(tmp_path):
     db = tmp_path / "orders.sqlite3"
     operator = OperatorStateStore(db)
