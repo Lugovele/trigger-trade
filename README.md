@@ -276,9 +276,17 @@ backfill, validates that every completed 1m candle from checkpoint+1 through
 the latest completed candle is present, then replays them oldest to newest.
 Recovered historical signals are recorded as recovery evidence but cannot place
 late entry orders; normal execution resumes only after the checkpoint catches
-up to fresh completed candles. Missing, conflicting, out-of-order, oversized,
-or checkpoint-ahead data leaves readiness degraded/blocked instead of silently
-skipping candles.
+up to fresh completed candles. Large complete gaps recover through repeated
+bounded batches with persisted checkpoint progress. Missing, conflicting,
+out-of-order, repeated/non-progressing, unavailable, or checkpoint-ahead data
+leaves readiness degraded/blocked instead of silently skipping candles.
+
+Cold restart verification treats immutable versions, the active Set + Rules
+pair, Research, execution/accounting facts, operator state, Messages, Audit
+Trail, and Daily Loss state as exact persisted evidence. Market data, account
+snapshots, Portfolio freshness, heartbeat, readiness, reconciliation, and
+catalog freshness must be rehydrated before being shown as current truth. See
+`docs/cold-restart-and-recovery.md`.
 
 The futures runtime refreshes the ACTIVE Bybit Demo account snapshot once per
 normal completed-candle cycle, before signal evaluation. This keeps Portfolio

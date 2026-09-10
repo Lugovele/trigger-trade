@@ -16,8 +16,12 @@ from triggertrade.exchanges import BybitApiError, BybitResponse
 from triggertrade.market_data import ContractCategory, FuturesAccountState, FuturesInstrumentMetadata
 from triggertrade.market_data import FuturesMarketEvent, MarketRegimeContext, MarketRegimeLabel, RegimeCapability
 from triggertrade.persistence import (
+    DailyLossStore,
     FuturesExecutionStore,
+    MessageSeverity,
     MessageStore,
+    ResearchBacktestStatus,
+    ResearchDemoStatus,
     ResearchStore,
     TradingRulesStore,
     FuturesExecutionRecord,
@@ -26,6 +30,7 @@ from triggertrade.persistence import (
     LaneCandleLifecycle,
     OperatorStateStore,
     RuntimeStore,
+    RuntimeHeartbeat,
     LaneRuntimeCheckpoint,
     TraceStore,
     TriggerSetStore,
@@ -34,11 +39,13 @@ from triggertrade.persistence import (
     InstrumentCatalogStore,
 )
 from triggertrade.persistence.futures_accounting_store import FuturesAccountingStore
+from triggertrade.services.backup_restore import BackupService, critical_state_fingerprint
+from triggertrade.services.db_integrity_audit import run_database_integrity_audit
 from triggertrade.services.futures_runtime import FuturesDualLaneRuntime, _is_futures_set
 from triggertrade.services.instrument_catalog import InstrumentCatalogService
 from triggertrade.services.research import ResearchService
 from triggertrade.rules import DirectionMode, TakeProfitMode, TradingRulesService
-from triggertrade.services.runtime import build_runtime_from_env
+from triggertrade.services.runtime import RuntimeCycleResult, build_runtime_from_env
 from triggertrade.execution.position_lifecycle import PositionStatus, futures_position_id
 from triggertrade.strategies import IntegrationDirectionalFuturesStrategy
 from triggertrade.trigger_sets import Lane
@@ -477,6 +484,179 @@ def test_recovery_paginates_newest_first_exchange_pages(tmp_path):
     assert client.linear_historical_calls > 1
 
 
+def test_recovery_streams_24_hour_gap_without_total_gap_hard_stop(tmp_path):
+    path = tmp_path / "runtime.sqlite3"
+    start = datetime(2026, 9, 5, 0, 0, tzinfo=UTC)
+    latest_open = start + timedelta(hours=24)
+    historical = _flat_candles(start_time=start, count=1441)
+    RuntimeStore(path).lane_checkpoint(_lane_checkpoint(start))
+    adapter = RecordingFuturesAdapter(order_status="New")
+    client = LinearOnlyMarketClient(candles=historical[-3:], historical_candles=historical)
+    runtime = _runtime(
+        tmp_path,
+        path=path,
+        client=client,
+        active_adapter=adapter,
+        clock=lambda: latest_open + timedelta(minutes=1, seconds=30),
+    )
+    processed: list[str] = []
+    runtime._process_lane = _fast_recovery_processor(runtime, processed)
+
+    result = runtime.process_once()
+
+    checkpoint = RuntimeStore(path).get_lane_checkpoint(
+        lane="ACTIVE",
+        symbol="BTCUSDT",
+        timeframe="1m",
+        trigger_set_id="triggertrade-futures-core",
+        trigger_set_version="v1",
+    )
+    messages = MessageStore(path).list_messages(limit=10)
+    progress = next(item for item in RuntimeStore(path).list_heartbeats() if item.component == "futures_runtime")
+
+    assert result.skipped_reason == "checkpoint_recovered"
+    assert len(result.active) == 1440
+    assert processed == [f"BTCUSDT:1m:{(start + timedelta(minutes=index)).isoformat()}" for index in range(1, 1441)]
+    assert checkpoint.last_processed_candle_open_time == latest_open.isoformat()
+    assert client.linear_historical_calls > 1
+    assert adapter.create_calls == 0
+    assert sum(1 for message in messages if message.title == "Runtime checkpoint gap detected") == 1
+    assert sum(1 for message in messages if message.title == "Runtime checkpoint recovery completed") == 1
+    assert progress.status == "RUNNING"
+
+
+def test_recovery_streams_multi_day_gap_with_bounded_pages(tmp_path):
+    path = tmp_path / "runtime.sqlite3"
+    start = datetime(2026, 9, 5, 0, 0, tzinfo=UTC)
+    latest_open = start + timedelta(days=3)
+    historical = _flat_candles(start_time=start, count=(3 * 24 * 60) + 1)
+    RuntimeStore(path).lane_checkpoint(_lane_checkpoint(start))
+    client = LinearOnlyMarketClient(candles=historical[-3:], historical_candles=historical, page_limit=75)
+    runtime = _runtime(
+        tmp_path,
+        path=path,
+        client=client,
+        active_adapter=RecordingFuturesAdapter(order_status="New"),
+        clock=lambda: latest_open + timedelta(minutes=1, seconds=30),
+    )
+    processed: list[str] = []
+    runtime._process_lane = _fast_recovery_processor(runtime, processed)
+
+    result = runtime.process_once()
+
+    checkpoint = RuntimeStore(path).get_lane_checkpoint(
+        lane="ACTIVE",
+        symbol="BTCUSDT",
+        timeframe="1m",
+        trigger_set_id="triggertrade-futures-core",
+        trigger_set_version="v1",
+    )
+
+    assert result.skipped_reason == "checkpoint_recovered"
+    assert len(processed) == 3 * 24 * 60
+    assert checkpoint.last_processed_candle_open_time == latest_open.isoformat()
+    assert client.linear_historical_calls > 20
+
+
+def test_recovery_fails_closed_when_cross_batch_candle_is_missing(tmp_path):
+    path = tmp_path / "runtime.sqlite3"
+    start = datetime(2026, 9, 5, 0, 0, tzinfo=UTC)
+    latest_open = start + timedelta(minutes=500)
+    missing_open = start + timedelta(minutes=201)
+    historical = [
+        row
+        for row in _flat_candles(start_time=start, count=501)
+        if datetime.fromtimestamp(int(row[0]) / 1000, UTC) != missing_open
+    ]
+    RuntimeStore(path).lane_checkpoint(_lane_checkpoint(start))
+
+    result = _runtime(
+        tmp_path,
+        path=path,
+        client=LinearOnlyMarketClient(candles=historical[-3:], historical_candles=historical),
+        clock=lambda: latest_open + timedelta(minutes=1, seconds=30),
+    ).process_once()
+
+    checkpoint = RuntimeStore(path).get_lane_checkpoint(
+        lane="ACTIVE",
+        symbol="BTCUSDT",
+        timeframe="1m",
+        trigger_set_id="triggertrade-futures-core",
+        trigger_set_version="v1",
+    )
+
+    assert result.skipped_reason == "checkpoint_gap"
+    assert checkpoint.last_processed_candle_open_time == "2026-09-05T03:20:00+00:00"
+
+
+def test_recovery_fails_closed_on_repeated_non_progressing_page(tmp_path):
+    path = tmp_path / "runtime.sqlite3"
+    start = datetime(2026, 9, 5, 0, 0, tzinfo=UTC)
+    latest_open = start + timedelta(minutes=260)
+    historical = _flat_candles(start_time=start, count=261)
+    RuntimeStore(path).lane_checkpoint(_lane_checkpoint(start))
+
+    result = _runtime(
+        tmp_path,
+        path=path,
+        client=RepeatingPageHistoricalClient(candles=historical[-3:], historical_candles=historical),
+        clock=lambda: latest_open + timedelta(minutes=1, seconds=30),
+    ).process_once()
+
+    assert result.skipped_reason == "checkpoint_gap"
+
+
+def test_recovery_crash_mid_long_gap_resumes_from_committed_checkpoint(tmp_path):
+    path = tmp_path / "runtime.sqlite3"
+    start = datetime(2026, 9, 5, 0, 0, tzinfo=UTC)
+    latest_open = start + timedelta(minutes=1000)
+    historical = _flat_candles(start_time=start, count=1001)
+    RuntimeStore(path).lane_checkpoint(_lane_checkpoint(start))
+    processed: list[str] = []
+    runtime = _runtime(
+        tmp_path,
+        path=path,
+        client=LinearOnlyMarketClient(candles=historical[-3:], historical_candles=historical),
+        clock=lambda: latest_open + timedelta(minutes=1, seconds=30),
+    )
+    calls = {"count": 0}
+
+    def crashing_process_lane(**kwargs):
+        result = _fast_recovery_processor(runtime, processed)(**kwargs)
+        if kwargs["lane"] is Lane.ACTIVE:
+            calls["count"] += 1
+            if calls["count"] == 300:
+                raise RuntimeError("simulated long recovery crash")
+        return result
+
+    runtime._process_lane = crashing_process_lane
+    with pytest.raises(RuntimeError, match="simulated long recovery crash"):
+        runtime.process_once()
+
+    committed = RuntimeStore(path).get_lane_checkpoint(
+        lane="ACTIVE",
+        symbol="BTCUSDT",
+        timeframe="1m",
+        trigger_set_id="triggertrade-futures-core",
+        trigger_set_version="v1",
+    )
+    resumed = _runtime(
+        tmp_path,
+        path=path,
+        client=LinearOnlyMarketClient(candles=historical[-3:], historical_candles=historical),
+        clock=lambda: latest_open + timedelta(minutes=1, seconds=30),
+    )
+    resumed_processed: list[str] = []
+    resumed._process_lane = _fast_recovery_processor(resumed, resumed_processed)
+    result = resumed.process_once()
+
+    assert committed.last_processed_candle_open_time == (start + timedelta(minutes=300)).isoformat()
+    assert result.skipped_reason == "checkpoint_recovered"
+    assert len(result.active) == 700
+    assert f"BTCUSDT:1m:{(start + timedelta(minutes=300)).isoformat()}" not in resumed_processed
+    assert resumed_processed[0] == f"BTCUSDT:1m:{(start + timedelta(minutes=301)).isoformat()}"
+
+
 def test_recovery_restart_resumes_from_last_committed_checkpoint(tmp_path):
     path = tmp_path / "runtime.sqlite3"
     store = RuntimeStore(path)
@@ -513,6 +693,173 @@ def test_recovery_restart_resumes_from_last_committed_checkpoint(tmp_path):
         trigger_set_id="triggertrade-futures-core",
         trigger_set_version="v1",
     ) == 1
+
+
+def test_cold_restart_preserves_persisted_state_and_rehydrates_runtime_evidence(tmp_path):
+    path = tmp_path / "cold-restart.sqlite3"
+    restart_now = datetime.now(UTC).replace(second=30, microsecond=0)
+    latest_open = restart_now.replace(second=0, microsecond=0) - timedelta(minutes=1)
+    checkpoint_open = latest_open - timedelta(minutes=5)
+    recent_candles = _flat_candles(start_time=latest_open - timedelta(minutes=2), count=3)
+    historical_candles = _flat_candles(start_time=checkpoint_open, count=6)
+    config = load_config(_env(path))
+    trigger_sets = TriggerSetStore(path)
+    bootstrap_current_trigger_sets(trigger_sets, created_at="2026-09-05T00:00:00+00:00")
+    rules = TradingRulesService(TradingRulesStore(path)).ensure_initial_version(
+        config,
+        created_at="2026-09-05T00:00:00+00:00",
+    )
+    active_pair = trigger_sets.get_active_trading_pair("BTCUSDT", "1m")
+    assert active_pair is not None
+
+    research_store = ResearchStore(path)
+    research_service = ResearchService(
+        store=research_store,
+        trigger_set_store=trigger_sets,
+        trading_rules_store=TradingRulesStore(path),
+        message_store=MessageStore(path),
+    )
+    research = research_service.create_research(
+        set_id=active_pair.trigger_set.set_id,
+        set_version=active_pair.trigger_set.version,
+        rules_version_id=rules.rules_version_id,
+        created_at="2026-09-05T12:00:00+00:00",
+    )
+    backtest = research_store.add_backtest_run(
+        research_id=research.research_id,
+        period_start="2026-09-01T00:00:00+00:00",
+        period_end="2026-09-02T00:00:00+00:00",
+        timeframe="1m",
+        status=ResearchBacktestStatus.COMPLETED_NO_TRADES,
+        metrics={"profit_factor": None, "trades": 0},
+        created_at="2026-09-05T12:01:00+00:00",
+    )
+    research_store.select_backtest_run(research.research_id, backtest.run_id, selected_at="2026-09-05T12:02:00+00:00")
+    demo = research_store.add_demo_run(
+        research_id=research.research_id,
+        status=ResearchDemoStatus.STOPPED,
+        started_at="2026-09-05T12:03:00+00:00",
+        stopped_at="2026-09-05T12:04:00+00:00",
+        execution_scope_id=f"research:{research.research_id}",
+        account_scope=f"research:{research.research_id}",
+        created_at="2026-09-05T12:03:00+00:00",
+    )
+    research_store.select_demo_run(research.research_id, demo.run_id, selected_at="2026-09-05T12:05:00+00:00")
+
+    message_store = MessageStore(path)
+    read_message = message_store.create_message(
+        severity=MessageSeverity.INFO,
+        title="Cold restart fixture",
+        body="Persisted message state",
+        source="unit",
+        created_at="2026-09-05T12:06:00+00:00",
+    )
+    unread_message = message_store.create_message(
+        severity=MessageSeverity.ATTENTION,
+        title="Unread cold restart fixture",
+        body="Unread state must survive",
+        source="unit",
+        created_at="2026-09-05T12:07:00+00:00",
+    )
+    message_store.mark_read([read_message.message_id], read_at="2026-09-05T12:08:00+00:00")
+
+    operator = OperatorStateStore(path)
+    operator.pause(changed_at="2026-09-05T12:09:00+00:00", source="unit")
+    DailyLossStore(path).ensure_baseline(
+        trading_day="2026-09-05",
+        baseline_equity=Decimal("100"),
+        baseline_source="unit",
+        baseline_observed_at="2026-09-05T00:00:00+00:00",
+        updated_at="2026-09-05T12:10:00+00:00",
+    )
+    DailyLossStore(path).latch(
+        trading_day="2026-09-05",
+        latched_at="2026-09-05T12:11:00+00:00",
+        rules_version_id=rules.rules_version_id,
+        reason="unit_loss_limit",
+    )
+    FuturesExecutionStore(path).reserve(_execution_record(intent_id="cold-open", risk_decision_id="cold-risk"))
+    FuturesPositionStore(path).save_open_position(
+        replace(_position_record(open_intent_id="cold-open"), open_execution_id="cold-open")
+    )
+    FuturesAccountingStore(path).record_closed_trade(_closed_trade("cold-closed", Decimal("-1")))
+    RuntimeStore(path).record_heartbeat(
+        RuntimeHeartbeat(
+            component="futures_runtime",
+            status="DEGRADED",
+            observed_at="2026-09-05T12:12:00+00:00",
+            detail="pre-cold-restart stale heartbeat",
+        )
+    )
+    RuntimeStore(path).lane_checkpoint(_lane_checkpoint(checkpoint_open))
+    TraceStore(path).record_audit_event(
+        event_type="COLD_RESTART_FIXTURE",
+        source_type="UNIT",
+        source_id="cold-restart-test",
+        scope="ACTIVE",
+        entity_type="runtime",
+        entity_id="cold-restart",
+        result="RECORDED",
+        created_at="2026-09-05T12:13:00+00:00",
+    )
+
+    backup = BackupService(path, backup_dir=tmp_path / "backups", restore_dir=tmp_path / "restore")
+    manifest = backup.create_backup(created_at="2026-09-05T12:14:00+00:00", suffix="pre-cold")
+    assert backup.verify_backup(manifest.backup_id).valid is True
+    before = _cold_restart_fingerprint(path)
+    critical_before = critical_state_fingerprint(path)
+
+    adapter = RecordingFuturesAdapter(order_status="New")
+    first_restart = _runtime(
+        tmp_path,
+        path=path,
+        client=LinearOnlyMarketClient(candles=recent_candles, historical_candles=historical_candles),
+        active_adapter=adapter,
+        account_provider=RecordingAccountProvider(_instrument(), equity=Decimal("160"), available=Decimal("155")),
+        clock=lambda: restart_now,
+    ).process_once()
+    second_restart = _runtime(
+        tmp_path,
+        path=path,
+        client=LinearOnlyMarketClient(candles=recent_candles, historical_candles=historical_candles),
+        active_adapter=adapter,
+        account_provider=RecordingAccountProvider(_instrument(), equity=Decimal("161"), available=Decimal("156")),
+        clock=lambda: restart_now + timedelta(seconds=15),
+    ).process_once()
+
+    after = _cold_restart_fingerprint(path)
+    post_manifest = backup.create_backup(created_at="2026-09-05T13:11:00+00:00", suffix="post-cold")
+    integrity = run_database_integrity_audit(path)
+    readiness = {check.name: check for check in DashboardReadModel(path).get_demo_readiness().checks}
+    heartbeat = next(item for item in RuntimeStore(path).list_heartbeats() if item.component == "futures_runtime")
+    latest_snapshot = FuturesAccountingStore(path).latest_equity_snapshot()
+
+    assert first_restart.skipped_reason == "checkpoint_recovered"
+    assert second_restart.active[0].skipped_reason == "already_processed"
+    assert adapter.create_calls == 0
+    assert before["active_pair"] == after["active_pair"]
+    assert before["rules_versions"] == after["rules_versions"]
+    assert before["trigger_versions"] == after["trigger_versions"]
+    assert before["set_versions"] == after["set_versions"]
+    assert before["research"] == after["research"]
+    assert before["selected_runs"] == after["selected_runs"]
+    assert before["operator_state"] == after["operator_state"]
+    assert before["daily_loss_latch"] == after["daily_loss_latch"]
+    assert before["order_identities"] == after["order_identities"]
+    assert after["orders"][0][2] == "exchange-1"
+    assert before["positions"] == after["positions"]
+    assert before["closed_trades"] == after["closed_trades"]
+    assert before["read_message"] == after["read_message"]
+    assert before["unread_message"] == after["unread_message"]
+    assert after["checkpoint_open_time"] == latest_open.isoformat()
+    assert after["checkpoint_messages"] == (1, 1)
+    assert after["audit_events_count"] > before["audit_events_count"]
+    assert critical_state_fingerprint(path)["open_positions_count"] == critical_before["open_positions_count"]
+    assert latest_snapshot["equity"] == "161"
+    assert heartbeat.status == "RUNNING"
+    assert readiness["market_data"].status == "RUNNING"
+    assert backup.verify_backup(post_manifest.backup_id).valid is True
+    assert integrity.passed is True
 
 
 def test_recovery_crash_midstream_resumes_without_duplicate_committed_candles(tmp_path):
@@ -1177,6 +1524,114 @@ def test_futures_strategy_rejects_mismatched_regime_provenance():
         ).reason == "regime_provenance_mismatch"
 
 
+def _cold_restart_fingerprint(path):
+    with sqlite3.connect(path) as conn:
+        conn.row_factory = sqlite3.Row
+        active_pair = conn.execute(
+            """
+            SELECT s.set_id, s.version AS set_version, c.rules_version_id
+            FROM trigger_set_versions s
+            CROSS JOIN trading_rules_current c
+            WHERE s.status = 'ACTIVE' AND c.scope = 'LIVE'
+            ORDER BY s.set_id, s.version
+            LIMIT 1
+            """
+        ).fetchone()
+        read_message = conn.execute(
+            "SELECT message_id, is_read, read_at FROM user_messages WHERE title = 'Cold restart fixture'"
+        ).fetchone()
+        unread_message = conn.execute(
+            "SELECT message_id, is_read, read_at FROM user_messages WHERE title = 'Unread cold restart fixture'"
+        ).fetchone()
+        daily_loss = conn.execute(
+            "SELECT trading_day, latched, latched_at, latched_rules_version_id FROM daily_loss_state WHERE trading_day = '2026-09-05'"
+        ).fetchone()
+        checkpoint = conn.execute(
+            """
+            SELECT last_processed_candle_open_time
+            FROM runtime_lane_state
+            WHERE lane = 'ACTIVE' AND symbol = 'BTCUSDT' AND timeframe = '1m'
+              AND trigger_set_id = 'triggertrade-futures-core'
+              AND trigger_set_version = 'v1'
+            """
+        ).fetchone()
+        detected = conn.execute(
+            "SELECT COUNT(*) FROM user_messages WHERE title = 'Runtime checkpoint gap detected'"
+        ).fetchone()[0]
+        completed = conn.execute(
+            "SELECT COUNT(*) FROM user_messages WHERE title = 'Runtime checkpoint recovery completed'"
+        ).fetchone()[0]
+        operator = conn.execute("SELECT state, changed_at FROM operator_trading_state WHERE scope = 'ACTIVE'").fetchone()
+        return {
+            "active_pair": None
+            if active_pair is None
+            else (active_pair["set_id"], active_pair["set_version"], active_pair["rules_version_id"]),
+            "rules_versions": _rows(
+                conn.execute("SELECT rules_version_id, version FROM trading_rules_versions ORDER BY rules_version_id").fetchall()
+            ),
+            "trigger_versions": _rows(
+                conn.execute("SELECT rule_id, version, definition_hash FROM rule_definitions ORDER BY rule_id, version").fetchall()
+            ),
+            "set_versions": _rows(
+                conn.execute("SELECT set_id, version, status, composition_hash FROM trigger_set_versions ORDER BY set_id, version").fetchall()
+            ),
+            "research": _rows(
+                conn.execute(
+                    """
+                    SELECT research_id, status, set_id, set_version, rules_version_id, decision
+                    FROM research_entities
+                    ORDER BY research_id
+                    """
+                ).fetchall()
+            ),
+            "selected_runs": _rows(
+                conn.execute(
+                    """
+                    SELECT research_id, selected_backtest_run_id, selected_demo_run_id
+                    FROM research_entities
+                    ORDER BY research_id
+                    """
+                ).fetchall()
+            ),
+            "operator_state": None if operator is None else (operator["state"], operator["changed_at"]),
+            "daily_loss_latch": None
+            if daily_loss is None
+            else (
+                daily_loss["trading_day"],
+                daily_loss["latched"],
+                daily_loss["latched_at"],
+                daily_loss["latched_rules_version_id"],
+            ),
+            "orders": _rows(
+                conn.execute(
+                    "SELECT intent_id, client_order_id, exchange_order_id, status FROM futures_execution_orders ORDER BY intent_id"
+                ).fetchall()
+            ),
+            "order_identities": _rows(
+                conn.execute("SELECT intent_id, client_order_id FROM futures_execution_orders ORDER BY intent_id").fetchall()
+            ),
+            "positions": _rows(
+                conn.execute(
+                    "SELECT position_id, status, open_execution_id, trigger_set_id, trigger_set_version, rules_version_id FROM futures_positions ORDER BY position_id"
+                ).fetchall()
+            ),
+            "closed_trades": _rows(
+                conn.execute("SELECT trade_id, net_pnl, evidence_source FROM futures_closed_trades ORDER BY trade_id").fetchall()
+            ),
+            "read_message": None if read_message is None else (read_message["message_id"], read_message["is_read"], read_message["read_at"]),
+            "unread_message": None
+            if unread_message is None
+            else (unread_message["message_id"], unread_message["is_read"], unread_message["read_at"]),
+            "checkpoint_open_time": None if checkpoint is None else checkpoint["last_processed_candle_open_time"],
+            "checkpoint_messages": (detected, completed),
+            "audit_events_count": conn.execute("SELECT COUNT(*) FROM audit_events").fetchone()[0],
+        }
+
+
+def _rows(rows):
+    return tuple(tuple(row) for row in rows)
+
+
 def test_executable_futures_set_requires_exact_mandatory_rule_membership():
     trigger_set = current_futures_active_trigger_set(created_at="2026-09-05T00:00:00+00:00")
 
@@ -1229,6 +1684,19 @@ def _runtime(
         clock=clock or (lambda: datetime(2026, 9, 5, 13, 10, 30, tzinfo=UTC)),
         logger=lambda message: None,
     )
+
+
+def _fast_recovery_processor(runtime, processed):
+    def process(**kwargs):
+        lane = kwargs["lane"]
+        trigger_set = kwargs["trigger_set"]
+        completed = kwargs["completed"]
+        if lane is Lane.ACTIVE:
+            processed.append(completed.candle_id)
+            runtime._checkpoint_lane(lane, trigger_set, completed)
+        return RuntimeCycleResult(completed.candle_id, None, skipped_reason="stale_entry_suppressed")
+
+    return process
 
 
 def _env(db_path, *, demo_expected_gross_move="1", market="linear"):
@@ -1304,6 +1772,13 @@ class NewestFirstHistoricalClient(LinearOnlyMarketClient):
             if (start_ms is None or int(row[0]) >= start_ms) and (end_ms is None or int(row[0]) <= end_ms)
         ]
         return BybitResponse(0, "OK", {"list": rows[:safe_limit]})
+
+
+class RepeatingPageHistoricalClient(LinearOnlyMarketClient):
+    def linear_historical_candles(self, symbol, interval, start_ms=None, end_ms=None, limit=200):
+        self.linear_historical_calls += 1
+        rows = self._historical_candles[:limit]
+        return BybitResponse(0, "OK", {"list": list(reversed(rows))})
 
 
 class OutOfOrderHistoricalClient(LinearOnlyMarketClient):

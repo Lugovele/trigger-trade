@@ -285,7 +285,7 @@ _DUPLICATE_CHECKS = (
 
 _ENUM_CHECKS = (
     ("set_status_known", ("trigger_set_versions",), "SELECT COUNT(*) FROM trigger_set_versions WHERE status NOT IN ('DRAFT','TESTING','ACTIVE','ARCHIVE')", "Set status must be recognized."),
-    ("research_status_known", ("research_entities",), "SELECT COUNT(*) FROM research_entities WHERE status NOT IN ('DRAFT','BACKTEST_READY','DEMO_RUNNING','DEMO_STOPPED','DECISION_NEEDED','ARCHIVED','MADE_ACTIVE','MAKE_ACTIVE_BLOCKED')", "Research status must be recognized."),
+    ("research_status_known", ("research_entities",), "SELECT COUNT(*) FROM research_entities WHERE status NOT IN ('DRAFT','BACKTEST_READY','DEMO_RUNNING','DEMO_STOPPED','DECISION_NEEDED','ARCHIVED','BLOCKED','MADE_ACTIVE','MAKE_ACTIVE_BLOCKED')", "Research status must be recognized."),
     ("message_severity_known", ("user_messages",), "SELECT COUNT(*) FROM user_messages WHERE severity NOT IN ('INFO','ATTENTION','WARNING','ERROR')", "Message severity must be recognized."),
     ("order_status_known", ("futures_execution_orders",), "SELECT COUNT(*) FROM futures_execution_orders WHERE status NOT IN ('created','submitting','submitted','partially_filled','filled','cancel_pending','cancelled','rejected','unknown')", "Futures order status must be recognized."),
     ("position_status_known", ("futures_positions",), "SELECT COUNT(*) FROM futures_positions WHERE status NOT IN ('OPEN','CLOSING','UNKNOWN')", "Open position status must be recognized."),

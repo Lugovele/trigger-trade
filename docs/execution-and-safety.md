@@ -97,16 +97,24 @@ For Bybit Demo linear futures, completed-candle checkpoint recovery is explicit.
 The ACTIVE lane loads its persisted `runtime_lane_state` checkpoint and expects
 the next completed 1m candle to be contiguous. If the normal recent-candle
 window cannot prove continuity, the runtime fetches bounded historical linear
-klines, validates every missing completed candle in order, and replays them
-oldest to newest through the approved trigger/rules evidence path. Historical
-recovery is not permission to open a stale trade: entry opportunities from
-missed candles are persisted as `stale_entry_suppressed`, while normal
-execution resumes from the next fresh completed candle after recovery catches
-up. The checkpoint is advanced only after the recovered candle lifecycle row is
-persisted, so a crash during recovery resumes at the first uncommitted candle.
-Missing candles, conflicting duplicates, out-of-order pages, oversized gaps, or
-checkpoints ahead of exchange evidence fail closed and keep readiness degraded
-or blocked.
+klines in bounded batches, validates every missing completed candle in order,
+and replays them oldest to newest through the approved trigger/rules evidence
+path. Historical recovery is not permission to open a stale trade: entry
+opportunities from missed candles are persisted as `stale_entry_suppressed`,
+while normal execution resumes from the next fresh completed candle after
+recovery catches up. The checkpoint is advanced only after the recovered candle
+lifecycle row is persisted, so a crash during recovery resumes at the first
+uncommitted candle. Missing candles, conflicting duplicates, out-of-order pages,
+repeated/non-progressing pages, unavailable data, or checkpoints ahead of
+exchange evidence fail closed and keep readiness degraded or blocked.
+
+Cold restart verification uses a full process boundary: no in-memory runtime
+state is trusted after shutdown. Exact persisted state is loaded first, then
+market/account data and exchange reconciliation are refreshed. Startup must not
+submit new ACTIVE entry orders before checkpoint continuity, account freshness,
+reconciliation requirements, and operator state all permit it. A second cold
+restart must be idempotent and must not duplicate bootstrap versions, Messages,
+Audit Trail events, orders, fills, or positions.
 
 ## Paper/live parity
 

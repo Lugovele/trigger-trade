@@ -76,7 +76,8 @@ class FuturesDualLaneResult:
 
 
 _RECOVERY_PAGE_LIMIT = 200
-_MAX_RECOVERY_CANDLES = 1000
+_RECOVERY_BATCH_CANDLES = 200
+_MAX_RECOVERY_PAGE_REQUESTS = 10000
 _RECOVERY_SUCCESS_STATUSES = {
     "no_signal",
     "no_intent",
@@ -818,75 +819,92 @@ class FuturesDualLaneRuntime:
                 "checkpoint_before": active_checkpoint.last_processed_candle_open_time,
             },
         )
-        try:
-            missing = self._missing_completed_candles_from_checkpoint(active_checkpoint, recent_candles)
-        except RuntimeGapError as exc:
-            self._message_store.create_message(
-                severity=MessageSeverity.ERROR,
-                title="Runtime checkpoint recovery failed",
-                body="Futures runtime could not prove complete candle continuity and remains degraded.",
-                source="futures_runtime",
-                entity_type="runtime_checkpoint",
-                entity_id=f"{active_set.set_id}:{active_set.version}",
-                dedupe_key=f"checkpoint-recovery-failed:{active_set.set_id}:{active_set.version}",
-                metadata={"reason": str(exc)[:160]},
-            )
-            self._log(f"futures runtime checkpoint recovery failed: {exc.__class__.__name__}")
-            return FuturesDualLaneResult(None, (), (), "checkpoint_gap")
-        if not missing:
-            return FuturesDualLaneResult(None, (), (), "no_completed_candle")
-
         active_results: list[RuntimeCycleResult] = []
         test_results: list[RuntimeCycleResult] = []
-        for completed in missing:
-            event = futures_event_from_completed_candle(
-                completed=completed,
-                source="bybit_demo_linear_kline|checkpoint_recovery",
-                instrument_version=f"{instrument.contract_type}:{instrument.settlement_asset}",
-            )
-            regime_context = evaluate_market_regime(
-                RegimeEvaluationWindow(
-                    symbol=event.symbol,
-                    timeframe=event.timeframe,
-                    observed_at=event.close_time,
-                    candles=tuple(
-                        candle
-                        for candle in sorted(recent_candles + tuple(item.candle for item in missing), key=lambda item: item.start_time_ms)
-                        if candle.start_time_ms <= completed.candle.start_time_ms
-                    ),
-                    category=event.category,
-                    current_candle_completed=True,
+        recovered_count = 0
+        recovery_batches = 0
+        latest: CompletedCandle | None = None
+        while True:
+            current_checkpoint = _lane_checkpoint(self._runtime_store, Lane.ACTIVE, active_set)
+            if current_checkpoint is None:
+                current_checkpoint = active_checkpoint
+            try:
+                missing = self._missing_completed_candle_batch_from_checkpoint(current_checkpoint, recent_candles)
+            except RuntimeGapError as exc:
+                self._message_store.create_message(
+                    severity=MessageSeverity.ERROR,
+                    title="Runtime checkpoint recovery failed",
+                    body="Futures runtime could not prove complete candle continuity and remains degraded.",
+                    source="futures_runtime",
+                    entity_type="runtime_checkpoint",
+                    entity_id=f"{active_set.set_id}:{active_set.version}",
+                    dedupe_key=f"checkpoint-recovery-failed:{active_set.set_id}:{active_set.version}",
+                    metadata={"reason": str(exc)[:160]},
                 )
-            )
-            self._runtime_store.save_market_regime(regime_context)
-            active_results.append(
-                self._process_lane(
-                    lane=Lane.ACTIVE,
-                    trigger_set=active_set,
+                self._log(f"futures runtime checkpoint recovery failed: {exc.__class__.__name__}")
+                return FuturesDualLaneResult(None if latest is None else latest.candle_id, tuple(active_results), tuple(test_results), "checkpoint_gap")
+            if not missing:
+                break
+
+            recovery_batches += 1
+            batch_candles = tuple(item.candle for item in missing)
+            for completed in missing:
+                event = futures_event_from_completed_candle(
                     completed=completed,
-                    event=event,
-                    instrument=instrument,
-                    candles=recent_candles + tuple(item.candle for item in missing),
-                    regime_context=regime_context,
-                    rules_version=active_pair.rules_version if active_pair is not None else None,
-                    recovery_mode=True,
+                    source="bybit_demo_linear_kline|checkpoint_recovery",
+                    instrument_version=f"{instrument.contract_type}:{instrument.settlement_asset}",
                 )
-            )
-            for trigger_set in self._trigger_set_store.list_testing_sets(completed.symbol, completed.timeframe):
-                test_results.append(
+                regime_context = evaluate_market_regime(
+                    RegimeEvaluationWindow(
+                        symbol=event.symbol,
+                        timeframe=event.timeframe,
+                        observed_at=event.close_time,
+                        candles=tuple(
+                            candle
+                            for candle in sorted(recent_candles + batch_candles, key=lambda item: item.start_time_ms)
+                            if candle.start_time_ms <= completed.candle.start_time_ms
+                        ),
+                        category=event.category,
+                        current_candle_completed=True,
+                    )
+                )
+                self._runtime_store.save_market_regime(regime_context)
+                active_results.append(
                     self._process_lane(
-                        lane=Lane.TEST,
-                        trigger_set=trigger_set,
+                        lane=Lane.ACTIVE,
+                        trigger_set=active_set,
                         completed=completed,
                         event=event,
                         instrument=instrument,
-                        candles=recent_candles + tuple(item.candle for item in missing),
+                        candles=recent_candles + batch_candles,
                         regime_context=regime_context,
+                        rules_version=active_pair.rules_version if active_pair is not None else None,
                         recovery_mode=True,
                     )
                 )
+                for trigger_set in self._trigger_set_store.list_testing_sets(completed.symbol, completed.timeframe):
+                    test_results.append(
+                        self._process_lane(
+                            lane=Lane.TEST,
+                            trigger_set=trigger_set,
+                            completed=completed,
+                            event=event,
+                            instrument=instrument,
+                            candles=recent_candles + batch_candles,
+                            regime_context=regime_context,
+                            recovery_mode=True,
+                        )
+                    )
+                latest = completed
+            recovered_count += len(missing)
+            self._record_heartbeat(
+                "DEGRADED",
+                f"checkpoint_recovery_progress:{recovered_count}:{recovery_batches}",
+            )
 
-        latest = missing[-1]
+        if latest is None:
+            return FuturesDualLaneResult(None, (), (), "no_completed_candle")
+
         try:
             active_account = self._refresh_active_account_snapshot(instrument)
             self._recover_active_unresolved(instrument, active_account)
@@ -906,7 +924,8 @@ class FuturesDualLaneRuntime:
             metadata={
                 "symbol": latest.symbol,
                 "timeframe": latest.timeframe,
-                "recovered_candles": len(missing),
+                "recovered_candles": recovered_count,
+                "recovery_batches": recovery_batches,
                 "checkpoint_before": active_checkpoint.last_processed_candle_open_time,
                 "checkpoint_after": latest.open_time.isoformat(),
             },
@@ -914,7 +933,7 @@ class FuturesDualLaneRuntime:
         self._record_heartbeat("RUNNING", "checkpoint_recovered")
         return FuturesDualLaneResult(latest.candle_id, tuple(active_results), tuple(test_results), "checkpoint_recovered")
 
-    def _missing_completed_candles_from_checkpoint(
+    def _missing_completed_candle_batch_from_checkpoint(
         self,
         checkpoint: LaneRuntimeCheckpoint,
         recent_candles: tuple,
@@ -935,14 +954,15 @@ class FuturesDualLaneRuntime:
         if last_open == latest.open_time:
             return ()
 
+        batch_end = min(latest.open_time, last_open + interval * _RECOVERY_BATCH_CANDLES)
         candles_by_open: dict[datetime, object] = {}
-        expected_start = last_open
-        target_open = latest.open_time
-        range_start = expected_start
-        range_end = target_open
+        range_start = last_open
+        range_end = batch_end
+        requests = 0
         while range_start <= range_end:
-            if len(candles_by_open) > _MAX_RECOVERY_CANDLES:
-                raise RuntimeGapError("checkpoint recovery gap exceeds bounded candle limit")
+            requests += 1
+            if requests > _MAX_RECOVERY_PAGE_REQUESTS:
+                raise RuntimeGapError("historical recovery pagination exceeded bounded request limit")
             try:
                 response = self._market_client.linear_historical_candles(
                     checkpoint.symbol,
@@ -977,10 +997,10 @@ class FuturesDualLaneRuntime:
                 range_end = min(page_opens) - interval
             else:
                 raise RuntimeGapError("historical recovery pagination did not include a range boundary")
-            if all(open_time in candles_by_open for open_time in _expected_opens(expected_start, target_open, interval)):
+            if all(open_time in candles_by_open for open_time in _expected_opens(last_open, batch_end, interval)):
                 break
 
-        expected = _expected_opens(expected_start, target_open, interval)
+        expected = _expected_opens(last_open, batch_end, interval)
         missing_open = next((open_time for open_time in expected if open_time not in candles_by_open), None)
         if missing_open is not None:
             raise RuntimeGapError(f"historical recovery missing candle {missing_open.isoformat()}")
@@ -1341,8 +1361,6 @@ def _expected_opens(start: datetime, end: datetime, interval: timedelta) -> list
     while cursor <= end:
         expected.append(cursor)
         cursor += interval
-        if len(expected) > _MAX_RECOVERY_CANDLES + 1:
-            raise RuntimeGapError("checkpoint recovery gap exceeds bounded candle limit")
     return expected
 
 

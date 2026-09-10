@@ -71,6 +71,32 @@ def test_database_integrity_audit_detects_unknown_enums_and_bad_timestamps(tmp_p
     assert any(item.name == "trading_rules_versions.created_at.interpretable" and item.status == "FAIL" for item in audit.timestamp_checks)
 
 
+def test_database_integrity_audit_accepts_blocked_research_status(tmp_path):
+    db = _seed_db(tmp_path)
+    active = TriggerSetStore(db).get_active_set("BTCUSDT", "1m")
+    assert active is not None
+    current_rules = TradingRulesStore(db).get_current()
+    assert current_rules is not None
+    research = ResearchService(
+        store=ResearchStore(db),
+        trigger_set_store=TriggerSetStore(db),
+        trading_rules_store=TradingRulesStore(db),
+        message_store=MessageStore(db),
+    ).create_research(
+        set_id=active.set_id,
+        set_version=active.version,
+        rules_version_id=current_rules.rules_version_id,
+        created_at="2026-09-09T03:00:00+00:00",
+    )
+    with sqlite3.connect(db) as conn:
+        conn.execute("UPDATE research_entities SET status = 'BLOCKED' WHERE research_id = ?", (research.research_id,))
+
+    audit = run_database_integrity_audit(db)
+
+    assert _check(audit.enum_checks, "research_status_known").status == "PASS"
+    assert audit.passed is True
+
+
 def test_database_integrity_audit_query_plans_use_growth_indexes(tmp_path):
     db = _seed_db(tmp_path)
     RuntimeStore(db).save_lane_lifecycle(

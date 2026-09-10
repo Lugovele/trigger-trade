@@ -108,3 +108,9 @@ permanent.
 Backups include all persistence classes because they are operational recovery
 snapshots. Retention classification describes future data lifecycle policy; it
 does not remove anything now.
+
+Cold restart verification relies on this classification: permanent evidence and
+long-term operational identities must survive exactly, while ephemeral runtime
+freshness such as heartbeat/readiness must be rehydrated before it can become
+current operational truth. The DB integrity audit remains read-only after
+restart and must not repair, delete, or rewrite semantic history.

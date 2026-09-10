@@ -172,15 +172,27 @@ The futures runtime treats `runtime_lane_state` as the monotonic checkpoint for
 each lane, symbol, timeframe, and Trigger Set Version. `runtime_lane_lifecycles`
 is the corresponding audit/readiness evidence. If restart detects that the next
 expected completed candle is no longer in the recent market-data window, the
-runtime performs bounded Bybit Demo linear historical backfill, validates
-complete 1m continuity from the persisted checkpoint through the latest
-completed candle, and processes the recovered candles oldest to newest. The
-checkpoint advances only after the lane lifecycle for that candle is persisted,
-so restart after partial recovery resumes from the last committed candle.
+runtime performs bounded Bybit Demo linear historical backfill in repeated
+batches, validates complete 1m continuity from the persisted checkpoint through
+the latest completed candle, and processes the recovered candles oldest to
+newest. The checkpoint advances only after the lane lifecycle for that candle is
+persisted, so restart after partial recovery resumes from the last committed
+candle instead of restarting the whole outage gap.
 Recovered historical entry opportunities are recorded as
 `stale_entry_suppressed` and do not submit late orders; fresh trading resumes
 only after continuity is restored. Missing, conflicting, out-of-order,
-oversized, or checkpoint-ahead data fails closed and keeps readiness non-green.
+repeated/non-progressing, unavailable, or checkpoint-ahead data fails closed and
+keeps readiness non-green.
+
+Cold restart is a full process boundary, not an in-memory service reset. Startup
+must load exact persisted active Set and current Rules identities, operator
+state, Research state, Messages, Audit Trail, execution/accounting state, and
+Daily Loss state before treating the system as operational. Market/account
+freshness, heartbeat, readiness, catalog state, and exchange reconciliation are
+rehydrated facts and must not be promoted from stale persisted rows to current
+truth without a fresh successful runtime pass. A second cold start against the
+same DB must be idempotent: no duplicate registry rows, messages, audit storms,
+orders, fills, or active-pair drift.
 
 Research follows `Backtest -> Demo -> Compare -> Decision`. It is separate
 from the older runtime evidence lanes. Backtests reference immutable

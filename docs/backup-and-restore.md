@@ -87,6 +87,11 @@ does not prove exchange state is current. Bybit Demo may have changed while the
 application was down. New entries must remain fail-closed until reconciliation
 completes.
 
+Cold restart verification creates a verified pre-test backup and a verified
+post-restart backup, then compares critical identities/counts and runs the
+database integrity audit. See `docs/cold-restart-and-recovery.md` for the
+restart-specific persistence and rehydration contract.
+
 ## Retention
 
 Retention is intentionally manual in this unit. Scheduled backup automation and
