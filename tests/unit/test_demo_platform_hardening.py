@@ -348,7 +348,7 @@ def test_demo_soak_harness_requires_explicit_flag_and_demo_linear_config(tmp_pat
         "BYBIT_API_SECRET": "unit-secret",
     }
 
-    with pytest.raises(RuntimeError, match=f"{OPT_IN_FLAG}=1"):
+    with pytest.raises(RuntimeError, match="manual/noncanonical"):
         run_soak(env, cycles=1)
 
     with pytest.raises(RuntimeError, match="refuses live trading"):

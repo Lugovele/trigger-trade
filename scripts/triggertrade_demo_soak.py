@@ -10,6 +10,8 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
@@ -17,6 +19,7 @@ from triggertrade.config import BybitEnvironment, ExecutionVenue, Market, Tradin
 from triggertrade.persistence import RuntimeHeartbeat, RuntimeStore
 from triggertrade.services.bootstrap import merged_runtime_env, runtime_db_path
 from triggertrade.services.runtime import build_runtime_from_env
+from scripts.smoke_guards import require_manual_smoke_opt_in, smoke_metadata
 
 
 OPT_IN_FLAG = "RUN_TRIGGERTRADE_DEMO_SOAK"
@@ -32,8 +35,7 @@ class DemoSoakResult:
 
 def run_soak(env: dict[str, str] | None = None, *, cycles: int | None = None) -> DemoSoakResult:
     source = merged_runtime_env(os.environ if env is None else env)
-    if source.get(OPT_IN_FLAG) != "1":
-        raise RuntimeError(f"{OPT_IN_FLAG}=1 is required for the Bybit Demo soak harness")
+    require_manual_smoke_opt_in(source, OPT_IN_FLAG, "TriggerTrade Demo soak harness")
     if _env_true(source.get("TRIGGERTRADE_LIVE_TRADING_ENABLED")):
         raise RuntimeError("Demo soak refuses live trading")
     if str(source.get("TRIGGERTRADE_TRADING_MODE", "")).strip().lower() == "live":
@@ -50,7 +52,7 @@ def run_soak(env: dict[str, str] | None = None, *, cycles: int | None = None) ->
             status="RUNNING",
             observed_at=datetime.now(UTC).isoformat(),
             detail=f"starting bounded soak for {requested} cycles",
-            metadata={"cycles_requested": str(requested)},
+            metadata={**smoke_metadata(OPT_IN_FLAG), "cycles_requested": str(requested)},
         )
     )
     completed = 0
@@ -69,7 +71,11 @@ def run_soak(env: dict[str, str] | None = None, *, cycles: int | None = None) ->
             status=status,
             observed_at=datetime.now(UTC).isoformat(),
             detail=detail,
-            metadata={"cycles_requested": str(requested), "cycles_completed": str(completed)},
+            metadata={
+                **smoke_metadata(OPT_IN_FLAG),
+                "cycles_requested": str(requested),
+                "cycles_completed": str(completed),
+            },
         )
     )
     if status != "RUNNING":
@@ -99,6 +105,9 @@ def _env_true(value: str | None) -> bool:
 
 
 def main() -> int:
+    if os.environ.get(OPT_IN_FLAG) != "1":
+        print(f"TriggerTrade Demo soak skipped: {OPT_IN_FLAG} is manual/noncanonical")
+        return 0
     try:
         result = run_soak()
     except Exception as exc:  # noqa: BLE001 - CLI reports sanitized class/message without secrets.

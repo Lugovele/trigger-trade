@@ -14,6 +14,7 @@ import sys
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "src"))
 
 from triggertrade.config import BybitConfig, ConfigError, load_bybit_credentials  # noqa: E402
@@ -33,6 +34,10 @@ from triggertrade.execution.position_lifecycle import build_fixed_protective_exi
 from triggertrade.exchanges import BybitApiError, BybitDemoClient, parse_wallet_balance  # noqa: E402
 from triggertrade.market_data import ContractCategory, FuturesAccountState, parse_linear_instrument, parse_linear_ticker  # noqa: E402
 from triggertrade.persistence import FuturesExecutionStore  # noqa: E402
+from scripts.smoke_guards import require_manual_smoke_opt_in, smoke_metadata  # noqa: E402
+
+
+OPT_IN_FLAG = "RUN_BYBIT_DEMO_FUTURES_SMOKE"
 
 
 @dataclass(frozen=True)
@@ -49,8 +54,10 @@ class FuturesSmokeResult:
 
 
 def main() -> int:
-    if os.environ.get("RUN_BYBIT_DEMO_FUTURES_SMOKE") != "1":
-        print("Bybit Demo futures smoke skipped: set RUN_BYBIT_DEMO_FUTURES_SMOKE=1")
+    try:
+        require_manual_smoke_opt_in(os.environ, OPT_IN_FLAG, "Bybit Demo futures smoke")
+    except RuntimeError as exc:
+        print(f"Bybit Demo futures smoke skipped: {exc}")
         return 0
 
     env = _load_env(ROOT / ".env")
@@ -70,6 +77,7 @@ def main() -> int:
     print(f"final status: {result.final_status.value}")
     print(f"reconciled: {result.reconciled}")
     print(f"duplicate local records: {result.duplicate_count}")
+    print(f"classification: {smoke_metadata(OPT_IN_FLAG)['classification']}")
     return 0
 
 
