@@ -2,6 +2,7 @@ import sqlite3
 
 import pytest
 
+from triggertrade.config import ConfigError
 from triggertrade.dashboard.__main__ import create_server_from_env, render_dashboard
 from triggertrade.dashboard.read_model import DashboardReadModel
 from triggertrade.persistence import CandleLifecycle, RuntimeStore, TriggerSetStore, TriggerSetStoreError, current_rule_definitions, current_testing_trigger_set, current_volume_recommendation
@@ -11,7 +12,8 @@ from triggertrade.services.bootstrap import (
     merged_runtime_env,
     runtime_db_path,
 )
-from triggertrade.services.runtime import build_runtime_from_env
+from triggertrade.services.futures_runtime import FuturesDualLaneRuntime
+from triggertrade.services.runtime import build_canonical_runtime_from_env, build_runtime_from_env
 from triggertrade.trigger_sets import RuleDefinition, TriggerSetStatus
 
 
@@ -158,6 +160,54 @@ def test_runtime_builder_bootstraps_same_configured_db_path(tmp_path):
     assert TriggerSetStore(db).get_active_set("BTCUSDT", "1m").version == "v1"
     assert TriggerSetStore(db).get_active_set("BTCUSDT", "1m").set_id == "triggertrade-futures-core"
     assert TriggerSetStore(db).get_set("triggertrade-futures-candidate", "v2-test") is not None
+
+
+def test_canonical_runtime_builder_constructs_futures_runtime(tmp_path):
+    db = tmp_path / "canonical-runtime.sqlite3"
+
+    runtime = build_canonical_runtime_from_env(
+        {
+            "TRIGGERTRADE_RUNTIME_DB_PATH": str(db),
+            "TRIGGERTRADE_MARKET": "linear",
+            "TRIGGERTRADE_CATEGORY": "linear",
+            "TRIGGERTRADE_EXECUTION_VENUE": "bybit_demo_futures",
+            "BYBIT_API_KEY": "unit-key",
+            "BYBIT_API_SECRET": "unit-secret",
+        }
+    )
+
+    assert isinstance(runtime, FuturesDualLaneRuntime)
+
+
+def test_canonical_runtime_rejects_legacy_local_paper_config_before_fallback(tmp_path, monkeypatch):
+    from triggertrade.services import runtime as runtime_module
+
+    called = False
+
+    def fail_if_selected(*args, **kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("legacy PaperTradingRuntime must not be selected")
+
+    monkeypatch.setattr(runtime_module.PaperTradingRuntime, "__init__", fail_if_selected)
+
+    with pytest.raises(ConfigError, match="legacy LOCAL_PAPER"):
+        build_runtime_from_env({"TRIGGERTRADE_RUNTIME_DB_PATH": str(tmp_path / "runtime.sqlite3")})
+
+    assert called is False
+
+
+def test_canonical_runtime_rejects_legacy_spot_execution_config(tmp_path):
+    with pytest.raises(ConfigError, match="legacy spot Bybit execution"):
+        build_runtime_from_env(
+            {
+                "TRIGGERTRADE_RUNTIME_DB_PATH": str(tmp_path / "runtime.sqlite3"),
+                "TRIGGERTRADE_MARKET": "linear",
+                "TRIGGERTRADE_CATEGORY": "linear",
+                "TRIGGERTRADE_EXECUTION_VENUE": "bybit_demo",
+            }
+        )
+
 
 def test_bootstrap_fails_closed_on_existing_candidate_set_semantic_mismatch(tmp_path):
     db = tmp_path / "runtime.sqlite3"

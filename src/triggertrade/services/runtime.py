@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
-from pathlib import Path
 import time
 from typing import Callable
 
@@ -19,8 +18,6 @@ from triggertrade.config import (
     TradingMode,
     load_config,
 )
-from triggertrade.execution import ExecutionError, ExecutionService, PaperExecutionAdapter
-from triggertrade.execution.service import client_order_id_for_intent
 from triggertrade.exchanges import BybitApiError, BybitDemoClient
 from triggertrade.market_data import BybitCandle, BybitInstrument, MarketObservation, parse_spot_candles, parse_spot_instrument
 from triggertrade.persistence import (
@@ -30,10 +27,7 @@ from triggertrade.persistence import (
     RuntimeStore,
     TraceStore,
 )
-from triggertrade.risk import RiskManager
 from triggertrade.services.bootstrap import ensure_runtime_registry_initialized, merged_runtime_env, runtime_db_path
-from triggertrade.strategies import BuyCandidateStrategy
-from triggertrade.triggers import PercentagePriceMoveTrigger, SignalType
 
 
 class RuntimeStatus(StrEnum):
@@ -42,6 +36,9 @@ class RuntimeStatus(StrEnum):
     STOPPING = "stopping"
     STOPPED = "stopped"
     ERROR = "error"
+
+
+CANONICAL_RUNTIME_KIND = "futures_dual_lane"
 
 
 @dataclass(frozen=True)
@@ -80,12 +77,16 @@ class PaperTradingRuntime:
         sleeper: Callable[[int], None] | None = None,
         logger: Callable[[str], None] | None = None,
     ) -> None:
+        if paper_adapter is None:
+            from triggertrade.execution import PaperExecutionAdapter
+
+            paper_adapter = PaperExecutionAdapter(clock_ms=lambda: int(time.time() * 1000))
         self._config = config
         self._market_client = market_client
         self._execution_store = execution_store
         self._trace_store = trace_store
         self._runtime_store = runtime_store
-        self._paper_adapter = paper_adapter or PaperExecutionAdapter(clock_ms=lambda: int(time.time() * 1000))
+        self._paper_adapter = paper_adapter
         self._clock = clock or (lambda: datetime.now(UTC))
         self._sleeper = sleeper or time.sleep
         self._logger = logger or (lambda message: print(message))
@@ -93,6 +94,10 @@ class PaperTradingRuntime:
         self._stop_requested = False
 
     def process_once(self) -> RuntimeCycleResult:
+        from triggertrade.risk import RiskManager
+        from triggertrade.strategies import BuyCandidateStrategy
+        from triggertrade.triggers import PercentagePriceMoveTrigger, SignalType
+
         self._validate_safe_config()
         try:
             instrument = parse_spot_instrument(
@@ -193,6 +198,8 @@ class PaperTradingRuntime:
         self._trace_store.save_strategy_decision(intent)
         existing_execution = self._execution_store.get_by_intent(intent.intent_id)
         if existing_execution is not None:
+            from triggertrade.execution import ExecutionService
+
             service = ExecutionService(
                 config=self._config,
                 adapter=self._paper_adapter,
@@ -286,6 +293,8 @@ class PaperTradingRuntime:
             )
             self._checkpoint(completed)
             return RuntimeCycleResult(completed.candle_id, signal.signal_type.value, intent.intent_id, risk.risk_decision_id, False)
+
+        from triggertrade.execution import ExecutionError, ExecutionService
 
         service = ExecutionService(
             config=self._config,
@@ -545,7 +554,22 @@ class RuntimeGapError(RuntimeError):
     pass
 
 
-def build_runtime_from_env(env: dict[str, str]):
+def validate_canonical_runtime_config(config: AppConfig) -> None:
+    if config.execution_venue is ExecutionVenue.LOCAL_PAPER:
+        raise ConfigError("canonical runtime cannot select legacy LOCAL_PAPER execution")
+    if config.execution_venue is ExecutionVenue.BYBIT_DEMO:
+        raise ConfigError("canonical runtime cannot select legacy spot Bybit execution")
+    if config.execution_venue is not ExecutionVenue.BYBIT_DEMO_FUTURES:
+        raise ConfigError("canonical runtime requires bybit_demo_futures execution venue")
+    if config.market is not Market.LINEAR or config.futures_runtime.category != "linear":
+        raise ConfigError("canonical runtime requires linear futures market configuration")
+    if config.futures_runtime.active_execution_venue is not ExecutionVenue.BYBIT_DEMO_FUTURES:
+        raise ConfigError("canonical runtime ACTIVE lane requires Bybit Demo futures execution")
+    if config.futures_runtime.test_execution_venue is not ExecutionVenue.LOCAL_TEST_SIMULATION:
+        raise ConfigError("canonical runtime TEST lane requires local test simulation")
+
+
+def build_canonical_runtime_from_env(env: dict[str, str]):
     from triggertrade.config import load_bybit_credentials
     from triggertrade.persistence import FuturesExecutionStore, OperatorStateStore, TriggerSetStore
     from triggertrade.persistence.futures_accounting_store import FuturesAccountingStore
@@ -553,6 +577,7 @@ def build_runtime_from_env(env: dict[str, str]):
 
     runtime_env = dict(env)
     config = load_config(runtime_env)
+    validate_canonical_runtime_config(config)
     db_path = runtime_db_path(config, runtime_env)
     ensure_runtime_registry_initialized(db_path)
     credentials = load_bybit_credentials(runtime_env)
@@ -567,6 +592,9 @@ def build_runtime_from_env(env: dict[str, str]):
         trigger_set_store=TriggerSetStore(db_path),
         operator_state_store=OperatorStateStore(db_path),
     )
+
+
+build_runtime_from_env = build_canonical_runtime_from_env
 
 
 def main() -> int:
