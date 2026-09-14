@@ -124,8 +124,13 @@ Test-RequiredCommand -Name "git"
 
 Invoke-CheckedCommand -FilePath "az" -Arguments @("account", "show", "--only-show-errors", "--output", "none") -FailureMessage "Azure CLI authentication check failed. Run 'az login' and try again."
 
-$RepoRoot = Get-CheckedCommandOutput -FilePath "git" -Arguments @("rev-parse", "--show-toplevel") -FailureMessage "Unable to determine repository root."
+$RepoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $RepoRoot
+
+$IsInsideWorkTree = Get-CheckedCommandOutput -FilePath "git" -Arguments @("rev-parse", "--is-inside-work-tree") -FailureMessage "Unable to verify git work tree."
+if ($IsInsideWorkTree -ne "true") {
+    throw "Script location is not inside a git work tree: $RepoRoot"
+}
 
 $GitStatus = Get-CheckedCommandOutput -FilePath "git" -Arguments @("status", "--porcelain=v1") -FailureMessage "Unable to inspect git working tree."
 if (-not [string]::IsNullOrWhiteSpace($GitStatus)) {
