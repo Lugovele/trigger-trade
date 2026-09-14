@@ -42,19 +42,27 @@ threshold, that requested ACTIVE-entry behavior is already authorized within the
 stated boundaries. Consequential nature alone does not require a second
 confirmation after review.
 
-When the current lifecycle task explicitly includes commit and push, Codex may
+When the current lifecycle task explicitly requires Git completion, Codex may
 continue automatically after all required specialist reviewers approve, final
 `triggertrade_change_reviewer` returns `APPROVED_FOR_COMMIT`, and required
-validation passes:
+validation passes. Normal scoped Git operations allowed in that case are:
 
-- `git add`
-- `git commit`
-- `git push`
+- `git add <explicit task-scoped paths>`
+- `git diff --cached --name-only`
+- `git diff --cached --check`
+- `git diff --cached`
+- `git commit -m "<message>"`
+- `git push origin main`
+- read-only Git commands such as `git status`, `git log`, `git rev-parse`,
+  `git diff`, and `git branch --show-current`
 
 No extra user confirmation is required at that point; the original lifecycle
-prompt is the commit/push authority. Stage only files belonging to the current
-lifecycle unit, verify `git diff --cached --name-only`, push only to
-`origin/main`, then verify `HEAD == origin/main` and a clean working tree.
+prompt is the Git authority. Stage only files belonging to the current
+lifecycle unit, prefer explicit path staging over broad `git add -A`, verify
+`git diff --cached --name-only`, verify `git diff --cached --check`, inspect the
+staged diff, push only to the requested branch/remote, and for normal
+TriggerTrade development pushes use remote `origin` and branch `main`. After push, verify
+`HEAD == origin/main` and a clean working tree.
 
 If the current task does not explicitly request commit/push, stop at
 `APPROVED_FOR_COMMIT` and report readiness. If the current task explicitly says
@@ -76,8 +84,15 @@ Never run:
 - `git clean`
 - `git checkout`
 - `git switch`
+- `git rebase`
+- force push
+- branch deletion
+- tag deletion
 - history rewrites
 - destructive branch/worktree cleanup
+- destructive cleanup
+- reverting unrelated user work
+- modifying Git hooks/security controls to bypass policy
 
 Before implementation, when Git exists, inspect:
 

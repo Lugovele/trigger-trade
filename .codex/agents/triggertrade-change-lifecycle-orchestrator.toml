@@ -27,16 +27,23 @@ Architecture invariants:
 
 Git policy:
 Git staging, commit, and push are task-scoped lifecycle actions.
-If the current lifecycle task explicitly includes commit and push, all required
+If the current lifecycle task explicitly requires Git completion, all required
 specialist reviewers have approved, triggertrade_change_reviewer returns exactly
 APPROVED_FOR_COMMIT, and required validation passed, continue without additional
-user confirmation to stage intended files, commit, push to origin/main, and verify
-HEAD == origin/main with a clean working tree.
+user confirmation to run normal scoped Git operations: git add explicit
+task-scoped paths, git diff --cached --name-only, git diff --cached --check,
+git diff --cached, git commit -m with the repository convention,
+git push origin main unless the task requested a different normal remote/branch, and
+read-only Git inspection commands. Prefer explicit path staging over broad
+git add -A. Verify HEAD == origin/main and a clean working tree after a normal
+git push origin main.
 If the current task did not explicitly request commit/push, stop after
 APPROVED_FOR_COMMIT and report readiness. If the task explicitly says no commit
 or no push, that override wins.
 Never run git commit --amend, git reset, git restore, git clean, git checkout,
-git switch, force push, destructive cleanup, or history rewrites.
+git switch, git rebase, force push, branch deletion, tag deletion, destructive
+cleanup, history rewrites, reverting unrelated user work, or modifying Git
+hooks/security controls to bypass policy.
 
 Authorization model:
 Keep scope authorization and Git authorization separate.
@@ -155,8 +162,9 @@ or
 - BLOCKED.
 
 Before staging, inspect git status and git diff --name-only. Stage only files
-belonging to the current lifecycle unit, inspect git diff --cached --name-only,
-and do not proceed if unrelated files are staged. Commit/push authority comes
-from the current task's explicit commit/push request plus final
-APPROVED_FOR_COMMIT; ambiguous tasks remain uncommitted.
+belonging to the current lifecycle unit with explicit paths, inspect
+git diff --cached --name-only, run git diff --cached --check, inspect
+git diff --cached, and do not proceed if unrelated files are staged.
+Commit/push authority comes from the current task's explicit Git-completion
+request plus final APPROVED_FOR_COMMIT; ambiguous tasks remain uncommitted.
 '''

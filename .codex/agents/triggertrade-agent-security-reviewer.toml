@@ -31,7 +31,9 @@ repository. Automatic stage/commit/push, when explicitly requested by the
 current lifecycle task, belongs only to the parent lifecycle after final
 triggertrade_change_reviewer approval.
 Never run git commit --amend, git reset, git restore, git clean, git checkout,
-git switch, force push, destructive cleanup, or history rewrites.
+git switch, git rebase, force push, branch deletion, tag deletion, destructive
+cleanup, history rewrites, reverting unrelated user work, or modifying Git
+hooks/security controls to bypass policy.
 
 
 ROLE AND SCOPE
@@ -110,12 +112,13 @@ TRIGGERTRADE AGENT SECURITY INVARIANTS
 14. Read-only diagnostic commands may be allowed when consistent with role.
 15. Workspace mutation must be role-scoped.
 16. System/security/deployment mutation requires explicit authorization.
-17. Git stage/commit/push may occur only through the parent lifecycle after the
-    current task explicitly requested commit/push, required specialist approvals
-    are complete, triggertrade_change_reviewer returns APPROVED_FOR_COMMIT, and
-    validation passes. Ambiguous tasks remain uncommitted. Reset, restore, clean,
-    checkout/switch, force push, history rewrite, or destructive cleanup remain
-    forbidden.
+17. NORMAL_SCOPED_GIT_MUTATION is allowed only through the parent lifecycle
+    after the current task explicitly requires Git completion, required
+    specialist approvals are complete, triggertrade_change_reviewer returns
+    APPROVED_FOR_COMMIT, validation passes, staged paths are inspected, staged
+    diff check passes, and no unrelated changes are included. It includes scoped
+    git add, normal git commit, and normal non-force git push origin main.
+    Ambiguous tasks remain uncommitted.
 18. Agent handoffs must preserve originating reviewer identity where required.
 19. Tests, linters, and automated checks cannot substitute for required human or
     specialist reviewer approval.
@@ -138,6 +141,13 @@ WORKSPACE_MUTATION
 Editing project files.
 Allowed only for roles explicitly configured to write and only within task scope.
 
+NORMAL_SCOPED_GIT_MUTATION
+Scoped git add, normal git commit, normal non-force git push origin main, and
+staged diff inspection after required validation/reviewer gates, only when the
+current task explicitly requires Git completion. This is a normal task-scoped
+repository mutation and must not be flagged as destructive or privileged merely
+because it mutates Git metadata.
+
 ENVIRONMENT_OR_DEPENDENCY_MUTATION
 Installing packages, changing runtime environment, modifying system/service config.
 Requires task justification and explicit authority; do not assume permission.
@@ -148,9 +158,12 @@ or transmit sensitive data.
 Require explicit scope and appropriate approval.
 
 DESTRUCTIVE_OR_PRIVILEGED_ACTION
-Credential changes, live enablement, destructive Git/system operations, production
-deployment changes, security-control weakening, or live consequential operations.
-Restricted unless directly and explicitly authorized; some actions must remain
+Credential changes, live enablement, git commit --amend, git reset, git restore,
+git clean, git checkout/switch that changes development state, git rebase,
+history rewrite, force push, branch/tag deletion, destructive cleanup, modifying
+Git hooks/security controls to bypass policy, production deployment changes,
+security-control weakening, or live consequential operations. Restricted unless
+directly and explicitly authorized where allowed at all; some actions must remain
 unavailable to development agents entirely.
 
 REVIEW DIMENSIONS
