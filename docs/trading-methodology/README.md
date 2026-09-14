@@ -1,82 +1,26 @@
-# TriggerTrade Methodology Council
+# TriggerTrade — Active Specification Documentation v1.2.14
 
-This documentation defines the methodology council used to design, challenge, validate, and evolve TriggerTrade trading rules.
+**Package revision:** `v1.2.14`  
+**Status:** `IMPLEMENTATION SPECIFICATION BASELINE`  
+**Approval:** `APPROVED FOR IMPLEMENTATION`
 
-The council is not a collection of independent opinion agents. It is a staged research and review system.
+This archive contains only the current active TriggerTrade specification documentation and governed schemas. Package revision `v1.2.14` identifies this documentation baseline. Stable numeric-policy IDs and individual wire contract versions are independent version domains and are not changed merely by a package revision.
 
-## Core lifecycle
+Included:
+- four methodology documents;
+- shared system protocols and identifier lineage;
+- nine business contracts;
+- three API contracts plus the native factual profile;
+- current strict schemas and numeric policies;
+- the architecture diagram.
 
-```text
-Trading idea / market observation
-        ↓
-Senior Intraday Crypto Trader
-        ↓
-Market Microstructure & Order Flow Researcher
-        ↓
-Market Regime & Context Analyst
-        ↓
-Quant Strategy Researcher
-        ↓
-Risk & Trade Management Architect
-        ↓
-Execution & Exchange Mechanics Specialist
-        ↓
-Adversarial Strategy Reviewer
-        ↓
-Trading Rule Set decision
-        ↓
-Backtest / paper / live evidence
-        ↓
-Performance & Strategy Diagnostics Analyst
-        ↓
-Iteration or promotion
-```
+Excluded:
+- prior audits and reviews;
+- remediation registers and change histories;
+- historical package snapshots;
+- evidence bundles and counterexample reports;
+- validation logs and generated validation results;
+- executable regression harnesses and historical fixtures;
+- manifests and package hashes from prior review cycles.
 
-## Principle
-
-No agent may promote a plausible idea into a production rule without evidence.
-
-Every rule must move through explicit states:
-
-`IDEA → HYPOTHESIS → RESEARCH_CANDIDATE → BACKTESTED → PAPER_VALIDATED → LIVE_CANDIDATE → LIVE_VALIDATED`
-
-A rule may move to `REJECTED` at any stage.
-
-## Canonical artifacts
-
-- `data/` — authoritative raw-data universe and normalization contract on which
-  future metrics, triggers, Sets, Research, and Trading Rule Sets depend.
-- `metrics/` — authoritative derived-variable vocabulary used by future
-  triggers, Sets, research hypotheses, Trading Rule Sets, and performance
-  diagnostics.
-- `triggers/` — authoritative trigger contract for deterministic rules built
-  directly from canonical metrics and used as the atomic building blocks of
-  future Sets.
-- `sets/` — authoritative Set contract for combining approved Triggers into
-  deterministic market configurations before the separate Rules layer.
-- `contracts/TRADING_RULE_SET.md` — canonical methodology object.
-- `contracts/AGENT_HANDOFF_CONTRACT.md` — inter-agent handoff contract.
-- `contracts/REVIEW_AND_PROMOTION_CONTRACT.md` — evidence and promotion gates.
-- `contracts/METHODOLOGY_LIFECYCLE.md` — end-to-end lifecycle.
-
-## Agents
-
-- `agents/senior-intraday-crypto-trader.md`
-- `agents/microstructure-order-flow-researcher.md`
-- `agents/market-regime-context-analyst.md`
-- `agents/quant-strategy-researcher.md`
-- `agents/risk-trade-management-architect.md`
-- `agents/execution-exchange-mechanics-specialist.md`
-- `agents/adversarial-strategy-reviewer.md`
-- `agents/performance-strategy-diagnostics-analyst.md`
-
-## Non-negotiable rules
-
-1. A trigger is not a strategy.
-2. Market context and regime precede entry logic.
-3. LONG and SHORT are first-class directions.
-4. Gross PnL is never treated as net PnL.
-5. Fees, funding, slippage, fill assumptions, and correlated exposure must be modeled.
-6. Thresholds that have not been empirically justified are marked `PARAMETER_TO_TEST`.
-7. No agent invents live prices, OI, funding, liquidation data, or market statistics.
-8. A 20% net monthly return is a target to test, never an assumption or guarantee.
+Package v1.2.14 is behaviorally equivalent to the approved v1.2.13 baseline; changes are limited to editorial/navigation cleanup and package metadata. Approval applies only to the implementation specification, not to backend, database, adapter, native-exchange, production-deployment or live-trading certification. Runtime/native conformance remains a separate implementation-stage obligation.

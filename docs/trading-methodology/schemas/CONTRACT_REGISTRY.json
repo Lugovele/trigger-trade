@@ -1,0 +1,135 @@
+{
+  "COINS": {
+    "version": 2,
+    "producer": "Portfolio Rules",
+    "consumer": "Set",
+    "definitions": [
+      "COINS"
+    ],
+    "schema_file": "schemas/wire.schema.json"
+  },
+  "MARKET_HANDOFF": {
+    "version": 4,
+    "producer": "Set",
+    "consumer": "Position Rules",
+    "definitions": [
+      "MARKET_HANDOFF"
+    ],
+    "schema_file": "schemas/wire.schema.json"
+  },
+  "APPROVE_REJECT": {
+    "version": 5,
+    "producer": "Position Rules",
+    "consumer": "Portfolio Rules",
+    "definitions": [
+      "APPROVE_REJECT.initial",
+      "APPROVE_REJECT.constructed",
+      "APPROVE_REJECT.failed"
+    ],
+    "schema_file": "schemas/wire.schema.json"
+  },
+  "CAPITAL_AND_LIMITS": {
+    "version": 5,
+    "producer": "Portfolio Rules",
+    "consumer": "Position Rules",
+    "definitions": [
+      "CAPITAL_AND_LIMITS"
+    ],
+    "schema_file": "schemas/wire.schema.json"
+  },
+  "ORDER_SPEC": {
+    "version": 5,
+    "producer": "Position Rules",
+    "consumer": "Order Lifecycle",
+    "definitions": [
+      "ORDER_SPEC"
+    ],
+    "schema_file": "schemas/wire.schema.json"
+  },
+  "SUBMIT_AUTHORIZED": {
+    "version": 5,
+    "producer": "Portfolio Rules",
+    "consumer": "Order Lifecycle",
+    "definitions": [
+      "SUBMIT_AUTHORIZED"
+    ],
+    "schema_file": "schemas/wire.schema.json"
+  },
+  "ORDER_EVENT": {
+    "version": 7,
+    "producer": "Order Lifecycle",
+    "consumer": "Portfolio Rules",
+    "definitions": [
+      "ORDER_EVENT.logical",
+      "ORDER_EVENT.native",
+      "ORDER_EVENT.resolution",
+      "ORDER_EVENT.scope_observation",
+      "ORDER_EVENT.scope_resolution",
+      "ORDER_EVENT.integrity"
+    ],
+    "schema_file": "schemas/wire.schema.json"
+  },
+  "ORDER_PLACED": {
+    "version": 3,
+    "producer": "Order Lifecycle",
+    "consumer": "Set",
+    "definitions": [
+      "ORDER_PLACED.placed",
+      "ORDER_PLACED.terminal"
+    ],
+    "schema_file": "schemas/wire.schema.json"
+  },
+  "ORDER_CANCEL_SIGNAL": {
+    "version": 2,
+    "producer": "Set",
+    "consumer": "Order Lifecycle",
+    "definitions": [
+      "ORDER_CANCEL_SIGNAL"
+    ],
+    "schema_file": "schemas/wire.schema.json"
+  },
+  "PORTFOLIO_DATA_REQUEST": {
+    "version": 5,
+    "producer": "Portfolio Rules",
+    "consumer": "API",
+    "definitions": [
+      "PORTFOLIO_DATA_REQUEST.request",
+      "PORTFOLIO_DATA_REQUEST.response"
+    ],
+    "schema_file": "schemas/wire.schema.json"
+  },
+  "ORDER_MANAGEMENT": {
+    "version": 4,
+    "producer": "Order Lifecycle",
+    "consumer": "API",
+    "definitions": [
+      "ORDER_MANAGEMENT.request.CREATE_ENTRY_ORDER",
+      "ORDER_MANAGEMENT.request.CANCEL_ENTRY_ORDER",
+      "ORDER_MANAGEMENT.request.GET_ORDER",
+      "ORDER_MANAGEMENT.request.GET_OPEN_ORDERS",
+      "ORDER_MANAGEMENT.request.GET_ORDER_HISTORY",
+      "ORDER_MANAGEMENT.request.GET_EXECUTIONS",
+      "ORDER_MANAGEMENT.request.GET_POSITION",
+      "ORDER_MANAGEMENT.request.SET_OR_ATTACH_TP_SL",
+      "ORDER_MANAGEMENT.request.CANCEL_PROTECTIVE_ORDER",
+      "ORDER_MANAGEMENT.request.CLOSE_POSITION_QUANTITY",
+      "ORDER_MANAGEMENT.request.GET_ACCOUNT_EXECUTION_FACTS",
+      "ORDER_MANAGEMENT.request.GET_FINANCIAL_FACTS",
+      "ORDER_MANAGEMENT.request.GET_HARD_EXECUTION_FACTS",
+      "ORDER_MANAGEMENT.response.financial",
+      "ORDER_MANAGEMENT.response.hard",
+      "ORDER_MANAGEMENT.response.operation"
+    ],
+    "schema_file": "schemas/wire.schema.json"
+  },
+  "MARKET_DATA_REQUEST": {
+    "version": 3,
+    "producer": "Set",
+    "consumer": "API",
+    "definitions": [
+      "MARKET_DATA_REQUEST.request",
+      "MARKET_DATA_REQUEST.response"
+    ],
+    "schema_file": "schemas/wire.schema.json"
+  }
+}
