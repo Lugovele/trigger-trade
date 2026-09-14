@@ -19,9 +19,18 @@ def test_default_bind_is_localhost(tmp_path):
         server.server_close()
 
 
-def test_non_local_bind_is_rejected(tmp_path):
-    with pytest.raises(ValueError):
-        create_server(host="0.0.0.0", port=0, db_path=tmp_path / "missing.sqlite3")
+@pytest.mark.parametrize("host", [DEFAULT_HOST, "0.0.0.0"])
+def test_allowed_dashboard_hosts_can_bind(tmp_path, host):
+    server = create_server(host=host, port=0, db_path=tmp_path / "missing.sqlite3")
+    try:
+        assert server.server_address[0] == host
+    finally:
+        server.server_close()
+
+
+def test_unsupported_dashboard_host_is_rejected(tmp_path):
+    with pytest.raises(ValueError, match="dashboard host must be one of"):
+        create_server(host="192.0.2.10", port=0, db_path=tmp_path / "missing.sqlite3")
 
 
 def test_empty_state_renders_approved_product_ui_without_traceback_or_secrets(tmp_path):

@@ -26,6 +26,7 @@ from triggertrade.services.system_history import SystemHistoryExporter
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
+ALLOWED_HOSTS = frozenset({DEFAULT_HOST, "0.0.0.0"})
 
 
 class DashboardServer(ThreadingHTTPServer):
@@ -661,8 +662,8 @@ def create_server(
     research_service: ResearchService | None = None,
     operator_actions=None,
 ) -> DashboardServer:
-    if host != DEFAULT_HOST:
-        raise ValueError("dashboard binds to 127.0.0.1 only; non-local bind is not supported")
+    if host not in ALLOWED_HOSTS:
+        raise ValueError("dashboard host must be one of: 127.0.0.1, 0.0.0.0")
     read_model = DashboardReadModel(db_path)
     catalog_service = instrument_catalog_service or InstrumentCatalogService(store=InstrumentCatalogStore(db_path))
     rules_service = trading_rules_service or TradingRulesService(
