@@ -64,3 +64,34 @@ def test_canonical_runtime_module_import_does_not_load_legacy_execution_modules(
     completed = subprocess.run([sys.executable, "-c", code], env=env, text=True, capture_output=True, check=False)
 
     assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
+def test_canonical_runtime_construction_does_not_load_legacy_strategy_or_risk_modules(tmp_path):
+    code = (
+        "import sys; "
+        "from triggertrade.services.runtime import build_canonical_runtime_from_env; "
+        "runtime = build_canonical_runtime_from_env({"
+        f"'TRIGGERTRADE_RUNTIME_DB_PATH': {str(tmp_path / 'canonical.sqlite3')!r}, "
+        "'TRIGGERTRADE_MARKET': 'linear', "
+        "'TRIGGERTRADE_CATEGORY': 'linear', "
+        "'TRIGGERTRADE_EXECUTION_VENUE': 'bybit_demo_futures', "
+        "'BYBIT_API_KEY': 'contract-key', "
+        "'BYBIT_API_SECRET': 'contract-secret'"
+        "}); "
+        "forbidden = {'triggertrade.strategies.buy_candidate', 'triggertrade.risk', 'triggertrade.risk.manager'} & set(sys.modules); "
+        "raise SystemExit('loaded legacy strategy/risk modules: ' + ', '.join(sorted(forbidden)) if forbidden else 0)"
+    )
+    env = os.environ.copy()
+    env["PYTHONPATH"] = "src"
+
+    completed = subprocess.run([sys.executable, "-c", code], env=env, text=True, capture_output=True, check=False)
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
+def test_legacy_strategy_and_risk_paths_remain_explicit_compatibility_imports():
+    strategies = importlib.import_module("triggertrade.strategies")
+    risk = importlib.import_module("triggertrade.risk")
+
+    assert hasattr(strategies, "BuyCandidateStrategy")
+    assert hasattr(risk, "RiskManager")
