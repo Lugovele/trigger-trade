@@ -1,0 +1,228 @@
+"""Durable Portfolio Coins v2 scope revisions and Set intake state."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from decimal import Decimal
+import json
+from typing import Any
+
+from triggertrade.canonical_json import canonical_json_digest, canonical_json_text
+from triggertrade.coins_scope import (
+    CoinScopeDelta,
+    CoinsAction,
+    SetScopeState,
+    apply_set_scope_delta,
+    build_coins_contract,
+)
+from triggertrade.contracts import ContractError, parse_contract
+
+from .durable_messages import DurableMessageStore
+from .postgres import OwnerStateRevisionConflict, PostgresPersistenceError
+
+
+class CoinsScopeConflict(PostgresPersistenceError):
+    """Raised when a Coins revision identity is replayed with different content."""
+
+
+@dataclass(frozen=True)
+class CoinsScopeRevisionRecord:
+    symbol: str
+    scope_revision: int
+    action: CoinsAction
+    event_id: str
+    occurred_at: str
+    payload: dict[str, Any]
+    payload_digest: str
+
+
+@dataclass(frozen=True)
+class SetScopeApplyResult:
+    applied: tuple[SetScopeState, ...]
+    ignored: tuple[CoinScopeDelta, ...]
+
+
+class CoinsScopeStore:
+    """Record Portfolio scope deltas, publish them, and apply Set intake monotonically."""
+
+    def __init__(self, connection) -> None:
+        self._connection = connection
+        self._messages = DurableMessageStore(connection)
+
+    def publish(
+        self,
+        *,
+        event_id: str,
+        occurred_at: str,
+        symbols: tuple[CoinScopeDelta, ...],
+    ) -> tuple[tuple[CoinsScopeRevisionRecord, ...], bool]:
+        parsed = build_coins_contract(event_id=event_id, occurred_at=occurred_at, symbols=symbols)
+        payload = parsed.to_payload()
+        payload_text = canonical_json_text(payload)
+        digest = canonical_json_digest(payload)
+        records: list[CoinsScopeRevisionRecord] = []
+        inserted_any = False
+        with self._connection.cursor() as cursor:
+            for delta in symbols:
+                current = self.get_portfolio_revision(symbol=delta.symbol, scope_revision=delta.scope_revision)
+                if current is not None:
+                    if current.payload_digest != digest or current.event_id != event_id or current.action != delta.action:
+                        raise CoinsScopeConflict("Coins scope revision already exists with different content")
+                    records.append(current)
+                    continue
+                latest = self.get_latest_portfolio_revision(symbol=delta.symbol, for_update=True)
+                if latest is not None and delta.scope_revision <= latest.scope_revision:
+                    raise OwnerStateRevisionConflict("Coins scope_revision must advance Portfolio scope for the symbol")
+                cursor.execute(
+                    """
+                    INSERT INTO triggertrade_coins_scope_revisions (
+                        symbol, scope_revision, action, event_id, occurred_at, payload_json, payload_digest
+                    ) VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s)
+                    ON CONFLICT DO NOTHING
+                    RETURNING symbol, scope_revision, action, event_id, occurred_at, payload_json::text, payload_digest
+                    """,
+                    (delta.symbol, delta.scope_revision, delta.action.value, event_id, occurred_at, payload_text, digest),
+                )
+                row = cursor.fetchone()
+                if row is None:
+                    replayed = self.get_portfolio_revision(symbol=delta.symbol, scope_revision=delta.scope_revision)
+                    if replayed is None:
+                        raise PostgresPersistenceError("Coins scope revision conflicted but no record was found")
+                    if replayed.payload_digest != digest or replayed.event_id != event_id or replayed.action != delta.action:
+                        raise CoinsScopeConflict("Coins scope revision already exists with different content")
+                    records.append(replayed)
+                else:
+                    inserted_any = True
+                    records.append(_revision_from_row(row))
+        self._messages.append_outbox(
+            message_id=event_id,
+            producer="Portfolio",
+            consumer="Set",
+            message_type="COINS",
+            message_version="2",
+            payload=payload,
+            aggregate_id="coins_scope",
+            dedupe_key=f"COINS:{event_id}",
+        )
+        return tuple(records), inserted_any
+
+    def apply_to_set(self, payload: dict[str, Any]) -> SetScopeApplyResult:
+        try:
+            parsed = parse_contract("COINS", payload)
+        except ContractError as exc:
+            raise PostgresPersistenceError(str(exc)) from exc
+        resolved = parsed.to_payload()
+        digest = canonical_json_digest(resolved)
+        body = resolved["coins"]
+        applied: list[SetScopeState] = []
+        ignored: list[CoinScopeDelta] = []
+        for delta_payload in body["symbols"]:
+            delta = CoinScopeDelta.from_payload(delta_payload)
+            current = self.get_set_scope(symbol=delta.symbol, for_update=True)
+            next_state = apply_set_scope_delta(
+                current,
+                delta,
+                event_id=body["event_id"],
+                occurred_at=body["occurred_at"],
+                payload_digest=digest,
+            )
+            if next_state is None:
+                ignored.append(delta)
+                continue
+            with self._connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO triggertrade_set_scope_current (
+                        symbol, scope_revision, action, event_id, occurred_at, payload_digest
+                    ) VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (symbol) DO UPDATE
+                    SET scope_revision = EXCLUDED.scope_revision,
+                        action = EXCLUDED.action,
+                        event_id = EXCLUDED.event_id,
+                        occurred_at = EXCLUDED.occurred_at,
+                        payload_digest = EXCLUDED.payload_digest,
+                        updated_at = now()
+                    WHERE triggertrade_set_scope_current.scope_revision < EXCLUDED.scope_revision
+                    RETURNING symbol, scope_revision, action, event_id, occurred_at, payload_digest
+                    """,
+                    (
+                        next_state.symbol,
+                        next_state.scope_revision,
+                        next_state.action.value,
+                        next_state.event_id,
+                        next_state.occurred_at,
+                        next_state.payload_digest,
+                    ),
+                )
+                row = cursor.fetchone()
+            if row is None:
+                ignored.append(delta)
+            else:
+                applied.append(_set_scope_from_row(row))
+        return SetScopeApplyResult(applied=tuple(applied), ignored=tuple(ignored))
+
+    def get_portfolio_revision(self, *, symbol: str, scope_revision: int) -> CoinsScopeRevisionRecord | None:
+        with self._connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT symbol, scope_revision, action, event_id, occurred_at, payload_json::text, payload_digest
+                FROM triggertrade_coins_scope_revisions
+                WHERE symbol = %s AND scope_revision = %s
+                """,
+                (symbol.upper(), scope_revision),
+            )
+            row = cursor.fetchone()
+        return None if row is None else _revision_from_row(row)
+
+    def get_latest_portfolio_revision(self, *, symbol: str, for_update: bool = False) -> CoinsScopeRevisionRecord | None:
+        suffix = " FOR UPDATE" if for_update else ""
+        with self._connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT symbol, scope_revision, action, event_id, occurred_at, payload_json::text, payload_digest
+                FROM triggertrade_coins_scope_revisions
+                WHERE symbol = %s
+                ORDER BY scope_revision DESC
+                LIMIT 1
+                """ + suffix,
+                (symbol.upper(),),
+            )
+            row = cursor.fetchone()
+        return None if row is None else _revision_from_row(row)
+
+    def get_set_scope(self, *, symbol: str, for_update: bool = False) -> SetScopeState | None:
+        suffix = " FOR UPDATE" if for_update else ""
+        with self._connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT symbol, scope_revision, action, event_id, occurred_at, payload_digest
+                FROM triggertrade_set_scope_current
+                WHERE symbol = %s
+                """ + suffix,
+                (symbol.upper(),),
+            )
+            row = cursor.fetchone()
+        return None if row is None else _set_scope_from_row(row)
+
+
+def _revision_from_row(row: tuple[Any, ...]) -> CoinsScopeRevisionRecord:
+    return CoinsScopeRevisionRecord(
+        symbol=str(row[0]),
+        scope_revision=int(row[1]),
+        action=CoinsAction(str(row[2])),
+        event_id=str(row[3]),
+        occurred_at=row[4].isoformat().replace("+00:00", "Z") if hasattr(row[4], "isoformat") else str(row[4]),
+        payload=json.loads(str(row[5]), parse_float=Decimal),
+        payload_digest=str(row[6]),
+    )
+
+
+def _set_scope_from_row(row: tuple[Any, ...]) -> SetScopeState:
+    return SetScopeState(
+        symbol=str(row[0]),
+        scope_revision=int(row[1]),
+        action=CoinsAction(str(row[2])),
+        event_id=str(row[3]),
+        occurred_at=row[4].isoformat().replace("+00:00", "Z") if hasattr(row[4], "isoformat") else str(row[4]),
+        payload_digest=str(row[5]),
+    )
