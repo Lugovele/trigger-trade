@@ -3,12 +3,14 @@
 from datetime import UTC, datetime, timedelta
 from dataclasses import replace
 from decimal import Decimal
+from types import SimpleNamespace
 import sqlite3
 
 import pytest
 
 from triggertrade.config import ExecutionVenue, load_config
 from triggertrade.accounting import ClosedTradeResult, EquitySnapshot
+from triggertrade.canonical_json import canonical_json_digest
 from triggertrade.dashboard.read_model import DashboardReadModel
 from triggertrade.execution import OrderStatus, OrderType
 from triggertrade.execution.futures import FuturesTradeIntent, PositionAction, PositionState
@@ -22,6 +24,7 @@ from triggertrade.persistence import (
     MessageStore,
     ResearchBacktestStatus,
     ResearchDemoStatus,
+    ResearchDecision,
     ResearchStore,
     TradingRulesStore,
     FuturesExecutionRecord,
@@ -1089,6 +1092,7 @@ def test_runtime_new_active_entries_use_promoted_research_set_and_rules_pair(tmp
         trigger_set_store=TriggerSetStore(path),
         trading_rules_store=TradingRulesStore(path),
         message_store=MessageStore(path),
+        promotion_governance_store=_FakePromotionGovernanceStore(),
     )
     research = research_service.create_research(
         set_id="triggertrade-futures-candidate",
@@ -1115,7 +1119,7 @@ def test_runtime_new_active_entries_use_promoted_research_set_and_rules_pair(tmp
     adapter = RecordingFuturesAdapter(order_status="New")
 
     result = _runtime(tmp_path, path=path, active_adapter=adapter).process_once()
-    active = RuntimeStore(path).get_lane_lifecycle(
+    candidate_active = RuntimeStore(path).get_lane_lifecycle(
         lane="ACTIVE",
         symbol="BTCUSDT",
         timeframe="1m",
@@ -1123,14 +1127,23 @@ def test_runtime_new_active_entries_use_promoted_research_set_and_rules_pair(tmp
         trigger_set_id="triggertrade-futures-candidate",
         trigger_set_version="v2-test",
     )
-    position = FuturesPositionStore(path).get_position(futures_position_id(active.intent_id))
+    core_active = RuntimeStore(path).get_lane_lifecycle(
+        lane="ACTIVE",
+        symbol="BTCUSDT",
+        timeframe="1m",
+        candle_id=result.candle_id,
+        trigger_set_id="triggertrade-futures-core",
+        trigger_set_version="v1",
+    )
+    research_record = ResearchStore(path).get_research(research.research_id)
 
+    assert research_record.decision is ResearchDecision.PROMOTION_REQUESTED
+    assert research_record.made_active_at is None
+    assert research_record.promotion_result_metadata["active_sqlite_mutation"] is False
+    assert candidate_active is None
     assert result.active[0].execution_status == "submitted"
-    assert active.rules_version_id == candidate_rules.rules_version_id
-    assert position.trigger_set_id == "triggertrade-futures-candidate"
-    assert position.trigger_set_version == "v2-test"
-    assert position.rules_version_id == candidate_rules.rules_version_id
-    assert position.rule_snapshot["fixed_take_profit_pct"] == "0.026"
+    assert core_active.rules_version_id == original.rules_version_id
+    assert TradingRulesService(TradingRulesStore(path)).get_current_rules_version().rules_version_id == original.rules_version_id
 
 
 def test_runtime_direction_mode_filters_without_creating_short_alpha(tmp_path):
@@ -2294,3 +2307,19 @@ def _signal(*, version, event, trigger_set, lane="ACTIVE"):
         trigger_set_id=trigger_set.set_id,
         trigger_set_version=trigger_set.version,
     )
+
+
+class _FakePromotionGovernanceStore:
+    def __init__(self) -> None:
+        self.requests = {}
+
+    def request_promotion(self, *, request_id, payload, research_id, idempotency_key):
+        inserted = request_id not in self.requests
+        stored_payload = self.requests.setdefault(request_id, payload)
+        digest = canonical_json_digest(stored_payload)
+        return SimpleNamespace(
+            request_id=request_id,
+            state=SimpleNamespace(payload=stored_payload, payload_digest=digest),
+            outbox=SimpleNamespace(message_id=request_id, payload_digest=digest),
+            inserted=inserted,
+        )

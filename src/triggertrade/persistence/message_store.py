@@ -81,13 +81,14 @@ class MessageStore:
         clean_dedupe = None if dedupe_key is None else _safe_text(dedupe_key, max_len=200, field="dedupe_key")
         clean_metadata = _safe_metadata(metadata or {})
 
-        if clean_dedupe:
-            existing = self._find_active_dedupe(clean_dedupe, created_at)
-            if existing is not None:
-                return existing
-
-        message_id = "msg_" + uuid.uuid4().hex
         with self._connect() as conn:
+            if clean_dedupe:
+                conn.execute("BEGIN IMMEDIATE")
+                existing = self._find_active_dedupe(clean_dedupe, created_at, conn=conn)
+                if existing is not None:
+                    conn.execute("COMMIT")
+                    return existing
+            message_id = "msg_" + uuid.uuid4().hex
             conn.execute(
                 """
                 INSERT INTO user_messages (
@@ -110,6 +111,8 @@ class MessageStore:
                     json.dumps(clean_metadata, sort_keys=True),
                 ),
             )
+            if clean_dedupe:
+                conn.execute("COMMIT")
         return self.get_message(message_id)
 
     def get_message(self, message_id: str) -> MessageRecord:
@@ -182,19 +185,31 @@ class MessageStore:
             )
         return int(cursor.rowcount)
 
-    def _find_active_dedupe(self, dedupe_key: str, now_value: str) -> MessageRecord | None:
-        with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT *
-                FROM user_messages
-                WHERE dedupe_key = ? AND is_read = 0 AND (expires_at IS NULL OR expires_at > ?)
-                ORDER BY created_at DESC, id DESC
-                LIMIT 1
-                """,
-                (dedupe_key, now_value),
-            ).fetchone()
+    def _find_active_dedupe(
+        self,
+        dedupe_key: str,
+        now_value: str,
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> MessageRecord | None:
+        if conn is None:
+            with self._connect() as owned:
+                row = self._active_dedupe_row(owned, dedupe_key, now_value)
+        else:
+            row = self._active_dedupe_row(conn, dedupe_key, now_value)
         return None if row is None else _record_from_row(row)
+
+    def _active_dedupe_row(self, conn: sqlite3.Connection, dedupe_key: str, now_value: str) -> sqlite3.Row | None:
+        return conn.execute(
+            """
+            SELECT *
+            FROM user_messages
+            WHERE dedupe_key = ? AND is_read = 0 AND (expires_at IS NULL OR expires_at > ?)
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (dedupe_key, now_value),
+        ).fetchone()
 
     def _init_schema(self) -> None:
         with self._connect() as conn:

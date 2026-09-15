@@ -27,6 +27,7 @@ from triggertrade.persistence import (
     TradingState,
     bootstrap_current_trigger_sets,
 )
+from triggertrade.services.operator_auth import OperatorCommandAuthorizer
 from triggertrade.services.dual_lane_runtime import DualLaneRuntime
 from triggertrade.execution import PaperExecutionAdapter
 from tests.unit.test_dual_lane_runtime import VolumeConfirmedMarketClient, _bootstrap_legacy_spot_sets, _runtime
@@ -241,7 +242,11 @@ def test_dashboard_pause_resume_requires_confirmation_and_persists(tmp_path):
 
     db = tmp_path / "dashboard.sqlite3"
     bootstrap_current_trigger_sets(TriggerSetStore(db))
-    server = create_server(port=0, db_path=db)
+    server = create_server(
+        port=0,
+        db_path=db,
+        operator_authorizer=OperatorCommandAuthorizer(db, auth_mode="local_dev_compat"),
+    )
     host, port = server.server_address
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()

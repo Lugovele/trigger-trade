@@ -9,6 +9,7 @@ import threading
 from triggertrade.dashboard.__main__ import create_server
 from triggertrade.persistence import TradingRulesStore
 from triggertrade.rules import TradingRulesService
+from triggertrade.services.operator_auth import OperatorCommandAuthorizer
 from tests.unit.test_instrument_catalog import _catalog_service
 from tests.unit.test_trading_rules_registry import _config
 
@@ -16,7 +17,7 @@ from tests.unit.test_trading_rules_registry import _config
 def test_rules_api_current_history_detail_are_backend_backed(tmp_path):
     db, catalog, rules_service = _rules_api_db(tmp_path)
     current = rules_service.get_current_rules_version()
-    server = create_server(port=0, db_path=db, trading_rules_service=rules_service, instrument_catalog_service=catalog)
+    server = _rules_server(db, rules_service=rules_service, catalog=catalog)
     host, port = server.server_address
     thread = _start(server)
     try:
@@ -42,7 +43,7 @@ def test_rules_api_current_history_detail_are_backend_backed(tmp_path):
 
 def test_rules_api_save_creates_new_immutable_version_and_rejects_noop(tmp_path):
     db, catalog, rules_service = _rules_api_db(tmp_path)
-    server = create_server(port=0, db_path=db, trading_rules_service=rules_service, instrument_catalog_service=catalog)
+    server = _rules_server(db, rules_service=rules_service, catalog=catalog)
     host, port = server.server_address
     thread = _start(server)
     try:
@@ -66,7 +67,7 @@ def test_rules_api_save_creates_new_immutable_version_and_rejects_noop(tmp_path)
 
 def test_rules_api_stale_conflict_and_symbol_validation_fail_closed(tmp_path):
     db, catalog, rules_service = _rules_api_db(tmp_path)
-    server = create_server(port=0, db_path=db, trading_rules_service=rules_service, instrument_catalog_service=catalog)
+    server = _rules_server(db, rules_service=rules_service, catalog=catalog)
     host, port = server.server_address
     thread = _start(server)
     try:
@@ -88,7 +89,7 @@ def test_rules_api_stale_conflict_and_symbol_validation_fail_closed(tmp_path):
 
 def test_rules_api_invalid_enum_and_non_finite_numbers_are_sanitized(tmp_path):
     db, catalog, rules_service = _rules_api_db(tmp_path)
-    server = create_server(port=0, db_path=db, trading_rules_service=rules_service, instrument_catalog_service=catalog)
+    server = _rules_server(db, rules_service=rules_service, catalog=catalog)
     host, port = server.server_address
     thread = _start(server)
     try:
@@ -110,7 +111,7 @@ def test_rules_api_invalid_enum_and_non_finite_numbers_are_sanitized(tmp_path):
 
 def test_instrument_search_and_refresh_are_backend_only_and_sanitized(tmp_path):
     db, catalog, rules_service = _rules_api_db(tmp_path)
-    server = create_server(port=0, db_path=db, trading_rules_service=rules_service, instrument_catalog_service=catalog)
+    server = _rules_server(db, rules_service=rules_service, catalog=catalog)
     host, port = server.server_address
     thread = _start(server)
     try:
@@ -144,7 +145,7 @@ def test_rules_ui_preserves_hidden_coins_leverage_and_disabled_thresholds(tmp_pa
         },
         created_source="unit",
     )
-    server = create_server(port=0, db_path=db, trading_rules_service=rules_service, instrument_catalog_service=catalog)
+    server = _rules_server(db, rules_service=rules_service, catalog=catalog)
     host, port = server.server_address
     thread = _start(server)
     try:
@@ -176,6 +177,16 @@ def _rules_api_db(tmp_path):
     service = TradingRulesService(TradingRulesStore(db), symbol_validator=catalog.validate_symbol)
     service.ensure_initial_version(_config(db), created_at="2026-09-07T00:00:00+00:00")
     return db, catalog, service
+
+
+def _rules_server(db, *, rules_service, catalog):
+    return create_server(
+        port=0,
+        db_path=db,
+        trading_rules_service=rules_service,
+        instrument_catalog_service=catalog,
+        operator_authorizer=OperatorCommandAuthorizer(db, auth_mode="local_dev_compat"),
+    )
 
 
 def _start(server):

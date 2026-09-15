@@ -5,6 +5,7 @@ import threading
 
 from triggertrade.dashboard.__main__ import create_server
 from triggertrade.persistence import MessageStore
+from triggertrade.services.operator_auth import OperatorCommandAuthorizer
 from tests.unit.test_dashboard_read_model import _empty_db
 
 
@@ -17,7 +18,7 @@ def test_messages_api_lists_backend_messages_and_marks_visible_rows_read(tmp_pat
         body="New entries were paused from the dashboard.",
         source="unit",
     )
-    server = create_server(port=0, db_path=db)
+    server = _local_dev_server(db)
     host, port = server.server_address
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -67,7 +68,7 @@ def test_messages_mark_read_route_delegates_to_command_boundary(tmp_path):
         body="Message should remain unread when the fake boundary handles the command.",
         source="unit",
     )
-    server = create_server(port=0, db_path=db)
+    server = _local_dev_server(db)
     fake_boundary = FakeCommandBoundary()
     server.command_boundary = fake_boundary
     host, port = server.server_address
@@ -96,7 +97,7 @@ def test_messages_mark_read_route_delegates_to_command_boundary(tmp_path):
 
 def test_messages_mark_read_requires_token_and_rejects_bad_ids(tmp_path):
     db = _empty_db(tmp_path)
-    server = create_server(port=0, db_path=db)
+    server = _local_dev_server(db)
     host, port = server.server_address
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -129,7 +130,7 @@ def test_messages_mark_read_requires_token_and_rejects_bad_ids(tmp_path):
 
 def test_operator_actions_create_factual_user_messages(tmp_path):
     db = _empty_db(tmp_path)
-    server = create_server(port=0, db_path=db)
+    server = _local_dev_server(db)
     host, port = server.server_address
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -177,7 +178,7 @@ def test_operator_actions_create_factual_user_messages(tmp_path):
 
 def test_system_history_export_endpoint_is_protected_and_has_no_path_parameter(tmp_path):
     db = _empty_db(tmp_path)
-    server = create_server(port=0, db_path=db)
+    server = _local_dev_server(db)
     host, port = server.server_address
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -226,3 +227,11 @@ def test_no_logs_page_route_is_created(tmp_path):
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
+
+
+def _local_dev_server(db):
+    return create_server(
+        port=0,
+        db_path=db,
+        operator_authorizer=OperatorCommandAuthorizer(db, auth_mode="local_dev_compat"),
+    )
