@@ -1,5 +1,6 @@
 import pytest
 
+from triggertrade.config import ConfigError
 from triggertrade.services.process_roles import (
     ProcessRoleError,
     RuntimeProcessRole,
@@ -62,6 +63,14 @@ def test_trading_worker_role_runs_injected_canonical_worker_with_cycle_limit():
 
     assert result == 0
     assert worker.max_cycles == 2
+
+
+def test_default_trading_worker_role_excludes_legacy_demo_runtime():
+    with pytest.raises(ConfigError, match="target message-driven trading worker"):
+        run_process_role(
+            {"TRIGGERTRADE_PROCESS_ROLE": "trading-worker"},
+            install_signal_handlers=False,
+        )
 
 
 def test_web_role_serves_injected_dashboard_and_closes_server():

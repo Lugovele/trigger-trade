@@ -12,8 +12,11 @@ from triggertrade.services.bootstrap import (
     merged_runtime_env,
     runtime_db_path,
 )
-from triggertrade.services.futures_runtime import FuturesDualLaneRuntime
-from triggertrade.services.runtime import build_canonical_runtime_from_env, build_runtime_from_env
+from triggertrade.services.runtime import (
+    LEGACY_DEMO_FUTURES_RUNTIME_OPT_IN,
+    build_canonical_runtime_from_env,
+    build_legacy_demo_futures_runtime_from_env,
+)
 from triggertrade.trigger_sets import RuleDefinition, TriggerSetStatus
 
 
@@ -179,9 +182,9 @@ def test_dashboard_env_startup_requires_explicit_local_dev_compat_for_process_to
         server.server_close()
 
 
-def test_runtime_builder_bootstraps_same_configured_db_path(tmp_path):
+def test_legacy_demo_futures_runtime_builder_bootstraps_same_configured_db_path(tmp_path):
     db = tmp_path / "runtime-builder.sqlite3"
-    runtime = build_runtime_from_env(
+    runtime = build_legacy_demo_futures_runtime_from_env(
         {
             "TRIGGERTRADE_RUNTIME_DB_PATH": str(db),
             "TRIGGERTRADE_MARKET": "linear",
@@ -189,6 +192,7 @@ def test_runtime_builder_bootstraps_same_configured_db_path(tmp_path):
             "TRIGGERTRADE_EXECUTION_VENUE": "bybit_demo_futures",
             "BYBIT_API_KEY": "unit-key",
             "BYBIT_API_SECRET": "unit-secret",
+            LEGACY_DEMO_FUTURES_RUNTIME_OPT_IN: "1",
         }
     )
 
@@ -198,21 +202,34 @@ def test_runtime_builder_bootstraps_same_configured_db_path(tmp_path):
     assert TriggerSetStore(db).get_set("triggertrade-futures-candidate", "v2-test") is not None
 
 
-def test_canonical_runtime_builder_constructs_futures_runtime(tmp_path):
+def test_canonical_runtime_builder_excludes_legacy_demo_futures_runtime(tmp_path):
     db = tmp_path / "canonical-runtime.sqlite3"
 
-    runtime = build_canonical_runtime_from_env(
-        {
-            "TRIGGERTRADE_RUNTIME_DB_PATH": str(db),
-            "TRIGGERTRADE_MARKET": "linear",
-            "TRIGGERTRADE_CATEGORY": "linear",
-            "TRIGGERTRADE_EXECUTION_VENUE": "bybit_demo_futures",
-            "BYBIT_API_KEY": "unit-key",
-            "BYBIT_API_SECRET": "unit-secret",
-        }
-    )
+    with pytest.raises(ConfigError, match="target message-driven trading worker"):
+        build_canonical_runtime_from_env(
+            {
+                "TRIGGERTRADE_RUNTIME_DB_PATH": str(db),
+                "TRIGGERTRADE_MARKET": "linear",
+                "TRIGGERTRADE_CATEGORY": "linear",
+                "TRIGGERTRADE_EXECUTION_VENUE": "bybit_demo_futures",
+                "BYBIT_API_KEY": "unit-key",
+                "BYBIT_API_SECRET": "unit-secret",
+            }
+        )
 
-    assert isinstance(runtime, FuturesDualLaneRuntime)
+
+def test_legacy_demo_futures_runtime_builder_requires_explicit_opt_in(tmp_path):
+    with pytest.raises(ConfigError, match=LEGACY_DEMO_FUTURES_RUNTIME_OPT_IN):
+        build_legacy_demo_futures_runtime_from_env(
+            {
+                "TRIGGERTRADE_RUNTIME_DB_PATH": str(tmp_path / "demo.sqlite3"),
+                "TRIGGERTRADE_MARKET": "linear",
+                "TRIGGERTRADE_CATEGORY": "linear",
+                "TRIGGERTRADE_EXECUTION_VENUE": "bybit_demo_futures",
+                "BYBIT_API_KEY": "unit-key",
+                "BYBIT_API_SECRET": "unit-secret",
+            }
+        )
 
 
 def test_canonical_runtime_rejects_legacy_local_paper_config_before_fallback(tmp_path, monkeypatch):
@@ -228,19 +245,25 @@ def test_canonical_runtime_rejects_legacy_local_paper_config_before_fallback(tmp
     monkeypatch.setattr(runtime_module.PaperTradingRuntime, "__init__", fail_if_selected)
 
     with pytest.raises(ConfigError, match="legacy LOCAL_PAPER"):
-        build_runtime_from_env({"TRIGGERTRADE_RUNTIME_DB_PATH": str(tmp_path / "runtime.sqlite3")})
+        build_legacy_demo_futures_runtime_from_env(
+            {
+                "TRIGGERTRADE_RUNTIME_DB_PATH": str(tmp_path / "runtime.sqlite3"),
+                LEGACY_DEMO_FUTURES_RUNTIME_OPT_IN: "1",
+            }
+        )
 
     assert called is False
 
 
 def test_canonical_runtime_rejects_legacy_spot_execution_config(tmp_path):
     with pytest.raises(ConfigError, match="legacy spot Bybit execution"):
-        build_runtime_from_env(
+        build_legacy_demo_futures_runtime_from_env(
             {
                 "TRIGGERTRADE_RUNTIME_DB_PATH": str(tmp_path / "runtime.sqlite3"),
                 "TRIGGERTRADE_MARKET": "linear",
                 "TRIGGERTRADE_CATEGORY": "linear",
                 "TRIGGERTRADE_EXECUTION_VENUE": "bybit_demo",
+                LEGACY_DEMO_FUTURES_RUNTIME_OPT_IN: "1",
             }
         )
 

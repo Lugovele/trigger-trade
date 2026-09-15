@@ -18,7 +18,7 @@ if str(SRC) not in sys.path:
 from triggertrade.config import BybitEnvironment, ExecutionVenue, Market, TradingMode, load_config
 from triggertrade.persistence import RuntimeHeartbeat, RuntimeStore
 from triggertrade.services.bootstrap import merged_runtime_env, runtime_db_path
-from triggertrade.services.runtime import build_runtime_from_env
+from triggertrade.services.runtime import LEGACY_DEMO_FUTURES_RUNTIME_OPT_IN, build_legacy_demo_futures_runtime_from_env
 from scripts.smoke_guards import require_manual_smoke_opt_in, smoke_metadata
 
 
@@ -42,6 +42,7 @@ def run_soak(env: dict[str, str] | None = None, *, cycles: int | None = None) ->
         raise RuntimeError("Demo soak refuses live trading")
     config = load_config(source)
     _validate_demo_only(config)
+    source[LEGACY_DEMO_FUTURES_RUNTIME_OPT_IN] = "1"
     requested = cycles if cycles is not None else int(source.get("TRIGGERTRADE_DEMO_SOAK_CYCLES", "3"))
     requested = max(1, min(requested, 100))
     db_path = runtime_db_path(config, source)
@@ -57,7 +58,7 @@ def run_soak(env: dict[str, str] | None = None, *, cycles: int | None = None) ->
     )
     completed = 0
     try:
-        runtime = build_runtime_from_env(source)
+        runtime = build_legacy_demo_futures_runtime_from_env(source)
         runtime.run_forever(max_cycles=requested)
         completed = requested
         status = "RUNNING"

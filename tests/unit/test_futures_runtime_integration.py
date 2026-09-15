@@ -45,7 +45,7 @@ from triggertrade.services.futures_runtime import FuturesDualLaneRuntime, _is_fu
 from triggertrade.services.instrument_catalog import InstrumentCatalogService
 from triggertrade.services.research import ResearchPromotionCommand, ResearchService
 from triggertrade.rules import DirectionMode, TakeProfitMode, TradingRulesService
-from triggertrade.services.runtime import RuntimeCycleResult, build_runtime_from_env
+from triggertrade.services.runtime import LEGACY_DEMO_FUTURES_RUNTIME_OPT_IN, RuntimeCycleResult, build_legacy_demo_futures_runtime_from_env
 from triggertrade.execution.position_lifecycle import PositionStatus, futures_position_id
 from triggertrade.strategies import IntegrationDirectionalFuturesStrategy
 from triggertrade.trigger_sets import Lane
@@ -1492,13 +1492,14 @@ def test_operator_pause_blocks_active_but_test_lane_continues(tmp_path):
     assert len(FuturesAccountingStore(path).list_closed_trades(limit=10)) == 1
 
 
-def test_runtime_entrypoint_no_longer_forces_local_paper_and_requires_futures_config(tmp_path):
+def test_legacy_demo_futures_builder_no_longer_forces_local_paper_and_requires_futures_config(tmp_path):
     env = _env(tmp_path / "runtime.sqlite3") | {
         "BYBIT_API_KEY": "unit-key",
         "BYBIT_API_SECRET": "unit-secret",
+        LEGACY_DEMO_FUTURES_RUNTIME_OPT_IN: "1",
     }
 
-    runtime = build_runtime_from_env(env)
+    runtime = build_legacy_demo_futures_runtime_from_env(env)
 
     assert isinstance(runtime, FuturesDualLaneRuntime)
     assert runtime._config.execution_venue is ExecutionVenue.BYBIT_DEMO_FUTURES

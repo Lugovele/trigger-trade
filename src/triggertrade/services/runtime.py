@@ -38,7 +38,9 @@ class RuntimeStatus(StrEnum):
     ERROR = "error"
 
 
-CANONICAL_RUNTIME_KIND = "futures_dual_lane"
+CANONICAL_RUNTIME_KIND = "target_message_worker"
+LEGACY_DEMO_FUTURES_RUNTIME_KIND = "legacy_demo_futures_dual_lane"
+LEGACY_DEMO_FUTURES_RUNTIME_OPT_IN = "TRIGGERTRADE_ALLOW_LEGACY_DEMO_FUTURES_RUNTIME"
 
 
 @dataclass(frozen=True)
@@ -585,6 +587,13 @@ def runtime_state_store_from_env(env: dict[str, str], db_path):
 
 
 def build_canonical_runtime_from_env(env: dict[str, str]):
+    raise ConfigError(
+        "target message-driven trading worker is not implemented yet; "
+        "legacy demo futures runtime requires explicit compatibility builder"
+    )
+
+
+def build_legacy_demo_futures_runtime_from_env(env: dict[str, str]):
     from triggertrade.config import load_bybit_credentials
     from triggertrade.persistence import (
         FuturesExecutionStore,
@@ -595,6 +604,8 @@ def build_canonical_runtime_from_env(env: dict[str, str]):
     from triggertrade.services.futures_runtime import FuturesDualLaneRuntime
 
     runtime_env = dict(env)
+    if not _env_true(runtime_env.get(LEGACY_DEMO_FUTURES_RUNTIME_OPT_IN)):
+        raise ConfigError(f"legacy demo futures runtime requires explicit {LEGACY_DEMO_FUTURES_RUNTIME_OPT_IN}=1")
     config = load_config(runtime_env)
     validate_canonical_runtime_config(config)
     db_path = runtime_db_path(config, runtime_env)
@@ -615,6 +626,10 @@ def build_canonical_runtime_from_env(env: dict[str, str]):
 
 
 build_runtime_from_env = build_canonical_runtime_from_env
+
+
+def _env_true(value: object) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def main() -> int:

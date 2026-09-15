@@ -47,7 +47,8 @@ def test_legacy_spot_and_paper_paths_remain_explicit_compatibility_imports():
 def test_canonical_runtime_builder_is_the_public_runtime_launcher():
     runtime = importlib.import_module("triggertrade.services.runtime")
 
-    assert runtime.CANONICAL_RUNTIME_KIND == "futures_dual_lane"
+    assert runtime.CANONICAL_RUNTIME_KIND == "target_message_worker"
+    assert runtime.LEGACY_DEMO_FUTURES_RUNTIME_KIND == "legacy_demo_futures_dual_lane"
     assert runtime.build_runtime_from_env is runtime.build_canonical_runtime_from_env
 
 
@@ -76,20 +77,28 @@ def test_canonical_runtime_module_import_does_not_load_legacy_execution_modules(
 
 
 def test_canonical_runtime_construction_does_not_load_legacy_strategy_or_risk_modules(tmp_path):
-    code = (
-        "import sys; "
-        "from triggertrade.services.runtime import build_canonical_runtime_from_env; "
-        "runtime = build_canonical_runtime_from_env({"
-        f"'TRIGGERTRADE_RUNTIME_DB_PATH': {str(tmp_path / 'canonical.sqlite3')!r}, "
-        "'TRIGGERTRADE_MARKET': 'linear', "
-        "'TRIGGERTRADE_CATEGORY': 'linear', "
-        "'TRIGGERTRADE_EXECUTION_VENUE': 'bybit_demo_futures', "
-        "'BYBIT_API_KEY': 'contract-key', "
-        "'BYBIT_API_SECRET': 'contract-secret'"
-        "}); "
-        "forbidden = {'triggertrade.strategies.buy_candidate', 'triggertrade.risk', 'triggertrade.risk.manager'} & set(sys.modules); "
-        "raise SystemExit('loaded legacy strategy/risk modules: ' + ', '.join(sorted(forbidden)) if forbidden else 0)"
-    )
+    code = f"""
+import sys
+from triggertrade.config import ConfigError
+from triggertrade.services.runtime import build_canonical_runtime_from_env
+
+try:
+    build_canonical_runtime_from_env({{
+        'TRIGGERTRADE_RUNTIME_DB_PATH': {str(tmp_path / 'canonical.sqlite3')!r},
+        'TRIGGERTRADE_MARKET': 'linear',
+        'TRIGGERTRADE_CATEGORY': 'linear',
+        'TRIGGERTRADE_EXECUTION_VENUE': 'bybit_demo_futures',
+        'BYBIT_API_KEY': 'contract-key',
+        'BYBIT_API_SECRET': 'contract-secret',
+    }})
+except ConfigError:
+    pass
+else:
+    raise SystemExit('canonical runtime unexpectedly constructed demo pipeline')
+
+forbidden = {{'triggertrade.strategies.buy_candidate', 'triggertrade.risk', 'triggertrade.risk.manager'}} & set(sys.modules)
+raise SystemExit('loaded legacy strategy/risk modules: ' + ', '.join(sorted(forbidden)) if forbidden else 0)
+"""
     env = os.environ.copy()
     env["PYTHONPATH"] = "src"
 
