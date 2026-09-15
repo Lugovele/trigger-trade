@@ -569,9 +569,28 @@ def validate_canonical_runtime_config(config: AppConfig) -> None:
         raise ConfigError("canonical runtime TEST lane requires local test simulation")
 
 
+def runtime_state_store_from_env(env: dict[str, str], db_path):
+    if env.get("TRIGGERTRADE_POSTGRES_DSN"):
+        from triggertrade.persistence import (
+            PostgresConnectionFactory,
+            PostgresRuntimeStore,
+            PostgresSettings,
+            apply_postgres_migrations,
+        )
+
+        settings = PostgresSettings.from_env(env)
+        apply_postgres_migrations(dsn=settings.dsn, schema=settings.schema)
+        return PostgresRuntimeStore(PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema))
+    return RuntimeStore(db_path)
+
+
 def build_canonical_runtime_from_env(env: dict[str, str]):
     from triggertrade.config import load_bybit_credentials
-    from triggertrade.persistence import FuturesExecutionStore, OperatorStateStore, TriggerSetStore
+    from triggertrade.persistence import (
+        FuturesExecutionStore,
+        OperatorStateStore,
+        TriggerSetStore,
+    )
     from triggertrade.persistence.futures_accounting_store import FuturesAccountingStore
     from triggertrade.services.futures_runtime import FuturesDualLaneRuntime
 
@@ -580,6 +599,7 @@ def build_canonical_runtime_from_env(env: dict[str, str]):
     validate_canonical_runtime_config(config)
     db_path = runtime_db_path(config, runtime_env)
     ensure_runtime_registry_initialized(db_path)
+    runtime_store = runtime_state_store_from_env(runtime_env, db_path)
     credentials = load_bybit_credentials(runtime_env)
     market_client = BybitDemoClient(config=config.bybit, credentials=credentials)
     return FuturesDualLaneRuntime(
@@ -588,7 +608,7 @@ def build_canonical_runtime_from_env(env: dict[str, str]):
         futures_execution_store=FuturesExecutionStore(db_path),
         accounting_store=FuturesAccountingStore(db_path),
         trace_store=TraceStore(db_path),
-        runtime_store=RuntimeStore(db_path),
+        runtime_store=runtime_store,
         trigger_set_store=TriggerSetStore(db_path),
         operator_state_store=OperatorStateStore(db_path),
     )

@@ -36,6 +36,7 @@ from .postgres import (
     PostgresUnitOfWork,
     apply_postgres_migrations,
 )
+from .postgres_runtime_store import PostgresRuntimeStore
 from .portfolio_data_facts import (
     PortfolioDataFactConflict,
     PortfolioDataFactStore,
@@ -124,6 +125,7 @@ __all__ = [
     "PostgresPersistenceError",
     "PostgresSettings",
     "PostgresUnitOfWork",
+    "PostgresRuntimeStore",
     "PortfolioDataFactConflict",
     "PortfolioDataFactStore",
     "PortfolioDataRequestRecord",
