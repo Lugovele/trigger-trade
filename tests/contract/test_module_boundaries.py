@@ -1,5 +1,6 @@
 import importlib
 import os
+from pathlib import Path
 import subprocess
 import sys
 
@@ -122,3 +123,58 @@ def test_legacy_execution_stores_remain_explicit_compatibility_imports():
     assert hasattr(persistence, "FuturesExecutionStore")
     assert persistence.is_legacy_execution_evidence_store(persistence.ExecutionStore)
     assert persistence.is_legacy_execution_evidence_store(persistence.FuturesExecutionStore)
+
+
+def test_legacy_position_lifecycle_is_explicit_compatibility_import_only():
+    execution = importlib.import_module("triggertrade.execution")
+    position_lifecycle = importlib.import_module("triggertrade.execution.position_lifecycle")
+
+    assert not hasattr(execution, "FuturesPositionLifecycleService")
+    assert position_lifecycle.FuturesPositionLifecycleService.__triggertrade_position_lifecycle_role__ == (
+        "legacy_demo_position_lifecycle_compatibility_only"
+    )
+
+
+def test_canonical_position_modules_do_not_import_execution_or_exchange_paths():
+    code = (
+        "import sys; "
+        "import triggertrade.position_construction; "
+        "import triggertrade.order_specs; "
+        "forbidden = {"
+        "'triggertrade.execution.position_lifecycle', "
+        "'triggertrade.execution.futures', "
+        "'triggertrade.execution.service', "
+        "'triggertrade.execution.bybit_futures', "
+        "'triggertrade.exchanges.bybit'"
+        "} & set(sys.modules); "
+        "raise SystemExit('loaded execution/exchange modules: ' + ', '.join(sorted(forbidden)) if forbidden else 0)"
+    )
+    env = os.environ.copy()
+    env["PYTHONPATH"] = "src"
+
+    completed = subprocess.run([sys.executable, "-c", code], env=env, text=True, capture_output=True, check=False)
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
+def test_position_construction_and_spec_sources_contain_no_direct_execution_calls():
+    repo = Path(__file__).resolve().parents[2]
+    sources = (
+        repo / "src" / "triggertrade" / "position_construction.py",
+        repo / "src" / "triggertrade" / "order_specs.py",
+        repo / "src" / "triggertrade" / "persistence" / "position_construction_store.py",
+        repo / "src" / "triggertrade" / "persistence" / "order_spec_store.py",
+    )
+    forbidden_tokens = (
+        "submit_approved_limit_order",
+        "FuturesExecutionService",
+        "ExecutionService",
+        "BybitFuturesExecutionAdapter",
+        "BybitExecutionAdapter",
+        "PaperExecutionAdapter",
+    )
+
+    for path in sources:
+        text = path.read_text(encoding="utf-8")
+        for token in forbidden_tokens:
+            assert token not in text, f"{path.relative_to(repo)} contains forbidden canonical Position token {token}"

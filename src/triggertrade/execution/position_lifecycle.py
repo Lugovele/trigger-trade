@@ -40,6 +40,7 @@ from triggertrade.persistence.trading_rules_store import TradingRulesStore
 
 PROTECTIVE_EXIT_VERSION = "protective-exit-v1"
 FUTURES_POSITION_RISK_VERSION = "futures-position-risk-v1"
+LEGACY_POSITION_LIFECYCLE_COMPATIBILITY_ROLE = "legacy_demo_position_lifecycle_compatibility_only"
 
 
 class ProtectiveExitMode(StrEnum):
@@ -264,7 +265,9 @@ def calculate_position_size(
 
 
 class FuturesPositionLifecycleService:
-    """Backend-only authority for futures position lifecycle state."""
+    """Legacy demo compatibility path; not canonical Position submit authority."""
+
+    __triggertrade_position_lifecycle_role__ = LEGACY_POSITION_LIFECYCLE_COMPATIBILITY_ROLE
 
     def __init__(
         self,
