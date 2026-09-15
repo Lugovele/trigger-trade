@@ -45,7 +45,7 @@ def test_readiness_reports_running_when_runtime_and_postgres_are_reachable(tmp_p
     assert checks["postgres_persistence"].status == "RUNNING"
 
 
-def test_healthz_returns_not_ready_when_dependency_is_unavailable(tmp_path):
+def test_healthz_is_liveness_even_when_readiness_dependency_is_unavailable(tmp_path):
     db = _runtime_ready_db(tmp_path)
     server = create_server(port=0, db_path=db, readiness_env={})
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -54,15 +54,25 @@ def test_healthz_returns_not_ready_when_dependency_is_unavailable(tmp_path):
     try:
         conn = HTTPConnection(host, port, timeout=2)
         conn.request("GET", "/healthz")
-        response = conn.getresponse()
-        body = response.read().decode("utf-8")
+        health_response = conn.getresponse()
+        health_body = health_response.read().decode("utf-8")
+        conn.close()
+
+        conn = HTTPConnection(host, port, timeout=2)
+        conn.request("GET", "/api/readiness")
+        readiness_response = conn.getresponse()
+        readiness_payload = json.loads(readiness_response.read().decode("utf-8"))
     finally:
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
 
-    assert response.status == HTTPStatus.SERVICE_UNAVAILABLE
-    assert body == "not ready"
+    assert health_response.status == HTTPStatus.OK
+    assert health_body == "ok"
+    assert readiness_response.status == HTTPStatus.OK
+    assert readiness_payload["ready"] is False
+    assert readiness_payload["status"] == "UNAVAILABLE"
+    assert "postgres_persistence" in readiness_payload["unavailable_dependencies"]
 
 
 def test_readiness_api_exposes_dependency_aware_report_without_secrets(tmp_path):

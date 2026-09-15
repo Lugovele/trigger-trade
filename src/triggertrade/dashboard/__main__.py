@@ -238,9 +238,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_html(render_recommendation_detail(detail))
             return
         if parsed.path == "/healthz":
-            readiness = _readiness_report(self.server)
-            status = HTTPStatus.OK if readiness.ready else HTTPStatus.SERVICE_UNAVAILABLE
-            self._send_text("ok" if readiness.ready else "not ready", status)
+            self._send_text("ok")
             return
         self._send_html(render_not_found(parsed.path), HTTPStatus.NOT_FOUND)
 
