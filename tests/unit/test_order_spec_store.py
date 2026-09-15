@@ -54,6 +54,7 @@ def test_order_spec_store_persists_replays_and_publishes_outbox():
             "0009",
             "0010",
             "0011",
+            "0012",
         ]
         factory = PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)
         grant = build_grant()

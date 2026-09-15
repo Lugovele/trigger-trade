@@ -21,6 +21,11 @@ from .durable_messages import (
 )
 from .instrument_catalog_store import InstrumentCatalogStore
 from .futures_position_store import FuturesClosedPositionRecord, FuturesPositionEvent, FuturesPositionRecord, FuturesPositionStore
+from .lifecycle_start_gate_store import (
+    LifecycleStartGateConflict,
+    LifecycleStartGateRecord,
+    LifecycleStartGateStore,
+)
 from .market_data_fact_store import MarketDataFactConflict, MarketDataFactStore, MarketDataPageRecord
 from .message_store import MessageRecord, MessageSeverity, MessageStore, MessageStoreError
 from .operator_state_store import OperatorStateStore, OperatorTradingState, TradingState
@@ -119,6 +124,9 @@ __all__ = [
     "LegacyExecutionStoreBoundaryError",
     "InboxMessageRecord",
     "InstrumentCatalogStore",
+    "LifecycleStartGateConflict",
+    "LifecycleStartGateRecord",
+    "LifecycleStartGateStore",
     "MarketDataFactConflict",
     "MarketDataFactStore",
     "MarketDataPageRecord",
