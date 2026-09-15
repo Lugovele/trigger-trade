@@ -10,7 +10,7 @@ import time
 from typing import Callable, Mapping, Protocol
 
 from triggertrade.config import ConfigError
-from triggertrade.services.bootstrap import ensure_runtime_registry_for_env
+from triggertrade.services.runtime_storage import canonical_runtime_state_store_from_env
 
 
 class RuntimeProcessRole(StrEnum):
@@ -55,7 +55,8 @@ class SchedulerProcess:
         self._stop_requested = False
 
     def run_forever(self, max_cycles: int | None = None) -> None:
-        ensure_runtime_registry_for_env(self._env)
+        runtime_store = canonical_runtime_state_store_from_env(self._env, component="scheduler role")
+        runtime_store.list_heartbeats()
         cycles = 0
         self._logger("triggertrade scheduler role hydrated durable runtime state")
         while not self._stop_requested:

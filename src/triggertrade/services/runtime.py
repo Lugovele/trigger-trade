@@ -28,6 +28,7 @@ from triggertrade.persistence import (
     TraceStore,
 )
 from triggertrade.services.bootstrap import ensure_runtime_registry_initialized, merged_runtime_env, runtime_db_path
+from triggertrade.services.runtime_storage import canonical_runtime_state_store_from_env
 
 
 class RuntimeStatus(StrEnum):
@@ -573,16 +574,7 @@ def validate_canonical_runtime_config(config: AppConfig) -> None:
 
 def runtime_state_store_from_env(env: dict[str, str], db_path):
     if env.get("TRIGGERTRADE_POSTGRES_DSN"):
-        from triggertrade.persistence import (
-            PostgresConnectionFactory,
-            PostgresRuntimeStore,
-            PostgresSettings,
-            apply_postgres_migrations,
-        )
-
-        settings = PostgresSettings.from_env(env)
-        apply_postgres_migrations(dsn=settings.dsn, schema=settings.schema)
-        return PostgresRuntimeStore(PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema))
+        return canonical_runtime_state_store_from_env(env, component="runtime state store")
     return RuntimeStore(db_path)
 
 
