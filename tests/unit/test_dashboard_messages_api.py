@@ -50,6 +50,50 @@ def test_messages_api_lists_backend_messages_and_marks_visible_rows_read(tmp_pat
         thread.join(timeout=2)
 
 
+def test_messages_mark_read_route_delegates_to_command_boundary(tmp_path):
+    class FakeCommandBoundary:
+        def __init__(self):
+            self.calls = []
+
+        def mark_messages_read(self, command, message_ids):
+            self.calls.append((command.command_type, tuple(message_ids)))
+            return 7
+
+    db = _empty_db(tmp_path)
+    message = MessageStore(db).create_message(
+        created_at="2026-09-08T10:03:00+00:00",
+        severity="INFO",
+        title="Route delegation",
+        body="Message should remain unread when the fake boundary handles the command.",
+        source="unit",
+    )
+    server = create_server(port=0, db_path=db)
+    fake_boundary = FakeCommandBoundary()
+    server.command_boundary = fake_boundary
+    host, port = server.server_address
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection(host, port, timeout=2)
+        conn.request(
+            "POST",
+            "/api/messages/mark-read",
+            body=json.dumps({"token": server.operator_control_token, "message_ids": [message.message_id]}),
+            headers={"Content-Type": "application/json"},
+        )
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+    assert response.status == HTTPStatus.OK
+    assert payload == {"changed": 7, "unread_count": 1}
+    assert fake_boundary.calls == [("MESSAGES_MARK_READ", (message.message_id,))]
+    assert MessageStore(db).get_message(message.message_id).is_read is False
+
+
 def test_messages_mark_read_requires_token_and_rejects_bad_ids(tmp_path):
     db = _empty_db(tmp_path)
     server = create_server(port=0, db_path=db)

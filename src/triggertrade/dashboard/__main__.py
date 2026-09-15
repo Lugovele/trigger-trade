@@ -15,6 +15,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from triggertrade.dashboard.read_model import DashboardReadModel
 from triggertrade.dashboard.readiness import evaluate_dashboard_readiness
+from triggertrade.dashboard.commands import DashboardCommandBoundary, DashboardCommandError
 from triggertrade.exchanges import BybitDemoClient
 from triggertrade.backtest import BacktestPlan
 from triggertrade.persistence import InstrumentCatalogStore, MessageStore, MessageStoreError, OperatorStateStore, ResearchStore, ResearchStoreError, TradingRulesStore, TriggerSetStore
@@ -27,8 +28,7 @@ from triggertrade.services.operator_auth import (
     OperatorCommandAuthorizer,
     operator_authorizer_from_env,
 )
-from triggertrade.services.research import ResearchPromotionCommand, ResearchService, ResearchServiceError
-from triggertrade.services.system_history import SystemHistoryExporter
+from triggertrade.services.research import ResearchService, ResearchServiceError
 
 
 DEFAULT_HOST = "127.0.0.1"
@@ -49,6 +49,7 @@ class DashboardServer(ThreadingHTTPServer):
         instrument_catalog_service: InstrumentCatalogService,
         research_service: ResearchService,
         operator_authorizer: OperatorCommandAuthorizer,
+        command_boundary: DashboardCommandBoundary,
         operator_actions=None,
         readiness_env=None,
         postgres_health_probe=None,
@@ -61,6 +62,7 @@ class DashboardServer(ThreadingHTTPServer):
         self.instrument_catalog_service = instrument_catalog_service
         self.research_service = research_service
         self.operator_authorizer = operator_authorizer
+        self.command_boundary = command_boundary
         self.operator_actions = operator_actions
         self.operator_control_token = secrets.token_urlsafe(24)
         self.readiness_env = dict(os.environ if readiness_env is None else readiness_env)
@@ -232,12 +234,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if command is None:
                 return
             try:
-                record = self.server.research_service.create_research(
+                record = self.server.command_boundary.create_research(
+                    command,
                     set_id=str(payload.get("set_id") or ""),
                     set_version=str(payload.get("set_version") or ""),
                     rules_version_id=str(payload.get("rules_version_id") or ""),
-                    created_source="local_dashboard",
-                    created_at=datetime.now(UTC).isoformat(),
                 )
             except ResearchServiceError as exc:
                 self._send_json({"error": _safe_public_error(exc)}, HTTPStatus.BAD_REQUEST)
@@ -254,32 +255,32 @@ class DashboardHandler(BaseHTTPRequestHandler):
             try:
                 if len(parts) == 4 and parts[:2] == ["api", "research"] and parts[3] == "backtests":
                     plan = _backtest_plan_from_payload(payload)
-                    run = self.server.research_service.run_backtest(
+                    run = self.server.command_boundary.run_backtest(
+                        command,
                         research_id=parts[2],
                         plan=plan,
-                        created_at=datetime.now(UTC),
                     )
                     self._send_json({"backtest": _research_run_payload(run)}, HTTPStatus.CREATED)
                     return
                 if len(parts) == 6 and parts[:2] == ["api", "research"] and parts[3] == "backtests" and parts[5] == "select":
-                    record = self.server.research_service.select_backtest_run(parts[2], parts[4])
+                    record = self.server.command_boundary.select_backtest_run(command, research_id=parts[2], run_id=parts[4])
                     self._send_json({"research": _research_record_payload(record)})
                     return
                 if len(parts) == 5 and parts[:2] == ["api", "research"] and parts[3] == "demo" and parts[4] == "start":
-                    run = self.server.research_service.start_demo_run(parts[2], created_at=datetime.now(UTC).isoformat())
+                    run = self.server.command_boundary.start_demo_run(command, research_id=parts[2])
                     status = HTTPStatus.CONFLICT if getattr(run, "status", None).value == "BLOCKED" else HTTPStatus.CREATED
                     self._send_json({"demo": _research_run_payload(run)}, status)
                     return
                 if len(parts) == 6 and parts[:2] == ["api", "research"] and parts[3] == "demo" and parts[5] == "stop":
-                    run = self.server.research_service.stop_demo_run(parts[2], parts[4], stopped_at=datetime.now(UTC).isoformat())
+                    run = self.server.command_boundary.stop_demo_run(command, research_id=parts[2], run_id=parts[4])
                     self._send_json({"demo": _research_run_payload(run)})
                     return
                 if len(parts) == 6 and parts[:2] == ["api", "research"] and parts[3] == "demo" and parts[5] == "select":
-                    record = self.server.research_service.select_demo_run(parts[2], parts[4])
+                    record = self.server.command_boundary.select_demo_run(command, research_id=parts[2], run_id=parts[4])
                     self._send_json({"research": _research_record_payload(record)})
                     return
                 if len(parts) == 4 and parts[:2] == ["api", "research"] and parts[3] == "archive":
-                    record = self.server.research_service.archive_research(parts[2])
+                    record = self.server.command_boundary.archive_research(command, research_id=parts[2])
                     self._send_json({"research": _research_record_payload(record)})
                     return
                 if len(parts) == 5 and parts[:2] == ["api", "research"] and parts[3] == "decision" and parts[4] == "make-active":
@@ -287,14 +288,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     if not idempotency_key:
                         self._send_json({"error": "idempotency_key required"}, HTTPStatus.BAD_REQUEST)
                         return
-                    record = self.server.research_service.request_make_active(
-                        parts[2],
-                        command=ResearchPromotionCommand(
-                            operator_principal=command.principal.principal_id,
-                            authorization_source=command.principal.auth_source,
-                            idempotency_key=idempotency_key,
-                        ),
-                    )
+                    record = self.server.command_boundary.request_make_active(command, research_id=parts[2], idempotency_key=idempotency_key)
                     blocked = record.decision.value == "MAKE_ACTIVE_BLOCKED"
                     self._send_json({"research": _research_record_payload(record), "blocked": blocked}, HTTPStatus.CONFLICT if blocked else HTTPStatus.OK)
                     return
@@ -305,14 +299,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/rules/versions":
             payload = self._read_json_body(max_bytes=16000)
-            if self._authorize_json_operator_command("RULES_VERSION_CREATE", payload, scope="OPERATOR", target="RULES") is None:
+            command = self._authorize_json_operator_command("RULES_VERSION_CREATE", payload, scope="OPERATOR", target="RULES")
+            if command is None:
                 return
             try:
                 changes = _rules_changes_from_payload(payload)
-                result = self.server.trading_rules_service.create_rules_version_from_current(
+                result = self.server.command_boundary.create_rules_version(
+                    command=command,
                     changes=changes,
-                    created_source="local_dashboard",
-                    created_at=datetime.now(UTC).isoformat(),
                     expected_current_rules_version_id=str(payload.get("expected_rules_version_id") or ""),
                     expected_current_display_version=str(payload.get("expected_display_version") or ""),
                 )
@@ -330,20 +324,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/instruments/refresh":
             payload = self._read_json_body(max_bytes=2048)
-            if self._authorize_json_operator_command("INSTRUMENTS_REFRESH", payload, scope="OPERATOR", target="INSTRUMENT_CATALOG") is None:
+            command = self._authorize_json_operator_command("INSTRUMENTS_REFRESH", payload, scope="OPERATOR", target="INSTRUMENT_CATALOG")
+            if command is None:
                 return
-            result = self.server.instrument_catalog_service.refresh_instrument_catalog()
+            result = self.server.command_boundary.refresh_instrument_catalog(command)
             status = HTTPStatus.OK if result.status == "OK" else HTTPStatus.SERVICE_UNAVAILABLE
             if result.status != "OK":
-                _record_message(
-                    self.server.message_store,
-                    severity="WARNING",
-                    title="Instrument catalog refresh failed",
-                    body="Instrument catalog refresh did not complete successfully.",
-                    source="local_dashboard",
-                    dedupe_key=f"instrument_refresh:{result.status}",
-                    metadata={"status": result.status, "error": result.error},
-                )
+                self.server.command_boundary.record_instrument_catalog_refresh_failure(result)
             self._send_json(
                 {
                     "status": result.status,
@@ -359,14 +346,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/messages/mark-read":
             payload = self._read_json_body(max_bytes=4096)
-            if self._authorize_json_operator_command("MESSAGES_MARK_READ", payload, scope="OPERATOR", target="MESSAGES") is None:
+            command = self._authorize_json_operator_command("MESSAGES_MARK_READ", payload, scope="OPERATOR", target="MESSAGES")
+            if command is None:
                 return
             raw_ids = payload.get("message_ids")
             if not isinstance(raw_ids, list) or not all(isinstance(item, str) for item in raw_ids):
                 self._send_json({"error": "message_ids must be a list of ids"}, HTTPStatus.BAD_REQUEST)
                 return
             try:
-                changed = self.server.message_store.mark_read(raw_ids)
+                changed = self.server.command_boundary.mark_messages_read(command, raw_ids)
             except MessageStoreError as exc:
                 self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
                 return
@@ -378,27 +366,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if command is None:
                 return
             try:
-                text = SystemHistoryExporter(
-                    read_model=self.server.read_model,
-                    operator_store=self.server.operator_store,
-                    message_store=self.server.message_store,
-                ).build_export()
-                self.server.operator_store.record_operator_action(
-                    action="SYSTEM_HISTORY_EXPORTED",
-                    target="CLIPBOARD",
-                    result="SUCCESS",
-                    source=command.audit_source,
-                )
+                text = self.server.command_boundary.export_system_history(command)
                 self._send_json({"format": "text/plain", "text": text})
             except Exception as exc:  # noqa: BLE001 - export failures are surfaced and audited without leaking payloads.
                 error = _safe_public_error(exc)
-                self.server.operator_store.record_operator_action(
-                    action="SYSTEM_HISTORY_EXPORTED",
-                    target="CLIPBOARD",
-                    result="FAILED",
-                    source=command.audit_source,
-                    error=error,
-                )
+                self.server.command_boundary.record_system_history_export_failure(command, error)
                 self._send_json({"error": error}, HTTPStatus.SERVICE_UNAVAILABLE)
             return
         if parsed.path in {"/operator/pause", "/operator/resume", "/operator/close-one", "/operator/close-all"}:
@@ -413,94 +385,21 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_html(render_not_found("operator confirmation required"), HTTPStatus.BAD_REQUEST)
                 return
             if parsed.path.endswith("/pause"):
-                self.server.operator_store.pause(source=command.audit_source, reason="confirmed dashboard Pause Entries")
-                self.server.operator_store.record_operator_action(
-                    action="PAUSE_ENTRIES",
-                    target="ACTIVE",
-                    result="SUCCESS",
-                    source=command.audit_source,
-                )
-                _record_message(
-                    self.server.message_store,
-                    severity="ATTENTION",
-                    title="New entries paused",
-                    body="New entries were paused from the dashboard. Existing positions remain active.",
-                    source="local_dashboard",
-                    dedupe_key="operator:PAUSE_ENTRIES:ACTIVE",
-                )
+                self.server.command_boundary.pause_entries(command)
             elif parsed.path.endswith("/resume"):
-                self.server.operator_store.resume(source=command.audit_source, reason="confirmed dashboard Resume")
-                self.server.operator_store.record_operator_action(
-                    action="RESUME_ENTRIES",
-                    target="ACTIVE",
-                    result="SUCCESS",
-                    source=command.audit_source,
-                )
-                _record_message(
-                    self.server.message_store,
-                    severity="INFO",
-                    title="New entries resumed",
-                    body="New entries were resumed from the dashboard.",
-                    source="local_dashboard",
-                    dedupe_key="operator:RESUME_ENTRIES:ACTIVE",
-                )
+                self.server.command_boundary.resume_entries(command)
             elif parsed.path.endswith("/close-one"):
                 position_id = values.get("position_id", [""])[0][:160]
                 symbol = values.get("symbol", [""])[0][:40]
                 if not position_id or not symbol:
                     self._send_html(render_not_found("position id required"), HTTPStatus.BAD_REQUEST)
                     return
-                action = self.server.operator_actions
-                if action is None:
-                    error = "close-one execution bridge is not attached to this dashboard process"
-                    self.server.operator_store.record_operator_action(
-                        action="CLOSE_ONE",
-                        target=position_id,
-                        result="FAILED",
-                        source=command.audit_source,
-                        error=error,
-                    )
-                    _record_message(
-                        self.server.message_store,
-                        severity="ERROR",
-                        title="Close One failed",
-                        body="Close One could not run because no execution bridge is attached.",
-                        source="local_dashboard",
-                        entity_type="position",
-                        entity_id=position_id,
-                        dedupe_key=f"operator:CLOSE_ONE:FAILED:{position_id}",
-                    )
-                    self._send_html(render_not_found(error), HTTPStatus.SERVICE_UNAVAILABLE)
-                    return
                 try:
-                    _close_single_position(action, position_id=position_id, symbol=symbol)
-                except Exception as exc:  # noqa: BLE001 - operator action failures must be rendered, not crash the dashboard.
-                    error = str(exc)[:500]
-                    self.server.operator_store.record_operator_action(
-                        action="CLOSE_ONE",
-                        target=position_id,
-                        result="FAILED",
-                        source=command.audit_source,
-                        error=error,
-                    )
-                    _record_message(
-                        self.server.message_store,
-                        severity="ERROR",
-                        title="Close One failed",
-                        body="Close One failed from the dashboard.",
-                        source="local_dashboard",
-                        entity_type="position",
-                        entity_id=position_id,
-                        dedupe_key=f"operator:CLOSE_ONE:FAILED:{position_id}:{error[:80]}",
-                    )
+                    self.server.command_boundary.close_one(command, position_id=position_id, symbol=symbol)
+                except DashboardCommandError as exc:
+                    error = str(exc)
                     self._send_html(render_not_found(error), HTTPStatus.SERVICE_UNAVAILABLE)
                     return
-                self.server.operator_store.record_operator_action(
-                    action="CLOSE_ONE",
-                    target=position_id,
-                    result="SUCCESS",
-                    source=command.audit_source,
-                )
                 self.send_response(HTTPStatus.SEE_OTHER)
                 self.send_header("Location", "/")
                 self.send_header("Cache-Control", "no-store")
@@ -510,53 +409,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 if values.get("phrase", [""])[0] != "CLOSE ALL":
                     self._send_html(render_not_found("close-all confirmation phrase required"), HTTPStatus.BAD_REQUEST)
                     return
-                action = self.server.operator_actions
-                if action is None:
-                    error = "close-all execution bridge is not attached to this dashboard process"
-                    self.server.operator_store.record_operator_action(
-                        action="CLOSE_ALL",
-                        target="ACTIVE",
-                        result="FAILED",
-                        source=command.audit_source,
-                        error=error,
-                    )
-                    _record_message(
-                        self.server.message_store,
-                        severity="ERROR",
-                        title="Close All failed",
-                        body="Close All could not run because no execution bridge is attached.",
-                        source="local_dashboard",
-                        dedupe_key="operator:CLOSE_ALL:FAILED:no_bridge",
-                    )
-                    self._send_html(render_not_found(error), HTTPStatus.SERVICE_UNAVAILABLE)
-                    return
                 try:
-                    _close_all_positions(action)
-                except Exception as exc:  # noqa: BLE001 - operator action failures must be rendered, not crash the dashboard.
-                    error = str(exc)[:500]
-                    self.server.operator_store.record_operator_action(
-                        action="CLOSE_ALL",
-                        target="ACTIVE",
-                        result="FAILED",
-                        source=command.audit_source,
-                        error=error,
-                    )
-                    _record_message(
-                        self.server.message_store,
-                        severity="ERROR",
-                        title="Close All failed",
-                        body="Close All failed from the dashboard.",
-                        source="local_dashboard",
-                        dedupe_key=f"operator:CLOSE_ALL:FAILED:{error[:80]}",
-                    )
+                    self.server.command_boundary.close_all(command)
+                except DashboardCommandError as exc:
+                    error = str(exc)
                     self._send_html(render_not_found(error), HTTPStatus.SERVICE_UNAVAILABLE)
                     return
-                self.server.operator_store.record_operator_action(
-                    action="CLOSE_ALL",
-                    target="ACTIVE",
-                    result="SUCCESS",
-                    source=command.audit_source,
-                )
                 self.send_response(HTTPStatus.SEE_OTHER)
                 self.send_header("Location", "/")
                 self.send_header("Cache-Control", "no-store")
@@ -734,6 +592,8 @@ def create_server(
     if host not in ALLOWED_HOSTS:
         raise ValueError("dashboard host must be one of: 127.0.0.1, 0.0.0.0")
     read_model = DashboardReadModel(db_path)
+    operator_store = OperatorStateStore(db_path)
+    message_store = MessageStore(db_path)
     catalog_service = instrument_catalog_service or InstrumentCatalogService(store=InstrumentCatalogStore(db_path))
     rules_service = trading_rules_service or TradingRulesService(
         TradingRulesStore(db_path),
@@ -743,19 +603,29 @@ def create_server(
         store=ResearchStore(db_path),
         trigger_set_store=TriggerSetStore(db_path),
         trading_rules_store=TradingRulesStore(db_path),
-        message_store=MessageStore(db_path),
+        message_store=message_store,
     )
     authorizer = operator_authorizer or OperatorCommandAuthorizer(db_path)
+    command_boundary = DashboardCommandBoundary(
+        read_model=read_model,
+        operator_store=operator_store,
+        message_store=message_store,
+        trading_rules_service=rules_service,
+        instrument_catalog_service=catalog_service,
+        research_service=research_boundary,
+        operator_actions=operator_actions,
+    )
     server = DashboardServer(
         (host, port),
         DashboardHandler,
         read_model=read_model,
-        operator_store=OperatorStateStore(db_path),
-        message_store=MessageStore(db_path),
+        operator_store=operator_store,
+        message_store=message_store,
         trading_rules_service=rules_service,
         instrument_catalog_service=catalog_service,
         research_service=research_boundary,
         operator_authorizer=authorizer,
+        command_boundary=command_boundary,
         operator_actions=operator_actions,
         readiness_env=readiness_env,
         postgres_health_probe=postgres_health_probe,
@@ -793,20 +663,6 @@ def _operator_form_command_type(path: str) -> str:
     if path.endswith("/close-all"):
         return "CLOSE_ALL"
     return "OPERATOR_UNKNOWN"
-
-
-def _close_single_position(operator_actions, *, position_id: str, symbol: str):
-    try:
-        return operator_actions.close_position(position_id=position_id, symbol=symbol, close_reason="MANUAL")
-    except TypeError:
-        return operator_actions.close_position(position_id=position_id, close_reason="MANUAL")
-
-
-def _close_all_positions(operator_actions):
-    try:
-        return operator_actions.close_all_positions(scope="ACTIVE")
-    except TypeError:
-        return operator_actions.close_all_positions()
 
 
 def _message_payload(row) -> dict[str, object]:
@@ -915,13 +771,6 @@ def _messages_payload_from_model(read_model: DashboardReadModel) -> dict[str, ob
         }
     except Exception as exc:  # noqa: BLE001 - UI must show unavailable, not fake empty state.
         return {"available": False, "messages": (), "unread_count": None, "error": _safe_public_error(exc)}
-
-
-def _record_message(store: MessageStore, **kwargs) -> None:
-    try:
-        store.create_message(**kwargs)
-    except Exception:  # noqa: BLE001 - message persistence must not change operator action results.
-        return
 
 
 def create_server_from_env(
