@@ -31,6 +31,12 @@ from .lifecycle_order_event_store import (
     LifecycleOrderEventRecord,
     LifecycleOrderEventStore,
 )
+from .lifecycle_set_sync_store import (
+    LifecycleSetSyncConflict,
+    LifecycleSetSyncPublishResult,
+    LifecycleSetSyncRecord,
+    LifecycleSetSyncStore,
+)
 from .lifecycle_submission_store import (
     LifecycleSubmissionConflict,
     LifecycleSubmissionRecord,
@@ -150,6 +156,10 @@ __all__ = [
     "LifecycleOrderEventConflict",
     "LifecycleOrderEventRecord",
     "LifecycleOrderEventStore",
+    "LifecycleSetSyncConflict",
+    "LifecycleSetSyncPublishResult",
+    "LifecycleSetSyncRecord",
+    "LifecycleSetSyncStore",
     "LifecycleSubmissionConflict",
     "LifecycleSubmissionRecord",
     "LifecycleSubmissionStore",
