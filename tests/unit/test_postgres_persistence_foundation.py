@@ -45,7 +45,7 @@ def test_migrations_owner_state_restart_rollback_and_cas():
     settings = _settings()
     try:
         applied = apply_postgres_migrations(dsn=settings.dsn, schema=settings.schema)
-        assert [migration.version for migration in applied] == ["0001", "0002", "0003", "0004", "0005", "0006", "0007"]
+        assert [migration.version for migration in applied] == ["0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008"]
         assert apply_postgres_migrations(dsn=settings.dsn, schema=settings.schema) == ()
 
         factory = PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)
