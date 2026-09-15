@@ -11,6 +11,12 @@ COPY pyproject.toml README.md ./
 COPY src ./src
 
 RUN python -m pip install --no-cache-dir .
+RUN groupadd --system triggertrade \
+    && useradd --system --gid triggertrade --home-dir /app --shell /usr/sbin/nologin triggertrade \
+    && mkdir -p /app/runtime \
+    && chown -R triggertrade:triggertrade /app
+
+USER triggertrade
 
 EXPOSE 8765
 

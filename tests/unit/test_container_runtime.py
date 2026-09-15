@@ -16,6 +16,9 @@ def test_dockerfile_runs_process_role_launcher_with_role_aware_healthcheck():
     assert "TRIGGERTRADE_PROCESS_ROLE=web" not in dockerfile
     assert "TRIGGERTRADE_RUNTIME_DB_PATH=/app/runtime/triggertrade_paper.sqlite3" not in dockerfile
     assert 'VOLUME ["/app/runtime"]' not in dockerfile
+    assert "useradd --system --gid triggertrade" in dockerfile
+    assert "chown -R triggertrade:triggertrade /app" in dockerfile
+    assert "USER triggertrade" in dockerfile
     assert "CMD python -m triggertrade.services.container_health" in dockerfile
     assert 'CMD ["python", "-m", "triggertrade.services.runtime"]' in dockerfile
     assert "triggertrade.dashboard" not in dockerfile
