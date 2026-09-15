@@ -53,6 +53,7 @@ def test_lifecycle_order_event_store_appends_replays_and_lists_by_tranche():
             "0012",
             "0013",
             "0014",
+            "0015",
         ]
         factory = PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)
         payload = build_order_event_from_submission(
