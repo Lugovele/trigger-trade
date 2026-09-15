@@ -5,7 +5,12 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any
 
-from triggertrade.api_adapter_gateway import NativeProfileConformanceReport, bybit_demo_native_profile_conformance
+from triggertrade.api_adapter_gateway import (
+    NativeProfileConformanceReport,
+    bybit_demo_native_profile_conformance,
+    execution_fact_from_bybit,
+    order_fact_from_bybit,
+)
 from triggertrade.execution.bybit import map_bybit_order_status
 from triggertrade.execution.contracts import OrderStatus
 from triggertrade.execution.futures import PositionAction, futures_exchange_side
@@ -61,6 +66,36 @@ class BybitFuturesExecutionAdapter:
 
     def native_profile_conformance(self) -> NativeProfileConformanceReport:
         return bybit_demo_native_profile_conformance()
+
+    def order_management_order_fact(
+        self,
+        raw: dict[str, Any],
+        *,
+        source_endpoint: str,
+        mapping_profile_version: str,
+        evidence_ref: str,
+    ) -> dict[str, Any]:
+        return order_fact_from_bybit(
+            raw,
+            source_endpoint=source_endpoint,
+            mapping_profile_version=mapping_profile_version,
+            evidence_ref=evidence_ref,
+        )
+
+    def order_management_execution_fact(
+        self,
+        raw: dict[str, Any],
+        *,
+        source_endpoint: str,
+        mapping_profile_version: str,
+        evidence_ref: str,
+    ) -> dict[str, Any]:
+        return execution_fact_from_bybit(
+            raw,
+            source_endpoint=source_endpoint,
+            mapping_profile_version=mapping_profile_version,
+            evidence_ref=evidence_ref,
+        )
 
 
 def _first_order(result: dict[str, Any]) -> dict[str, Any] | None:
