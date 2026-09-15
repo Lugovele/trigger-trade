@@ -18,7 +18,20 @@ from triggertrade.dashboard.readiness import evaluate_dashboard_readiness
 from triggertrade.dashboard.commands import DashboardCommandBoundary, DashboardCommandError
 from triggertrade.exchanges import BybitDemoClient
 from triggertrade.backtest import BacktestPlan
-from triggertrade.persistence import InstrumentCatalogStore, MessageStore, MessageStoreError, OperatorStateStore, ResearchStore, ResearchStoreError, TradingRulesStore, TriggerSetStore
+from triggertrade.persistence import (
+    InstrumentCatalogStore,
+    MessageStore,
+    MessageStoreError,
+    OperatorStateStore,
+    PostgresConnectionFactory,
+    PostgresSettings,
+    ResearchPromotionGovernanceClient,
+    ResearchStore,
+    ResearchStoreError,
+    TradingRulesStore,
+    TriggerSetStore,
+    apply_postgres_migrations,
+)
 from triggertrade.rules import CoinRule, TradingRulesError, TradingRulesService
 from triggertrade.services.bootstrap import ensure_runtime_registry_for_env, merged_runtime_env, runtime_db_path
 from triggertrade.services.instrument_catalog import InstrumentCatalogService
@@ -593,6 +606,7 @@ def create_server(
     operator_actions=None,
     readiness_env: dict[str, str] | None = None,
     postgres_health_probe=None,
+    promotion_governance_store=None,
 ) -> DashboardServer:
     if host not in ALLOWED_HOSTS:
         raise ValueError("dashboard host must be one of: 127.0.0.1, 0.0.0.0")
@@ -609,6 +623,7 @@ def create_server(
         trigger_set_store=TriggerSetStore(db_path),
         trading_rules_store=TradingRulesStore(db_path),
         message_store=message_store,
+        promotion_governance_store=promotion_governance_store,
     )
     authorizer = operator_authorizer or operator_authorizer_from_env(db_path, {})
     command_boundary = DashboardCommandBoundary(
@@ -791,6 +806,7 @@ def create_server_from_env(
     catalog_service = InstrumentCatalogService(store=InstrumentCatalogStore(db_path), client=BybitDemoClient(config=config.bybit))
     rules_service = TradingRulesService(TradingRulesStore(db_path), symbol_validator=catalog_service.validate_symbol)
     authorizer = operator_authorizer_from_env(db_path, env)
+    promotion_governance = _promotion_governance_from_env(env)
     return create_server(
         host=host,
         port=port,
@@ -798,7 +814,18 @@ def create_server_from_env(
         trading_rules_service=rules_service,
         instrument_catalog_service=catalog_service,
         operator_authorizer=authorizer,
+        promotion_governance_store=promotion_governance,
     ), bootstrap.db_path
+
+
+def _promotion_governance_from_env(env: dict[str, str]):
+    if not env.get("TRIGGERTRADE_POSTGRES_DSN"):
+        return None
+    settings = PostgresSettings.from_env(env)
+    apply_postgres_migrations(dsn=settings.dsn, schema=settings.schema)
+    return ResearchPromotionGovernanceClient(
+        PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)
+    )
 
 
 def main() -> int:

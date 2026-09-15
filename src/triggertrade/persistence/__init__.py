@@ -107,6 +107,11 @@ from .research_store import (
     ResearchStore,
     ResearchStoreError,
 )
+from .research_promotion_governance import (
+    ResearchPromotionGovernanceClient,
+    ResearchPromotionGovernanceRecord,
+    ResearchPromotionGovernanceStore,
+)
 from .submit_authorization_store import (
     SubmitAuthorizationConflict,
     SubmitAuthorizationRecord,
@@ -242,6 +247,9 @@ __all__ = [
     "ResearchStatus",
     "ResearchStore",
     "ResearchStoreError",
+    "ResearchPromotionGovernanceClient",
+    "ResearchPromotionGovernanceRecord",
+    "ResearchPromotionGovernanceStore",
     "RuntimeCheckpoint",
     "RuntimeStore",
     "RuntimeStoreError",

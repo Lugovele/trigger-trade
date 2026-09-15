@@ -2,16 +2,57 @@ from http import HTTPStatus
 from decimal import Decimal
 import sqlite3
 
+import triggertrade.dashboard.__main__ as dashboard_main
 from triggertrade.dashboard.__main__ import create_server, render_dashboard
 from triggertrade.dashboard.read_model import DashboardReadModel
 from triggertrade.persistence import MessageStore, ResearchBacktestStatus, ResearchDemoStatus, ResearchStore
+from triggertrade.services.operator_auth import OperatorCommandAuthorizer
 from tests.unit.test_dashboard_rules_api import _json_request, _start, _stop
 from tests.unit.test_research_backend import _research_db
 
 
+def test_research_promotion_governance_env_wiring_is_postgres_backed(monkeypatch):
+    calls = {}
+
+    class FakeSettings:
+        dsn = "postgresql://unit/db"
+        schema = "unit_schema"
+
+        @classmethod
+        def from_env(cls, env):
+            calls["env"] = env
+            return cls()
+
+    class FakeFactory:
+        def __init__(self, *, dsn, schema):
+            self.dsn = dsn
+            self.schema = schema
+
+    class FakeClient:
+        def __init__(self, factory):
+            self.factory = factory
+
+    monkeypatch.setattr(dashboard_main, "PostgresSettings", FakeSettings)
+    monkeypatch.setattr(dashboard_main, "PostgresConnectionFactory", FakeFactory)
+    monkeypatch.setattr(dashboard_main, "ResearchPromotionGovernanceClient", FakeClient)
+    monkeypatch.setattr(
+        dashboard_main,
+        "apply_postgres_migrations",
+        lambda *, dsn, schema: calls.setdefault("migrations", (dsn, schema)),
+    )
+
+    assert dashboard_main._promotion_governance_from_env({}) is None
+    client = dashboard_main._promotion_governance_from_env({"TRIGGERTRADE_POSTGRES_DSN": "postgresql://unit/db"})
+
+    assert isinstance(client, FakeClient)
+    assert client.factory.dsn == "postgresql://unit/db"
+    assert client.factory.schema == "unit_schema"
+    assert calls["migrations"] == ("postgresql://unit/db", "unit_schema")
+
+
 def test_research_api_create_list_detail_and_blocked_demo_are_backend_backed(tmp_path):
     db, rules = _research_db(tmp_path)
-    server = create_server(port=0, db_path=db)
+    server = create_server(port=0, db_path=db, operator_authorizer=OperatorCommandAuthorizer(db, auth_mode="local_dev_compat"))
     host, port = server.server_address
     thread = _start(server)
     try:
@@ -52,7 +93,7 @@ def test_research_api_create_list_detail_and_blocked_demo_are_backend_backed(tmp
 
 def test_research_api_write_routes_require_token_and_reject_path_like_ids(tmp_path):
     db, rules = _research_db(tmp_path)
-    server = create_server(port=0, db_path=db)
+    server = create_server(port=0, db_path=db, operator_authorizer=OperatorCommandAuthorizer(db, auth_mode="local_dev_compat"))
     host, port = server.server_address
     thread = _start(server)
     try:
@@ -117,7 +158,7 @@ def test_research_api_use_selection_updates_backend_summary_metrics(tmp_path):
         account_scope="research-account",
         metrics={"closed_trades": 5, "profit_factor": "1.4"},
     )
-    server = create_server(port=0, db_path=db)
+    server = create_server(port=0, db_path=db, operator_authorizer=OperatorCommandAuthorizer(db, auth_mode="local_dev_compat"))
     host, port = server.server_address
     thread = _start(server)
     try:
@@ -148,7 +189,7 @@ def test_research_api_use_selection_updates_backend_summary_metrics(tmp_path):
         _stop(server, thread)
 
 
-def test_research_api_make_active_uses_backend_confirmed_exact_pair(tmp_path):
+def test_research_api_make_active_without_canonical_governance_store_is_blocked(tmp_path):
     db, rules = _research_db(tmp_path)
     current = rules.get_current_rules_version()
     candidate_rules = rules.create_rules_version_from_current(
@@ -175,7 +216,7 @@ def test_research_api_make_active_uses_backend_confirmed_exact_pair(tmp_path):
             "UPDATE trading_rules_current SET rules_version_id = ?, updated_at = ? WHERE scope = ?",
             (current.rules_version_id, "2026-09-08T12:00:00+00:00", "LIVE"),
         )
-    server = create_server(port=0, db_path=db)
+    server = create_server(port=0, db_path=db, operator_authorizer=OperatorCommandAuthorizer(db, auth_mode="local_dev_compat"))
     host, port = server.server_address
     thread = _start(server)
     try:
@@ -192,14 +233,16 @@ def test_research_api_make_active_uses_backend_confirmed_exact_pair(tmp_path):
             "POST",
             f"/api/research/{research.research_id}/decision/make-active",
             {"token": server.operator_control_token, "idempotency_key": "dashboard-promote-001"},
+            expected=HTTPStatus.CONFLICT,
         )
         detail = _json_request(host, port, "GET", f"/api/research/{research.research_id}")["research"]
 
-        assert result["blocked"] is False
-        assert result["research"]["decision"] == "MADE_ACTIVE"
-        assert result["research"]["promoted_set_version"] == "v2-test"
-        assert result["research"]["promoted_rules_version_id"] == candidate_rules.rules_version_id
-        assert detail["made_active_at"] is not None
+        assert result["blocked"] is True
+        assert result["research"]["decision"] == "MAKE_ACTIVE_BLOCKED"
+        assert result["research"]["promoted_set_version"] is None
+        assert result["research"]["promoted_rules_version_id"] is None
+        assert result["research"]["made_active_at"] is None
+        assert detail["promotion_result_metadata"] in ({}, "{}")
     finally:
         _stop(server, thread)
 
@@ -221,7 +264,7 @@ def test_research_api_make_active_blocked_state_is_factual(tmp_path):
         execution_scope_id="research-safe",
         account_scope="research-account",
     )
-    server = create_server(port=0, db_path=db)
+    server = create_server(port=0, db_path=db, operator_authorizer=OperatorCommandAuthorizer(db, auth_mode="local_dev_compat"))
     host, port = server.server_address
     thread = _start(server)
     try:

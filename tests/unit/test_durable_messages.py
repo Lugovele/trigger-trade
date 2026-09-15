@@ -14,6 +14,7 @@ from triggertrade.persistence.postgres import (
     PostgresUnitOfWork,
     apply_postgres_migrations,
 )
+from triggertrade.persistence.research_promotion_governance import ResearchPromotionGovernanceStore
 
 
 pytest.importorskip("psycopg")
@@ -221,6 +222,45 @@ def test_inbox_replay_is_noop_and_changed_content_fails_closed():
                     message_version="5",
                     payload=_payload("event-changed"),
                 )
+    finally:
+        _drop_schema(settings)
+
+
+def test_research_promotion_governance_records_owner_state_and_outbox():
+    settings = _settings()
+    try:
+        apply_postgres_migrations(dsn=settings.dsn, schema=settings.schema)
+        factory = PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)
+        payload = {
+            "research_promotion_request": {
+                "request_id": "research-promotion:unit-1",
+                "research_id": "research-1",
+                "target": {"set_id": "set-1", "set_version": "v1", "rules_version_id": "rules-1"},
+                "safety": {"sqlite_active_mutation": False, "live_order_side_effect": False},
+            }
+        }
+
+        with PostgresUnitOfWork(factory) as uow:
+            store = ResearchPromotionGovernanceStore(uow.connection)
+            record = store.request_promotion(
+                request_id="research-promotion:unit-1",
+                payload=payload,
+                research_id="research-1",
+                idempotency_key="unit-1",
+            )
+            replay = store.request_promotion(
+                request_id="research-promotion:unit-1",
+                payload=payload,
+                research_id="research-1",
+                idempotency_key="unit-1",
+            )
+
+            assert record.inserted is True
+            assert replay.inserted is False
+            assert record.state.payload_digest == canonical_json_digest(payload)
+            assert replay.outbox.message_id == "research-promotion:unit-1"
+            assert replay.outbox.consumer == "Scheduler"
+            assert replay.outbox.message_type == "RESEARCH_PROMOTION_REQUESTED"
     finally:
         _drop_schema(settings)
 

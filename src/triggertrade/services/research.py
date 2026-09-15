@@ -25,6 +25,7 @@ from triggertrade.config import AppConfig
 from triggertrade.market_data import FuturesInstrumentMetadata
 from triggertrade.persistence import MessageStore, TraceStore, TradingRulesStore, TriggerSetStore
 from triggertrade.persistence.trace_store import TraceStoreError
+from triggertrade.persistence.research_promotion_governance import ResearchPromotionGovernanceStore
 from triggertrade.persistence.research_store import (
     ResearchBacktestRunRecord,
     ResearchBacktestStatus,
@@ -88,6 +89,8 @@ class ResearchService:
         instrument: FuturesInstrumentMetadata | None = None,
         demo_isolation: ResearchDemoIsolation | None = None,
         backtest_runner: BacktestRunner | None = None,
+        promotion_governance_store: ResearchPromotionGovernanceStore | None = None,
+        legacy_sqlite_promotion_enabled: bool = False,
     ) -> None:
         self._store = store
         self._trigger_set_store = trigger_set_store
@@ -98,6 +101,8 @@ class ResearchService:
         self._instrument = instrument
         self._demo_isolation = demo_isolation or ResearchDemoIsolation()
         self._backtest_runner = backtest_runner or run_backtest
+        self._promotion_governance_store = promotion_governance_store
+        self._legacy_sqlite_promotion_enabled = legacy_sqlite_promotion_enabled
 
     def create_research(
         self,
@@ -301,7 +306,19 @@ class ResearchService:
         return record
 
     def request_make_active(self, research_id: str, *, command: ResearchPromotionCommand) -> ResearchRecord:
-        return self.make_active(research_id, command=command)
+        decided_at = datetime.now(UTC).isoformat()
+        command = _validate_promotion_command(command)
+        research = self._required_research(research_id)
+        trigger_set = self._exact_trigger_set(research.set_id, research.set_version)
+        rules = self._exact_rules_version(research.rules_version_id)
+        self._audit_promotion_command(command, research, decided_at=decided_at)
+        return self._request_canonical_promotion(
+            research,
+            trigger_set=trigger_set,
+            rules=rules,
+            command=command,
+            decided_at=decided_at,
+        )
 
     def make_active(
         self,
@@ -311,6 +328,10 @@ class ResearchService:
         decided_at: str | None = None,
         _fault_after: str | None = None,
     ) -> ResearchRecord:
+        if not self._legacy_sqlite_promotion_enabled:
+            raise ResearchServiceError(
+                "legacy SQLite research promotion is compatibility-only; use request_make_active for canonical governance"
+            )
         decided_at = decided_at or datetime.now(UTC).isoformat()
         command = _validate_promotion_command(command)
         research = self._required_research(research_id)
@@ -358,6 +379,13 @@ class ResearchService:
             previous_set_id = None if active_set is None else active_set["set_id"]
             previous_set_version = None if active_set is None else active_set["version"]
             previous_rules_id = None if previous_rules is None else previous_rules["rules_version_id"]
+            current_metadata = _json_dict_or_empty(current_research["promotion_result_metadata"])
+            if (
+                current_research["decision"] == ResearchDecision.PROMOTION_REQUESTED.value
+                and current_metadata.get("command_idempotency_key") == command.idempotency_key
+            ):
+                conn.execute("COMMIT")
+                return self._required_research(research.research_id)
             blocked_reason = _locked_promotion_block_reason(
                 research_status=current_research["status"],
                 set_status=current_set["status"],
@@ -554,6 +582,197 @@ class ResearchService:
                 },
             )
         return record
+
+    def _request_canonical_promotion(
+        self,
+        research: ResearchRecord,
+        *,
+        trigger_set: TriggerSetVersion,
+        rules: TradingRulesVersion,
+        command: ResearchPromotionCommand,
+        decided_at: str,
+    ) -> ResearchRecord:
+        with sqlite3.connect(self._store.path) as conn:
+            conn.row_factory = sqlite3.Row
+            conn.execute("BEGIN IMMEDIATE")
+            current_research = conn.execute("SELECT * FROM research_entities WHERE research_id = ?", (research.research_id,)).fetchone()
+            if current_research is None:
+                raise ResearchServiceError("research id not found")
+            if current_research["status"] == ResearchStatus.ARCHIVED.value:
+                raise ResearchStoreError("archived research is immutable")
+            current_set = conn.execute(
+                """
+                SELECT set_id, version, status, symbol, timeframe
+                FROM trigger_set_versions
+                WHERE set_id = ? AND version = ?
+                """,
+                (research.set_id, research.set_version),
+            ).fetchone()
+            current_rules = conn.execute(
+                "SELECT rules_version_id, version, payload FROM trading_rules_versions WHERE rules_version_id = ?",
+                (research.rules_version_id,),
+            ).fetchone()
+            if current_set is None:
+                raise ResearchServiceError("exact trigger set version not found")
+            if current_rules is None:
+                raise ResearchServiceError("exact trading rules version not found")
+            active_set = conn.execute(
+                """
+                SELECT set_id, version, status
+                FROM trigger_set_versions
+                WHERE symbol = ? AND timeframe = ? AND status = ?
+                """,
+                (current_set["symbol"], current_set["timeframe"], TriggerSetStatus.ACTIVE.value),
+            ).fetchone()
+            previous_rules = conn.execute(
+                "SELECT rules_version_id FROM trading_rules_current WHERE scope = ?",
+                (TRADING_RULES_SCOPE_LIVE,),
+            ).fetchone()
+            previous_set_id = None if active_set is None else active_set["set_id"]
+            previous_set_version = None if active_set is None else active_set["version"]
+            previous_rules_id = None if previous_rules is None else previous_rules["rules_version_id"]
+            blocked_reason = _locked_promotion_block_reason(
+                research_status=current_research["status"],
+                set_status=current_set["status"],
+                set_symbol=current_set["symbol"],
+                rules_payload=current_rules["payload"],
+                conn=conn,
+                research_id=research.research_id,
+            )
+            if blocked_reason is None:
+                blocked_reason = _promotion_evidence_block_reason(conn=conn, research=current_research)
+            if blocked_reason is None and self._promotion_governance_store is None:
+                blocked_reason = "canonical_promotion_governance_store_unavailable"
+            if blocked_reason is not None:
+                conn.execute(
+                    """
+                    UPDATE research_entities
+                    SET decision = ?, decision_at = ?, updated_at = ?
+                    WHERE research_id = ?
+                    """,
+                    (ResearchDecision.MAKE_ACTIVE_BLOCKED.value, decided_at, decided_at, research.research_id),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO research_decision_events(research_id, event_at, decision, reason)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (research.research_id, decided_at, ResearchDecision.MAKE_ACTIVE_BLOCKED.value, blocked_reason),
+                )
+                conn.execute("COMMIT")
+                record = self._required_research(research.research_id)
+                self._record_promotion_block(record, blocked_reason=blocked_reason, decided_at=decided_at)
+                return record
+
+            request_id = f"research-promotion:{command.idempotency_key}"
+            payload = _canonical_promotion_payload(
+                research=research,
+                trigger_set=trigger_set,
+                rules=rules,
+                command=command,
+                request_id=request_id,
+                requested_at=decided_at,
+                selected_backtest_run_id=current_research["selected_backtest_run_id"],
+                selected_demo_run_id=current_research["selected_demo_run_id"],
+                previous_set_id=previous_set_id,
+                previous_set_version=previous_set_version,
+                previous_rules_id=previous_rules_id,
+            )
+            governance = self._promotion_governance_store.request_promotion(
+                request_id=request_id,
+                payload=payload,
+                research_id=research.research_id,
+                idempotency_key=command.idempotency_key,
+            )
+            metadata = {
+                "result": "promotion_requested",
+                "canonical_request_id": governance.request_id,
+                "canonical_request_digest": governance.state.payload_digest,
+                "outbox_message_id": governance.outbox.message_id,
+                "outbox_payload_digest": governance.outbox.payload_digest,
+                "operator_principal": command.operator_principal,
+                "authz_source": command.authorization_source,
+                "command_idempotency_key": command.idempotency_key,
+                "target_set": f"{research.set_id}@{research.set_version}",
+                "target_rules_version_id": research.rules_version_id,
+                "previous_set": None if previous_set_id is None else f"{previous_set_id}@{previous_set_version}",
+                "previous_rules_version_id": previous_rules_id,
+                "selected_backtest_run_id": current_research["selected_backtest_run_id"],
+                "selected_demo_run_id": current_research["selected_demo_run_id"],
+                "automatic_promotion": False,
+                "active_sqlite_mutation": False,
+            }
+            conn.execute(
+                """
+                UPDATE research_entities
+                SET status = ?, decision = ?, decision_at = COALESCE(decision_at, ?),
+                    updated_at = ?, previous_active_set_id = ?,
+                    previous_active_set_version = ?, previous_rules_version_id = ?,
+                    promotion_result_metadata = ?
+                WHERE research_id = ?
+                """,
+                (
+                    ResearchStatus.DECISION_NEEDED.value,
+                    ResearchDecision.PROMOTION_REQUESTED.value,
+                    decided_at,
+                    decided_at,
+                    previous_set_id,
+                    previous_set_version,
+                    previous_rules_id,
+                    json.dumps(metadata, sort_keys=True),
+                    research.research_id,
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO research_decision_events(research_id, event_at, decision, reason)
+                VALUES (?, ?, ?, ?)
+                """,
+                (research.research_id, decided_at, ResearchDecision.PROMOTION_REQUESTED.value, json.dumps(metadata, sort_keys=True)),
+            )
+            conn.execute("COMMIT")
+
+        record = self._required_research(research.research_id)
+        self._audit_research_event(
+            "RESEARCH_PROMOTION_REQUESTED",
+            record,
+            result="REQUESTED",
+            created_at=record.decision_at or decided_at,
+            metadata=record.promotion_result_metadata,
+            event_id=f"audit-research-promotion-requested-{record.research_id}",
+        )
+        self._message(
+            severity="ATTENTION",
+            title="Research promotion requested",
+            body="Research promotion was recorded for canonical durable governance. Active configuration was not changed by the research service.",
+            entity_type="research",
+            entity_id=record.research_id,
+            dedupe_key=f"research:{record.research_id}:promotion_requested",
+            metadata={
+                "canonical_request_id": governance.request_id,
+                "command_idempotency_key": command.idempotency_key,
+            },
+        )
+        return record
+
+    def _record_promotion_block(self, record: ResearchRecord, *, blocked_reason: str, decided_at: str) -> None:
+        self._audit_research_event(
+            "RESEARCH_MAKE_ACTIVE_BLOCKED",
+            record,
+            result="BLOCKED",
+            reason=blocked_reason,
+            created_at=record.decision_at or decided_at,
+            metadata={"decision": record.decision.value},
+        )
+        self._message(
+            severity="WARNING",
+            title="Research promotion blocked",
+            body="Research Make Active did not change the active configuration.",
+            entity_type="research",
+            entity_id=record.research_id,
+            dedupe_key=f"research:{record.research_id}:make_active_blocked:{blocked_reason}",
+            metadata={"reason": blocked_reason},
+        )
 
     def compare(self, research_id: str) -> ResearchCompareResult:
         research = self._required_research(research_id)
@@ -841,6 +1060,14 @@ class ResearchService:
                 return
             raise ResearchServiceError("research promotion command idempotency key conflict") from None
         except Exception as exc:
+            existing = self._trace_store.get_audit_event(event_id)
+            if (
+                existing is not None
+                and existing.entity_id == record.research_id
+                and existing.source_id == command.operator_principal
+                and existing.safe_metadata.get("authz_source") == command.authorization_source
+            ):
+                return
             raise ResearchServiceError(f"research promotion command audit failed: {exc.__class__.__name__}") from exc
 
 
@@ -935,6 +1162,68 @@ def _promotion_evidence_block_reason(*, conn: sqlite3.Connection, research: sqli
         if row["status"] != ResearchDemoStatus.STOPPED.value:
             return "selected_demo_evidence_must_be_stopped"
     return None
+
+
+def _canonical_promotion_payload(
+    *,
+    research: ResearchRecord,
+    trigger_set: TriggerSetVersion,
+    rules: TradingRulesVersion,
+    command: ResearchPromotionCommand,
+    request_id: str,
+    requested_at: str,
+    selected_backtest_run_id: str | None,
+    selected_demo_run_id: str | None,
+    previous_set_id: str | None,
+    previous_set_version: str | None,
+    previous_rules_id: str | None,
+) -> dict[str, Any]:
+    return {
+        "research_promotion_request": {
+            "request_id": request_id,
+            "requested_at": requested_at,
+            "research_id": research.research_id,
+            "research_pin_digest": research.pin_digest,
+            "target": {
+                "set_id": trigger_set.set_id,
+                "set_version": trigger_set.version,
+                "rules_version_id": rules.rules_version_id,
+                "rules_display_version": rules.version,
+                "rules_config_hash": rules.config_hash,
+            },
+            "selected_evidence": {
+                "backtest_run_id": selected_backtest_run_id,
+                "demo_run_id": selected_demo_run_id,
+            },
+            "operator_command": {
+                "principal": command.operator_principal,
+                "authorization_source": command.authorization_source,
+                "idempotency_key": command.idempotency_key,
+                "automatic_promotion": False,
+            },
+            "rollback": {
+                "previous_set_id": previous_set_id,
+                "previous_set_version": previous_set_version,
+                "previous_rules_version_id": previous_rules_id,
+            },
+            "safety": {
+                "live_order_side_effect": False,
+                "sqlite_active_mutation": False,
+                "formula_certification_bypass": False,
+                "owner_gate_bypass": False,
+            },
+        }
+    }
+
+
+def _json_dict_or_empty(value: str | None) -> dict[str, Any]:
+    if not value:
+        return {}
+    try:
+        data = json.loads(value)
+    except json.JSONDecodeError:
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def _validate_promotion_command(command: ResearchPromotionCommand | None) -> ResearchPromotionCommand:
