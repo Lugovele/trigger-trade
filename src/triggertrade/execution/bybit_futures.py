@@ -5,6 +5,7 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any
 
+from triggertrade.api_adapter_gateway import NativeProfileConformanceReport, bybit_demo_native_profile_conformance
 from triggertrade.execution.bybit import map_bybit_order_status
 from triggertrade.execution.contracts import OrderStatus
 from triggertrade.execution.futures import PositionAction, futures_exchange_side
@@ -57,6 +58,9 @@ class BybitFuturesExecutionAdapter:
 
     def map_order_status(self, raw_status: str | None) -> OrderStatus:
         return map_bybit_order_status(raw_status)
+
+    def native_profile_conformance(self) -> NativeProfileConformanceReport:
+        return bybit_demo_native_profile_conformance()
 
 
 def _first_order(result: dict[str, Any]) -> dict[str, Any] | None:

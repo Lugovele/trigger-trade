@@ -20,13 +20,25 @@ from .market_data import (
     market_selection_digest,
     market_selection_result,
 )
+from .native_profile import (
+    NativeProfileConformanceError,
+    NativeProfileConformanceReport,
+    NativeProfileEvidence,
+    NativeProfileStatus,
+    bybit_demo_native_profile_conformance,
+)
 
 __all__ = [
     "MarketDataGatewayError",
     "MarketDataSelection",
+    "NativeProfileConformanceError",
+    "NativeProfileConformanceReport",
+    "NativeProfileEvidence",
+    "NativeProfileStatus",
     "PortfolioDataGatewayError",
     "build_market_data_request",
     "build_market_data_response",
+    "bybit_demo_native_profile_conformance",
     "build_portfolio_data_request",
     "build_portfolio_data_response",
     "coverage",
