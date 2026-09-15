@@ -3,6 +3,12 @@
 from .execution_store import ExecutionFill, ExecutionRecord, ExecutionStore
 from .futures_execution_store import FuturesExecutionRecord, FuturesExecutionStore
 from .daily_loss_store import DailyLossRecord, DailyLossStore
+from .durable_messages import (
+    DurableMessageConflict,
+    DurableMessageStore,
+    InboxMessageRecord,
+    OutboxMessageRecord,
+)
 from .instrument_catalog_store import InstrumentCatalogStore
 from .futures_position_store import FuturesClosedPositionRecord, FuturesPositionEvent, FuturesPositionRecord, FuturesPositionStore
 from .message_store import MessageRecord, MessageSeverity, MessageStore, MessageStoreError
@@ -67,8 +73,11 @@ __all__ = [
     "ExecutionStore",
     "DailyLossRecord",
     "DailyLossStore",
+    "DurableMessageConflict",
+    "DurableMessageStore",
     "FuturesExecutionRecord",
     "FuturesExecutionStore",
+    "InboxMessageRecord",
     "InstrumentCatalogStore",
     "MessageRecord",
     "MessageSeverity",
@@ -79,6 +88,7 @@ __all__ = [
     "OwnerStateRecord",
     "OwnerStateRevisionConflict",
     "OwnerStateStore",
+    "OutboxMessageRecord",
     "PostgresConnectionFactory",
     "PostgresPersistenceError",
     "PostgresSettings",
