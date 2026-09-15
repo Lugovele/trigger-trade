@@ -13,6 +13,7 @@ from triggertrade.persistence import (
     MessageStore,
     ResearchStore,
     ResearchStoreError,
+    ResearchBacktestStatus,
     ResearchDemoStatus,
     ResearchDecision,
     FuturesPositionRecord,
@@ -100,6 +101,55 @@ def test_research_backtest_reuses_existing_engine_and_selects_by_reference(tmp_p
     assert set(FuturesAccountingStore(db).list_closed_trades(limit=20)[0].keys()) >= {"evidence_source"}
     assert {row["evidence_source"] for row in FuturesAccountingStore(db).list_closed_trades(limit=20)} == {BACKTEST_EVIDENCE_SOURCE}
     assert ResearchStore(db).get_backtest_run(research.research_id, run.run_id).engine_run_id == run.engine_run_id
+
+
+def test_research_preserves_multiple_short_runs_without_overwriting_lineage(tmp_path):
+    db, rules = _research_db(tmp_path)
+    store = ResearchStore(db)
+    research = _service(db).create_research(
+        set_id="triggertrade-futures-core",
+        set_version="v1",
+        rules_version_id=rules.get_current_rules_version().rules_version_id,
+    )
+
+    first = store.add_backtest_run(
+        research_id=research.research_id,
+        period_start="2026-09-01T00:00:00+00:00",
+        period_end="2026-09-08T00:00:00+00:00",
+        timeframe="1m",
+        status=ResearchBacktestStatus.COMPLETED,
+        engine_run_id="engine-week-1",
+        metrics={"net_pnl": "1.25", "closed_trades": 7},
+        created_at="2026-09-08T00:01:00+00:00",
+    )
+    second = store.add_backtest_run(
+        research_id=research.research_id,
+        period_start="2026-09-08T00:00:00+00:00",
+        period_end="2026-09-15T00:00:00+00:00",
+        timeframe="1m",
+        status=ResearchBacktestStatus.COMPLETED,
+        engine_run_id="engine-week-2",
+        metrics={"net_pnl": "-0.10", "closed_trades": 5},
+        created_at="2026-09-15T00:01:00+00:00",
+    )
+
+    selected = store.select_backtest_run(research.research_id, second.run_id)
+    runs = store.list_backtest_runs(research.research_id)
+    by_id = {run.run_id: run for run in runs}
+
+    assert selected.selected_backtest_run_id == second.run_id
+    assert {first.run_id, second.run_id} == set(by_id)
+    assert by_id[first.run_id].selected_for_use is False
+    assert by_id[second.run_id].selected_for_use is True
+    assert by_id[first.run_id].period_start == "2026-09-01T00:00:00+00:00"
+    assert by_id[second.run_id].period_start == "2026-09-08T00:00:00+00:00"
+    assert by_id[first.run_id].metrics == {"closed_trades": 7, "net_pnl": "1.25"}
+    assert by_id[second.run_id].metrics == {"closed_trades": 5, "net_pnl": "-0.10"}
+    assert by_id[first.run_id].pin_payload["parent_research_pin_digest"] == research.pin_digest
+    assert by_id[second.run_id].pin_payload["parent_research_pin_digest"] == research.pin_digest
+    assert by_id[first.run_id].pin_digest == research_pin_digest(by_id[first.run_id].pin_payload)
+    assert by_id[second.run_id].pin_digest == research_pin_digest(by_id[second.run_id].pin_payload)
+    assert by_id[first.run_id].pin_digest != by_id[second.run_id].pin_digest
 
 
 def test_research_backtest_runner_receives_pinned_rules_config(tmp_path):
