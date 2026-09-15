@@ -60,6 +60,7 @@ def test_submit_authorization_store_persists_replays_and_publishes_outbox():
             "0016",
             "0017",
             "0018",
+            "0019",
         ]
         factory = PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)
         grant = build_grant()

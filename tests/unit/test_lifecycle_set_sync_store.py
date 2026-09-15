@@ -56,6 +56,7 @@ def test_lifecycle_set_sync_store_publishes_placement_replays_and_recovers_state
             "0016",
             "0017",
             "0018",
+            "0019",
         ]
         factory = PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)
         payload = placed_event_payload()

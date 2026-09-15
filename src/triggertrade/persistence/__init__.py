@@ -31,6 +31,13 @@ from .lifecycle_order_event_store import (
     LifecycleOrderEventRecord,
     LifecycleOrderEventStore,
 )
+from .lifecycle_reconciliation_store import (
+    LifecycleObservationTombstone,
+    LifecycleReconciliationApplyResult,
+    LifecycleReconciliationConflict,
+    LifecycleReconciliationRecord,
+    LifecycleReconciliationStore,
+)
 from .lifecycle_close_authority_store import (
     CloseAcquireResult,
     LifecycleCloseAuthorityConflict,
@@ -163,6 +170,11 @@ __all__ = [
     "LifecycleOrderEventConflict",
     "LifecycleOrderEventRecord",
     "LifecycleOrderEventStore",
+    "LifecycleObservationTombstone",
+    "LifecycleReconciliationApplyResult",
+    "LifecycleReconciliationConflict",
+    "LifecycleReconciliationRecord",
+    "LifecycleReconciliationStore",
     "CloseAcquireResult",
     "LifecycleCloseAuthorityConflict",
     "LifecycleCloseAuthorityStore",
