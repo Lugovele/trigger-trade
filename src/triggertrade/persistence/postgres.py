@@ -313,6 +313,9 @@ def _load_migrations(path: Path) -> tuple[_Migration, ...]:
 
 
 def _default_migrations_dir() -> Path:
+    configured = os.environ.get("TRIGGERTRADE_POSTGRES_MIGRATIONS_DIR")
+    if configured:
+        return Path(configured)
     return Path(__file__).resolve().parents[3] / "migrations" / "postgres"
 
 

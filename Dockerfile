@@ -5,10 +5,12 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     TRIGGERTRADE_DASHBOARD_HOST=0.0.0.0 \
-    TRIGGERTRADE_DASHBOARD_PORT=8765
+    TRIGGERTRADE_DASHBOARD_PORT=8765 \
+    TRIGGERTRADE_POSTGRES_MIGRATIONS_DIR=/app/migrations/postgres
 
 COPY pyproject.toml README.md ./
 COPY src ./src
+COPY migrations ./migrations
 
 RUN python -m pip install --no-cache-dir .
 RUN groupadd --system triggertrade \

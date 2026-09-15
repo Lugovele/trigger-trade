@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 import uuid
 
 import pytest
@@ -14,6 +15,7 @@ from triggertrade.persistence.postgres import (
     PostgresPersistenceError,
     PostgresSettings,
     PostgresUnitOfWork,
+    _default_migrations_dir,
     apply_postgres_migrations,
 )
 
@@ -39,6 +41,12 @@ def _drop_schema(settings: PostgresSettings) -> None:
 def test_postgres_settings_never_accepts_unsafe_schema_identifier():
     with pytest.raises(PostgresPersistenceError):
         PostgresSettings(dsn="postgresql://example.invalid/db", schema="public;select")
+
+
+def test_default_migrations_dir_can_be_overridden_for_container_images(monkeypatch):
+    monkeypatch.setenv("TRIGGERTRADE_POSTGRES_MIGRATIONS_DIR", "/app/migrations/postgres")
+
+    assert _default_migrations_dir() == Path("/app/migrations/postgres")
 
 
 def test_migrations_owner_state_restart_rollback_and_cas():

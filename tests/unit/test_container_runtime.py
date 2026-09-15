@@ -19,6 +19,8 @@ def test_dockerfile_runs_process_role_launcher_with_role_aware_healthcheck():
     assert "useradd --system --gid triggertrade" in dockerfile
     assert "chown -R triggertrade:triggertrade /app" in dockerfile
     assert "USER triggertrade" in dockerfile
+    assert "TRIGGERTRADE_POSTGRES_MIGRATIONS_DIR=/app/migrations/postgres" in dockerfile
+    assert "COPY migrations ./migrations" in dockerfile
     assert "CMD python -m triggertrade.services.container_health" in dockerfile
     assert 'CMD ["python", "-m", "triggertrade.services.runtime"]' in dockerfile
     assert "triggertrade.dashboard" not in dockerfile
