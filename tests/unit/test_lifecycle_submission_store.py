@@ -58,6 +58,7 @@ def test_lifecycle_submission_store_persists_replays_and_recovers_dispatch_cutpo
             "0015",
             "0016",
             "0017",
+            "0018",
         ]
         factory = PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)
 

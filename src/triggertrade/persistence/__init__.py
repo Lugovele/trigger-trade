@@ -31,6 +31,13 @@ from .lifecycle_order_event_store import (
     LifecycleOrderEventRecord,
     LifecycleOrderEventStore,
 )
+from .lifecycle_close_authority_store import (
+    CloseAcquireResult,
+    LifecycleCloseAuthorityConflict,
+    LifecycleCloseAuthorityStore,
+    LifecycleCloseChildRecord,
+    LifecycleCloseIntentRecord,
+)
 from .lifecycle_set_sync_store import (
     LifecycleSetSyncConflict,
     LifecycleSetSyncPublishResult,
@@ -156,6 +163,11 @@ __all__ = [
     "LifecycleOrderEventConflict",
     "LifecycleOrderEventRecord",
     "LifecycleOrderEventStore",
+    "CloseAcquireResult",
+    "LifecycleCloseAuthorityConflict",
+    "LifecycleCloseAuthorityStore",
+    "LifecycleCloseChildRecord",
+    "LifecycleCloseIntentRecord",
     "LifecycleSetSyncConflict",
     "LifecycleSetSyncPublishResult",
     "LifecycleSetSyncRecord",
