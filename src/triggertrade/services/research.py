@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from decimal import Decimal
 import json
+import re
 import sqlite3
 from typing import Any, Callable
 
@@ -50,6 +51,8 @@ class ResearchDemoIsolation:
     reason: str = "research_demo_exchange_isolation_unavailable"
     execution_scope_id: str | None = None
     account_scope: str | None = None
+    adapter_scope_id: str | None = None
+    state_scope_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -661,8 +664,9 @@ class ResearchService:
             return "research_daily_loss_accounting_isolation_unavailable"
         if not self._demo_isolation.available:
             return self._demo_isolation.reason
-        if not self._demo_isolation.execution_scope_id or not self._demo_isolation.account_scope:
-            return "research_demo_isolation_scope_unattributed"
+        scope_reason = _demo_isolation_scope_block_reason(self._demo_isolation)
+        if scope_reason is not None:
+            return scope_reason
         return None
 
     def _required_research(self, research_id: str) -> ResearchRecord:
@@ -764,6 +768,28 @@ class ResearchService:
             )
         except Exception:
             return
+
+
+_LIVE_SCOPE_TOKENS = {"live", "main", "mainnet", "prod", "production", "real"}
+
+
+def _demo_isolation_scope_block_reason(isolation: ResearchDemoIsolation) -> str | None:
+    scoped_values = (
+        isolation.execution_scope_id,
+        isolation.account_scope,
+        isolation.adapter_scope_id,
+        isolation.state_scope_id,
+    )
+    if any(not value for value in scoped_values):
+        return "research_demo_isolation_scope_unattributed"
+    if any(_is_live_like_scope(str(value)) for value in scoped_values):
+        return "research_demo_live_side_effect_scope_forbidden"
+    return None
+
+
+def _is_live_like_scope(value: str) -> bool:
+    tokens = {token for token in re.split(r"[^a-z0-9]+", value.lower()) if token}
+    return bool(tokens & _LIVE_SCOPE_TOKENS)
 
 
 def _locked_promotion_block_reason(
@@ -895,6 +921,8 @@ def _demo_run_pins(
         execution_pins={
             "isolation_available": isolation.available,
             "isolation_reason": isolation.reason,
+            "adapter_scope_id": isolation.adapter_scope_id,
+            "state_scope_id": isolation.state_scope_id,
             "live_side_effects": "forbidden",
         },
     )

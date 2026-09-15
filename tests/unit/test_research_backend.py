@@ -241,9 +241,43 @@ def test_dynamic_tp_and_daily_loss_rules_block_research_demo_start(tmp_path):
     assert daily_demo.blocked_reason == "research_daily_loss_accounting_isolation_unavailable"
 
 
+def test_research_demo_rejects_unattributed_or_live_like_isolation_scopes(tmp_path):
+    db, rules = _research_db(tmp_path)
+    research = _service(db).create_research(
+        set_id="triggertrade-futures-core",
+        set_version="v1",
+        rules_version_id=rules.get_current_rules_version().rules_version_id,
+    )
+    missing_state = _service(
+        db,
+        demo_isolation=ResearchDemoIsolation(
+            available=True,
+            execution_scope_id="research-safe",
+            account_scope="research-account",
+            adapter_scope_id="research-demo-paper",
+        ),
+    ).start_demo_run(research.research_id)
+    live_scope = _service(
+        db,
+        demo_isolation=ResearchDemoIsolation(
+            available=True,
+            execution_scope_id="research-safe",
+            account_scope="live",
+            adapter_scope_id="research-demo-paper",
+            state_scope_id="research-demo-state",
+        ),
+    ).start_demo_run(research.research_id)
+
+    assert missing_state.status is ResearchDemoStatus.BLOCKED
+    assert missing_state.blocked_reason == "research_demo_isolation_scope_unattributed"
+    assert live_scope.status is ResearchDemoStatus.BLOCKED
+    assert live_scope.blocked_reason == "research_demo_live_side_effect_scope_forbidden"
+    assert FuturesExecutionStore(db).unresolved() == ()
+
+
 def test_research_demo_stop_select_compare_and_make_active_promotes_exact_pair(tmp_path):
     db, rules = _research_db(tmp_path)
-    service = _service(db, demo_isolation=ResearchDemoIsolation(available=True, execution_scope_id="research-safe", account_scope="research-account"))
+    service = _service(db, demo_isolation=_safe_demo_isolation())
     pinned_rules = rules.create_rules_version_from_current(
         changes={"fixed_take_profit_pct": Decimal("0.017")},
         created_source="unit",
@@ -266,6 +300,12 @@ def test_research_demo_stop_select_compare_and_make_active_promotes_exact_pair(t
     idempotent = service.request_make_active(research.research_id)
     promotion_message = next(message for message in MessageStore(db).list_messages() if message.dedupe_key == f"research:{research.research_id}:made_active")
 
+    assert running.status is ResearchDemoStatus.RUNNING
+    assert running.execution_scope_id == "research-safe"
+    assert running.account_scope == "research-account"
+    assert running.pin_payload["execution_pins"]["adapter_scope_id"] == "research-demo-paper"
+    assert running.pin_payload["execution_pins"]["state_scope_id"] == "research-demo-state"
+    assert running.pin_payload["execution_pins"]["live_side_effects"] == "forbidden"
     assert stopped.status.value == "STOPPED"
     assert stopped_again.stopped_at == "2026-09-08T13:00:00+00:00"
     assert selected.selected_demo_run_id == running.run_id
@@ -319,7 +359,7 @@ def test_research_demo_stop_select_compare_and_make_active_promotes_exact_pair(t
 
 def test_make_active_blocks_running_demo_without_changing_pair(tmp_path):
     db, rules = _research_db(tmp_path)
-    service = _service(db, demo_isolation=ResearchDemoIsolation(available=True, execution_scope_id="research-safe", account_scope="research-account"))
+    service = _service(db, demo_isolation=_safe_demo_isolation())
     original_rules = rules.get_current_rules_version()
     new_rules = rules.create_rules_version_from_current(changes={"fixed_take_profit_pct": Decimal("0.018")}, created_source="unit").rules
     _set_current_rules(db, original_rules.rules_version_id)
@@ -570,7 +610,7 @@ def test_concurrent_different_research_promotions_leave_one_exact_pair(tmp_path)
 
 def test_research_compare_available_for_selected_demo_and_active_overlap(tmp_path):
     db, rules = _research_db(tmp_path)
-    service = _service(db, demo_isolation=ResearchDemoIsolation(available=True, execution_scope_id="research-safe", account_scope="research-account"))
+    service = _service(db, demo_isolation=_safe_demo_isolation())
     research = service.create_research(
         set_id="triggertrade-futures-core",
         set_version="v1",
@@ -639,7 +679,7 @@ def test_research_archive_preserves_evidence(tmp_path):
 
 def test_archived_research_is_immutable(tmp_path):
     db, rules = _research_db(tmp_path)
-    service = _service(db, with_backtest_runtime=True, demo_isolation=ResearchDemoIsolation(available=True, execution_scope_id="research-safe", account_scope="research-account"))
+    service = _service(db, with_backtest_runtime=True, demo_isolation=_safe_demo_isolation())
     research = service.create_research(
         set_id="triggertrade-futures-core",
         set_version="v1",
@@ -684,6 +724,16 @@ def _service(db, *, with_backtest_runtime=False, demo_isolation=None, backtest_r
         instrument=_instrument() if with_backtest_runtime else None,
         demo_isolation=demo_isolation,
         backtest_runner=backtest_runner,
+    )
+
+
+def _safe_demo_isolation() -> ResearchDemoIsolation:
+    return ResearchDemoIsolation(
+        available=True,
+        execution_scope_id="research-safe",
+        account_scope="research-account",
+        adapter_scope_id="research-demo-paper",
+        state_scope_id="research-demo-state",
     )
 
 
