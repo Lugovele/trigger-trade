@@ -13,7 +13,9 @@ class FakeResponse:
 def test_dockerfile_runs_process_role_launcher_with_role_aware_healthcheck():
     dockerfile = _read("Dockerfile")
 
-    assert "TRIGGERTRADE_PROCESS_ROLE=web" in dockerfile
+    assert "TRIGGERTRADE_PROCESS_ROLE=web" not in dockerfile
+    assert "TRIGGERTRADE_RUNTIME_DB_PATH=/app/runtime/triggertrade_paper.sqlite3" not in dockerfile
+    assert 'VOLUME ["/app/runtime"]' not in dockerfile
     assert "CMD python -m triggertrade.services.container_health" in dockerfile
     assert 'CMD ["python", "-m", "triggertrade.services.runtime"]' in dockerfile
     assert "triggertrade.dashboard" not in dockerfile
@@ -23,6 +25,7 @@ def test_deploy_script_can_target_web_worker_and_scheduler_roles():
     script = _read("scripts/deploy-azure.ps1")
 
     assert '[ValidateSet("web", "trading-worker", "scheduler")]' in script
+    assert '[string[]] $Roles = @("web", "trading-worker", "scheduler")' in script
     assert '"trading-worker" = "triggertrade-trading-worker"' in script
     assert '"scheduler" = "triggertrade-scheduler"' in script
     assert '"--set-env-vars", "TRIGGERTRADE_PROCESS_ROLE=$Role"' in script

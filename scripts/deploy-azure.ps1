@@ -1,6 +1,6 @@
 param(
     [ValidateSet("web", "trading-worker", "scheduler")]
-    [string[]] $Roles = @("web")
+    [string[]] $Roles = @("web", "trading-worker", "scheduler")
 )
 
 Set-StrictMode -Version Latest
