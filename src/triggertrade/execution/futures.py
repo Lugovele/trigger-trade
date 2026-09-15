@@ -13,6 +13,7 @@ from triggertrade.config import BybitEnvironment, TradingMode
 from triggertrade.execution.contracts import OrderStatus, OrderType, Side
 from triggertrade.execution.service import ExecutionError
 from triggertrade.exchanges import BybitApiError
+from triggertrade.lifecycle_submission import lifecycle_client_order_id
 from triggertrade.market_data.futures import ContractCategory, FuturesAccountState, FuturesInstrumentMetadata
 from triggertrade.persistence.futures_execution_store import FuturesExecutionRecord, FuturesExecutionStore
 
@@ -579,7 +580,7 @@ def estimate_net_edge(
 
 
 def futures_client_order_id(intent_id: str) -> str:
-    return f"ttf-{sha256(intent_id.encode('utf-8')).hexdigest()[:24]}"
+    return lifecycle_client_order_id(intent_id)
 
 
 def futures_risk_decision_id(intent_id: str, blocking: tuple[str, ...]) -> str:
