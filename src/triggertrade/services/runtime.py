@@ -593,7 +593,10 @@ def build_legacy_demo_futures_runtime_from_env(env: dict[str, str]):
         TriggerSetStore,
     )
     from triggertrade.persistence.futures_accounting_store import FuturesAccountingStore
-    from triggertrade.services.futures_runtime import FuturesDualLaneRuntime
+    from triggertrade.services.futures_runtime import (
+        UNCERTIFIED_DEMO_ACTIVE_FORMULA_EXECUTION_OPT_IN,
+        FuturesDualLaneRuntime,
+    )
 
     runtime_env = dict(env)
     if not _env_true(runtime_env.get(LEGACY_DEMO_FUTURES_RUNTIME_OPT_IN)):
@@ -614,6 +617,9 @@ def build_legacy_demo_futures_runtime_from_env(env: dict[str, str]):
         runtime_store=runtime_store,
         trigger_set_store=TriggerSetStore(db_path),
         operator_state_store=OperatorStateStore(db_path),
+        allow_uncertified_active_formula_execution=_env_true(
+            runtime_env.get(UNCERTIFIED_DEMO_ACTIVE_FORMULA_EXECUTION_OPT_IN)
+        ),
     )
 
 

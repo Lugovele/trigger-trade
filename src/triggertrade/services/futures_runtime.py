@@ -67,6 +67,10 @@ from triggertrade.trigger_sets import Lane, TriggerSetStatus, TriggerSetVersion
 from triggertrade.triggers import PercentagePriceMoveTrigger, RobustVolumeConfirmationTrigger, Signal, SignalType, VolumeConfirmationConfig, VolumeConfirmationResult
 
 
+UNCERTIFIED_DEMO_ACTIVE_FORMULA_EXECUTION_OPT_IN = "TRIGGERTRADE_ALLOW_UNCERTIFIED_DEMO_ACTIVE_FORMULA_EXECUTION"
+FORMULA_CERTIFICATION_REQUIRED_REASON = "formula_certification_required"
+
+
 @dataclass(frozen=True)
 class FuturesDualLaneResult:
     candle_id: str | None
@@ -110,6 +114,7 @@ class FuturesDualLaneRuntime:
         test_simulator: TestFuturesSimulator | None = None,
         account_provider: Callable[[FuturesInstrumentMetadata], FuturesAccountState] | None = None,
         instrument_catalog: InstrumentCatalogService | None = None,
+        allow_uncertified_active_formula_execution: bool = False,
         clock: Callable[[], datetime] | None = None,
         logger: Callable[[str], None] | None = None,
     ) -> None:
@@ -137,6 +142,7 @@ class FuturesDualLaneRuntime:
             maker_fee_rate=config.futures_runtime.maker_fee_rate,
         )
         self._account_provider = account_provider
+        self._allow_uncertified_active_formula_execution = allow_uncertified_active_formula_execution
         self._clock = clock or (lambda: datetime.now(UTC))
         self._logger = logger or (lambda message: print(message))
         self._stop_requested = False
@@ -208,19 +214,22 @@ class FuturesDualLaneRuntime:
         if completed is None:
             return FuturesDualLaneResult(None, (), (), "no_completed_candle")
 
+        active_formula_blocked = active_set is not None and self._active_formula_execution_blocked()
         active_account = None
-        try:
-            active_account = self._refresh_active_account_snapshot(instrument)
-        except (BybitApiError, ValueError, ExecutionError) as exc:
-            self._log(f"futures account data unavailable: {exc.__class__.__name__}")
-            return FuturesDualLaneResult(completed.candle_id, (), (), "account_data_unavailable")
-        if active_set is not None:
+        if not active_formula_blocked:
+            try:
+                active_account = self._refresh_active_account_snapshot(instrument)
+            except (BybitApiError, ValueError, ExecutionError) as exc:
+                self._log(f"futures account data unavailable: {exc.__class__.__name__}")
+                return FuturesDualLaneResult(completed.candle_id, (), (), "account_data_unavailable")
+        if active_set is not None and not active_formula_blocked:
             self._recover_active_unresolved(instrument, active_account)
             self._monitor_active_positions(instrument, active_account)
 
         test_sets = tuple(self._trigger_set_store.list_testing_sets(self._config.futures_runtime.symbol, "1m"))
         active_already_processed = (
             active_set is not None
+            and not active_formula_blocked
             and _lane_already_processed(
                 self._runtime_store,
                 lane=Lane.ACTIVE,
@@ -271,19 +280,22 @@ class FuturesDualLaneRuntime:
 
         active_results = ()
         if active_set is not None:
-            active_results = (
-                self._process_lane(
-                    lane=Lane.ACTIVE,
-                    trigger_set=active_set,
-                    completed=completed,
-                    event=event,
-                    instrument=instrument,
-                    candles=candles,
-                    regime_context=regime_context,
-                    rules_version=active_pair.rules_version if active_pair is not None else None,
-                    account=active_account,
-                ),
-            )
+            if active_formula_blocked:
+                active_results = (RuntimeCycleResult(completed.candle_id, None, skipped_reason=FORMULA_CERTIFICATION_REQUIRED_REASON),)
+            else:
+                active_results = (
+                    self._process_lane(
+                        lane=Lane.ACTIVE,
+                        trigger_set=active_set,
+                        completed=completed,
+                        event=event,
+                        instrument=instrument,
+                        candles=candles,
+                        regime_context=regime_context,
+                        rules_version=active_pair.rules_version if active_pair is not None else None,
+                        account=active_account,
+                    ),
+                )
         test_results = tuple(
             self._process_lane(
                 lane=Lane.TEST,
@@ -335,6 +347,8 @@ class FuturesDualLaneRuntime:
             return RuntimeCycleResult(completed.candle_id, None, skipped_reason="set_not_eligible")
         if not _is_futures_set(trigger_set):
             return RuntimeCycleResult(completed.candle_id, None, skipped_reason="non_futures_set")
+        if lane is Lane.ACTIVE and self._active_formula_execution_blocked():
+            return RuntimeCycleResult(completed.candle_id, None, skipped_reason=FORMULA_CERTIFICATION_REQUIRED_REASON)
         existing = self._runtime_store.get_lane_lifecycle(
             lane=lane.value,
             symbol=completed.symbol,
@@ -801,6 +815,8 @@ class FuturesDualLaneRuntime:
         )
 
     def _recover_and_monitor_active_positions_from_snapshots(self) -> None:
+        if self._active_formula_execution_blocked():
+            return
         for position in self._position_store.list_open_positions(include_unknown=True):
             instrument = instrument_metadata_from_position_snapshot(position)
             if instrument is None:
@@ -834,6 +850,13 @@ class FuturesDualLaneRuntime:
         active_set: TriggerSetVersion,
         active_checkpoint: LaneRuntimeCheckpoint,
     ) -> FuturesDualLaneResult:
+        if self._active_formula_execution_blocked():
+            return FuturesDualLaneResult(
+                active_checkpoint.last_processed_candle_id,
+                (RuntimeCycleResult(active_checkpoint.last_processed_candle_id, None, skipped_reason=FORMULA_CERTIFICATION_REQUIRED_REASON),),
+                (),
+                FORMULA_CERTIFICATION_REQUIRED_REASON,
+            )
         self._record_heartbeat("DEGRADED", "checkpoint_recovery_in_progress")
         self._message_store.create_message(
             severity=MessageSeverity.ATTENTION,
@@ -1091,6 +1114,8 @@ class FuturesDualLaneRuntime:
         self._accounting_store.record_equity_snapshot(snapshot)
 
     def _recover_active_unresolved(self, instrument: FuturesInstrumentMetadata, account: FuturesAccountState | None = None) -> None:
+        if self._active_formula_execution_blocked():
+            return
         account = account or self._account_state(instrument, Lane.ACTIVE)
         lifecycle = FuturesPositionLifecycleService(
             execution_config=_execution_config(self._config),
@@ -1126,6 +1151,8 @@ class FuturesDualLaneRuntime:
                 bridge.ingest_execution(record=record)
 
     def _monitor_active_positions(self, instrument: FuturesInstrumentMetadata, account: FuturesAccountState | None = None) -> None:
+        if self._active_formula_execution_blocked():
+            return
         account = account or self._account_state(instrument, Lane.ACTIVE)
         if account.mark_price is None:
             return
@@ -1199,6 +1226,9 @@ class FuturesDualLaneRuntime:
             rules_version_id=rules_version_id,
             rules_evaluation=rules_evaluation,
         )
+
+    def _active_formula_execution_blocked(self) -> bool:
+        return not self._allow_uncertified_active_formula_execution
 
     def _record_lane_audit_event(
         self,

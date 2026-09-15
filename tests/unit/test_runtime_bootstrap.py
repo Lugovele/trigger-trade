@@ -156,7 +156,7 @@ def test_dashboard_env_startup_uses_managed_oidc_auth_by_default(tmp_path):
         html = render_dashboard(server.read_model)
         assert server.operator_authorizer.auth_mode == "managed_oidc"
         assert server.read_model.operator_command_submit_enabled is True
-        assert server.operator_control_token not in html
+        assert server.operator_control_token == ""
         assert 'name="token"' not in html
     finally:
         server.server_close()
@@ -200,6 +200,25 @@ def test_legacy_demo_futures_runtime_builder_bootstraps_same_configured_db_path(
     assert TriggerSetStore(db).get_active_set("BTCUSDT", "1m").version == "v1"
     assert TriggerSetStore(db).get_active_set("BTCUSDT", "1m").set_id == "triggertrade-futures-core"
     assert TriggerSetStore(db).get_set("triggertrade-futures-candidate", "v2-test") is not None
+    assert runtime._allow_uncertified_active_formula_execution is False
+
+
+def test_legacy_demo_futures_runtime_active_formula_execution_requires_separate_opt_in(tmp_path):
+    db = tmp_path / "runtime-builder.sqlite3"
+    runtime = build_legacy_demo_futures_runtime_from_env(
+        {
+            "TRIGGERTRADE_RUNTIME_DB_PATH": str(db),
+            "TRIGGERTRADE_MARKET": "linear",
+            "TRIGGERTRADE_CATEGORY": "linear",
+            "TRIGGERTRADE_EXECUTION_VENUE": "bybit_demo_futures",
+            "BYBIT_API_KEY": "unit-key",
+            "BYBIT_API_SECRET": "unit-secret",
+            LEGACY_DEMO_FUTURES_RUNTIME_OPT_IN: "1",
+            "TRIGGERTRADE_ALLOW_UNCERTIFIED_DEMO_ACTIVE_FORMULA_EXECUTION": "1",
+        }
+    )
+
+    assert runtime._allow_uncertified_active_formula_execution is True
 
 
 def test_canonical_runtime_builder_excludes_legacy_demo_futures_runtime(tmp_path):

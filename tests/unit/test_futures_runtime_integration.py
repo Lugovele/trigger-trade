@@ -41,7 +41,7 @@ from triggertrade.persistence import (
 from triggertrade.persistence.futures_accounting_store import FuturesAccountingStore
 from triggertrade.services.backup_restore import BackupService, critical_state_fingerprint
 from triggertrade.services.db_integrity_audit import run_database_integrity_audit
-from triggertrade.services.futures_runtime import FuturesDualLaneRuntime, _is_futures_set
+from triggertrade.services.futures_runtime import FORMULA_CERTIFICATION_REQUIRED_REASON, FuturesDualLaneRuntime, _is_futures_set
 from triggertrade.services.instrument_catalog import InstrumentCatalogService
 from triggertrade.services.research import ResearchPromotionCommand, ResearchService
 from triggertrade.rules import DirectionMode, TakeProfitMode, TradingRulesService
@@ -65,6 +65,31 @@ def test_runtime_uses_one_linear_market_stream_for_active_and_test(tmp_path):
     assert client.spot_candle_calls == 0
     assert result.active[0].execution_status == "submitted"
     assert result.test[0].execution_status == "test_simulated"
+
+
+def test_uncertified_active_formula_execution_is_fenced_by_default(tmp_path):
+    adapter = RecordingFuturesAdapter(order_status="New")
+
+    result = _runtime(tmp_path, active_adapter=adapter, allow_uncertified_active_formula_execution=False).process_once()
+
+    assert result.active[0].skipped_reason == FORMULA_CERTIFICATION_REQUIRED_REASON
+    assert result.active[0].execution_status is None
+    assert adapter.create_calls == 0
+    assert result.test[0].execution_status == "test_simulated"
+
+
+def test_uncertified_active_formula_fence_skips_accounting_close_monitoring(tmp_path):
+    position_store = FuturesPositionStore(tmp_path / "runtime.sqlite3")
+
+    result = _runtime(
+        tmp_path,
+        path=tmp_path / "runtime.sqlite3",
+        position_store=position_store,
+        allow_uncertified_active_formula_execution=False,
+    ).process_once()
+
+    assert result.active[0].skipped_reason == FORMULA_CERTIFICATION_REQUIRED_REASON
+    assert position_store.list_open_positions() == ()
 
 
 def test_no_signal_cycle_refreshes_account_snapshot_without_order(tmp_path):
@@ -1345,12 +1370,45 @@ def test_catalog_outage_still_monitors_existing_position_from_snapshot(tmp_path)
         active_adapter=adapter,
         position_store=position_store,
         account_provider=lambda instrument: _account(instrument, mark_price=Decimal("101")),
+        allow_uncertified_active_formula_execution=True,
     ).process_once()
 
     assert result.skipped_reason == "market_data_unavailable"
     assert adapter.create_calls == 1
     assert adapter.created[0]["symbol"] == "BTCUSDT"
     assert adapter.created[0]["action"] is PositionAction.CLOSE_LONG
+
+
+def test_catalog_outage_does_not_monitor_active_positions_without_formula_certification(tmp_path):
+    path = tmp_path / "runtime.sqlite3"
+    position_store = FuturesPositionStore(path)
+    position = _position_record(open_intent_id="snapshot-open")
+    position_store.save_open_position(position)
+    client = LinearOnlyMarketClient()
+    original = client.linear_instruments_info
+
+    def suspended(*, cursor=None, limit=1000):
+        payload = original(cursor=cursor, limit=limit).result
+        payload["list"][0]["status"] = "PreLaunch"
+        return BybitResponse(0, "OK", payload)
+
+    client.linear_instruments_info = suspended
+    adapter = RecordingFuturesAdapter(order_status="New")
+
+    result = _runtime(
+        tmp_path,
+        path=path,
+        client=client,
+        active_adapter=adapter,
+        position_store=position_store,
+        account_provider=lambda instrument: _account(instrument, mark_price=Decimal("101")),
+        allow_uncertified_active_formula_execution=False,
+    ).process_once()
+
+    assert result.skipped_reason == "market_data_unavailable"
+    assert adapter.create_calls == 0
+    assert position_store.get_position(position.position_id).status == PositionStatus.OPEN.value
+
 
 def test_test_lane_simulates_source_aware_closed_trade_without_private_order(tmp_path):
     path = tmp_path / "runtime.sqlite3"
@@ -1732,6 +1790,7 @@ def _runtime(
     clock=None,
     demo_expected_gross_move="1",
     market="linear",
+    allow_uncertified_active_formula_execution=True,
 ):
     db_path = path or (tmp_path / "runtime.sqlite3")
     trigger_sets = TriggerSetStore(db_path)
@@ -1751,6 +1810,7 @@ def _runtime(
         active_adapter=active_adapter or RecordingFuturesAdapter(order_status="New"),
         account_provider=account_provider or (lambda _: _account(instrument)),
         instrument_catalog=instrument_catalog,
+        allow_uncertified_active_formula_execution=allow_uncertified_active_formula_execution,
         clock=clock or (lambda: datetime(2026, 9, 5, 13, 10, 30, tzinfo=UTC)),
         logger=lambda message: None,
     )
