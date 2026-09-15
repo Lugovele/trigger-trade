@@ -65,6 +65,18 @@ semantics, change active methodology, or authorize backend implementation.
 
 | ID | Status | Queue treatment |
 |---|---|---|
-| F-013 | REVIEW_NEEDED | Excluded from primary queue unless F-001/F-002/F-004/F-005 dependency resolution proves it is required. |
-| S-004 | REVIEW_NEEDED | Excluded from primary queue unless accounting/order lifecycle formulas require the closed-state predicate. |
-| S-005 | REVIEW_NEEDED | Excluded from primary queue unless a primary formula requires a canonical market regime classifier. |
+| F-013 | CERTIFIED | Final spec approved for generic Set-owned pending-entry invalidation framework. Depends on certified F-001 through F-005 where concrete conditions reference them, N-008, Set lifecycle methodology, SYSTEM_PROTOCOLS evidence eligibility/configuration binding and Order Lifecycle pending-entry state. |
+| S-004 | CERTIFIED | Final spec approved as conservative Order Lifecycle finality and release-eligibility rule. Depends on certified A-002/A-004/A-009, approved A-005/A-006/Numeric Policy, SYSTEM_PROTOCOLS P5-P13/P15 and Order Management factual evidence. |
+| S-005 | CERTIFIED | Final spec approved only as research/demo diagnostic boundary. It is not a canonical trading input and does not affect Set, Position, Portfolio, Order Lifecycle or execution behavior. |
+
+## System Certification
+
+```text
+FORMULA_SYSTEM_FULL_COUNCIL_APPROVED = YES
+ANOTHER_SYSTEM_REVIEW_REQUIRED = NO
+```
+
+System integration artifacts:
+
+1. `docs/formula-certification/FORMULA_SYSTEM_INTEGRATION_PACK.md`
+2. `docs/formula-certification/FORMULA_SYSTEM_FINAL_CERTIFICATION.md`

@@ -15,18 +15,15 @@ Resolved by product owner on 2026-09-15. See revised candidates:
 
 ## Actionable Now
 
-1. F-010 — Dynamic Take Profit selection and rounding
+1. F-013 — Set pending invalidation and stale-signal eligibility
    - State: `CERTIFIED`
-   - Evidence: `F-010/F-010_FINAL_FORMULA_SPECIFICATION.md`
-2. F-011 — Position size, quantity, and actual notional construction
+   - Evidence: `F-013/F-013_FINAL_FORMULA_SPECIFICATION.md`
+2. S-004 — Order Lifecycle finality and closed-state predicate
    - State: `CERTIFIED`
-   - Evidence: `F-011/F-011_FINAL_FORMULA_SPECIFICATION.md`
-3. F-012 — Risk/reward and minimum net edge calculation
+   - Evidence: `S-004/S-004_FINAL_SPECIFICATION.md`
+3. S-005 — Market regime classifier
    - State: `CERTIFIED`
-   - Evidence: `F-012/F-012_FINAL_FORMULA_SPECIFICATION.md`
-   - Evidence bundle: catalog, active methodology excerpts, certified F-008,
-     F-009, F-010 and F-011 final specifications, plus approved A-003 policy
-     and T-005/T-006/T-010 research-parameter evidence if referenced.
+   - Evidence: `S-005/S-005_FINAL_SPECIFICATION.md`
 
 ## Certified
 
@@ -45,6 +42,9 @@ Resolved by product owner on 2026-09-15. See revised candidates:
 13. A-004 — Funding calculation and allocation
 14. A-002 — Net final result calculation
 15. A-009 — Accounting-day realized totals and daily loss gate input
+16. F-013 — Set pending invalidation and stale-signal eligibility
+17. S-004 — Order Lifecycle finality and closed-state predicate
+18. S-005 — Market regime classifier research/demo diagnostic boundary
 
 ## Waiting For Dependencies
 
@@ -56,14 +56,28 @@ None.
 
 ## Not Started But Dependency-Available Later
 
-None currently identified.
+None.
 
-## Completion
+## Primary Queue Completion
 
 All primary queue formulas are `CERTIFIED`.
 
-## Excluded Unless Required
+## REVIEW_NEEDED Queue
 
-1. F-013
-2. S-004
-3. S-005
+1. F-013 — `CERTIFIED`
+2. S-004 — `CERTIFIED`
+3. S-005 — `CERTIFIED`
+
+## System Integration
+
+Status:
+
+```text
+FORMULA_SYSTEM_FULL_COUNCIL_APPROVED = YES
+ANOTHER_SYSTEM_REVIEW_REQUIRED = NO
+```
+
+Artifacts:
+
+1. `FORMULA_SYSTEM_INTEGRATION_PACK.md`
+2. `FORMULA_SYSTEM_FINAL_CERTIFICATION.md`

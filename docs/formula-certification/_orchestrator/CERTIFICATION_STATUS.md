@@ -40,15 +40,15 @@ CERTIFIED
 
 | ID | State | Notes |
 |---|---|---|
-| F-013 | NOT_STARTED | Separate object; excluded unless required by a primary formula. |
-| S-004 | NOT_STARTED | Separate object; excluded unless required by accounting/order lifecycle dependencies. |
-| S-005 | NOT_STARTED | Separate object; excluded unless required by a primary formula. |
+| F-013 | CERTIFIED | Verified `FULL_COUNCIL_APPROVED = YES` and `ANOTHER_REVIEW_CYCLE_REQUIRED = NO`; approved as generic Set-owned pending-entry invalidation framework. |
+| S-004 | CERTIFIED | Verified `FULL_COUNCIL_APPROVED = YES` and `ANOTHER_REVIEW_CYCLE_REQUIRED = NO`; approved as conservative Order Lifecycle finality and release-eligibility rule. |
+| S-005 | CERTIFIED | Verified `FULL_COUNCIL_APPROVED = YES` and `ANOTHER_REVIEW_CYCLE_REQUIRED = NO`; approved only as research/demo diagnostic boundary, not a trading input. |
 
 ## Current Focus
 
 ```text
 current_formula: NONE
-current_action: primary queue complete
+current_action: formula system certification complete
 mode: COMPLETE
-reason: all primary queue formulas are certified; separate REVIEW_NEEDED objects remain excluded unless explicitly required.
+reason: all primary and REVIEW_NEEDED objects are certified; system coherence review approved final certification.
 ```
