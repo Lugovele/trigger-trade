@@ -31,6 +31,7 @@ from .portfolio_data_facts import (
     PortfolioDataRequestRecord,
     PortfolioDataResponseRecord,
 )
+from .portfolio_state_store import PortfolioStateConflict, PortfolioStateRecord, PortfolioStateStore
 from .research_store import (
     RESEARCH_SCHEMA_VERSION,
     ResearchBacktestRunRecord,
@@ -103,6 +104,9 @@ __all__ = [
     "PortfolioDataFactStore",
     "PortfolioDataRequestRecord",
     "PortfolioDataResponseRecord",
+    "PortfolioStateConflict",
+    "PortfolioStateRecord",
+    "PortfolioStateStore",
     "apply_postgres_migrations",
     "FuturesClosedPositionRecord",
     "FuturesPositionEvent",
