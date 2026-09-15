@@ -7,6 +7,18 @@ from .instrument_catalog_store import InstrumentCatalogStore
 from .futures_position_store import FuturesClosedPositionRecord, FuturesPositionEvent, FuturesPositionRecord, FuturesPositionStore
 from .message_store import MessageRecord, MessageSeverity, MessageStore, MessageStoreError
 from .operator_state_store import OperatorStateStore, OperatorTradingState, TradingState
+from .postgres import (
+    MigrationRecord,
+    OwnerStateConflict,
+    OwnerStateRecord,
+    OwnerStateRevisionConflict,
+    OwnerStateStore,
+    PostgresConnectionFactory,
+    PostgresPersistenceError,
+    PostgresSettings,
+    PostgresUnitOfWork,
+    apply_postgres_migrations,
+)
 from .research_store import (
     RESEARCH_SCHEMA_VERSION,
     ResearchBacktestRunRecord,
@@ -62,6 +74,16 @@ __all__ = [
     "MessageSeverity",
     "MessageStore",
     "MessageStoreError",
+    "MigrationRecord",
+    "OwnerStateConflict",
+    "OwnerStateRecord",
+    "OwnerStateRevisionConflict",
+    "OwnerStateStore",
+    "PostgresConnectionFactory",
+    "PostgresPersistenceError",
+    "PostgresSettings",
+    "PostgresUnitOfWork",
+    "apply_postgres_migrations",
     "FuturesClosedPositionRecord",
     "FuturesPositionEvent",
     "FuturesPositionRecord",
