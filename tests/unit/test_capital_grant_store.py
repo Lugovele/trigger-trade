@@ -49,6 +49,7 @@ def test_capital_grant_store_persists_replays_and_publishes_outbox():
             "0007",
             "0008",
             "0009",
+            "0010",
         ]
         factory = PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)
         decision = approved_decision()
