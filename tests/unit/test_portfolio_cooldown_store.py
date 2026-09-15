@@ -53,6 +53,7 @@ def test_portfolio_cooldown_store_persists_replays_and_recovers_effective_gate()
             "0013",
             "0014",
             "0015",
+            "0016",
         ]
         factory = PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)
 

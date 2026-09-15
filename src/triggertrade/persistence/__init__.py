@@ -58,6 +58,11 @@ from .position_construction_store import (
     PositionConstructionRecord,
     PositionConstructionStore,
 )
+from .position_config_pin_store import (
+    PositionConfigPinConflict,
+    PositionConfigPinRecord,
+    PositionConfigPinStore,
+)
 from .portfolio_data_facts import (
     PortfolioDataFactConflict,
     PortfolioDataFactStore,
@@ -169,6 +174,9 @@ __all__ = [
     "PositionConstructionConflict",
     "PositionConstructionRecord",
     "PositionConstructionStore",
+    "PositionConfigPinConflict",
+    "PositionConfigPinRecord",
+    "PositionConfigPinStore",
     "PortfolioDataFactConflict",
     "PortfolioDataFactStore",
     "PortfolioDataRequestRecord",

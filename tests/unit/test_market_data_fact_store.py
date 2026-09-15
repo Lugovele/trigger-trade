@@ -53,6 +53,7 @@ def test_market_data_fact_store_persists_replays_and_recovers_pages():
             "0013",
             "0014",
             "0015",
+            "0016",
         ]
         factory = PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)
         response = valid_market_response()
