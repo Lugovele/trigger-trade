@@ -51,6 +51,15 @@ def test_canonical_runtime_builder_is_the_public_runtime_launcher():
     assert runtime.build_runtime_from_env is runtime.build_canonical_runtime_from_env
 
 
+def test_runtime_process_roles_are_explicit():
+    roles = importlib.import_module("triggertrade.services.process_roles")
+
+    assert roles.RuntimeProcessRole.WEB.value == "web"
+    assert roles.RuntimeProcessRole.TRADING_WORKER.value == "trading-worker"
+    assert roles.RuntimeProcessRole.SCHEDULER.value == "scheduler"
+    assert roles.RuntimeProcessRole.RESEARCH_WORKER.value == "research-worker"
+
+
 def test_canonical_runtime_module_import_does_not_load_legacy_execution_modules():
     code = (
         "import sys; "

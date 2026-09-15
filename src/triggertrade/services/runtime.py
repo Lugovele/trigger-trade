@@ -618,13 +618,14 @@ build_runtime_from_env = build_canonical_runtime_from_env
 
 
 def main() -> int:
+    from triggertrade.services.process_roles import ProcessRoleError, run_process_role
+
     env = merged_runtime_env()
     try:
-        build_runtime_from_env(env).run_forever()
-    except ConfigError as exc:
-        print(f"futures runtime refused to start: {exc}")
+        return run_process_role(env)
+    except (ConfigError, ProcessRoleError) as exc:
+        print(f"triggertrade runtime refused to start: {exc}")
         return 1
-    return 0
 
 
 if __name__ == "__main__":
