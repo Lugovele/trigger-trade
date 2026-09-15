@@ -1,11 +1,20 @@
+param(
+    [ValidateSet("web", "trading-worker", "scheduler")]
+    [string[]] $Roles = @("web")
+)
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $ResourceGroup = "triggertrade-rg"
 $AcrName = "triggertradeacr"
 $AcrLoginServer = "triggertradeacr-dcfmhtd6fmaubtac.azurecr.io"
-$AcrRepository = "triggertrade-web"
-$ContainerAppName = "triggertrade-web"
+$AcrRepository = "triggertrade-runtime"
+$ContainerAppsByRole = @{
+    "web" = "triggertrade-web"
+    "trading-worker" = "triggertrade-trading-worker"
+    "scheduler" = "triggertrade-scheduler"
+}
 $CustomDomain = "tt.lugovele.com"
 $HealthTimeoutSeconds = 300
 $HealthPollIntervalSeconds = 10
@@ -118,6 +127,48 @@ function Wait-Healthz {
     throw "Health check failed for $Uri after $TimeoutSeconds seconds. Last result: $lastError"
 }
 
+function Wait-ContainerAppReady {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $Name,
+
+        [Parameter(Mandatory = $true)]
+        [string] $ResourceGroup,
+
+        [Parameter(Mandatory = $true)]
+        [int] $TimeoutSeconds,
+
+        [Parameter(Mandatory = $true)]
+        [int] $PollIntervalSeconds
+    )
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    $lastState = $null
+
+    while ((Get-Date) -lt $deadline) {
+        $lastState = Get-CheckedCommandOutput -FilePath "az" -Arguments @(
+            "containerapp", "show",
+            "--name", $Name,
+            "--resource-group", $ResourceGroup,
+            "--query", "properties.provisioningState",
+            "--output", "tsv",
+            "--only-show-errors"
+        ) -FailureMessage "Unable to retrieve Azure Container App provisioning state for $Name."
+
+        if ($lastState -eq "Succeeded") {
+            return $lastState
+        }
+
+        Start-Sleep -Seconds $PollIntervalSeconds
+    }
+
+    if ([string]::IsNullOrWhiteSpace($lastState)) {
+        $lastState = "unknown"
+    }
+
+    throw "Container app $Name did not become ready after $TimeoutSeconds seconds. Last provisioning state: $lastState"
+}
+
 Test-RequiredCommand -Name "docker"
 Test-RequiredCommand -Name "az"
 Test-RequiredCommand -Name "git"
@@ -151,56 +202,69 @@ Write-Host "Pushing image $RemoteImage"
 Invoke-CheckedCommand -FilePath "docker" -Arguments @("tag", $LocalImage, $RemoteImage) -FailureMessage "Docker tag failed."
 Invoke-CheckedCommand -FilePath "docker" -Arguments @("push", $RemoteImage) -FailureMessage "Docker push failed."
 
-Write-Host "Updating Azure Container App $ContainerAppName to $RemoteImage"
-Invoke-CheckedCommand -FilePath "az" -Arguments @(
-    "containerapp", "update",
-    "--name", $ContainerAppName,
-    "--resource-group", $ResourceGroup,
-    "--image", $RemoteImage,
-    "--only-show-errors",
-    "--output", "none"
-) -FailureMessage "Azure Container App update failed."
+foreach ($Role in $Roles) {
+    $ContainerAppName = $ContainerAppsByRole[$Role]
+    if ([string]::IsNullOrWhiteSpace($ContainerAppName)) {
+        throw "No Azure Container App is configured for role $Role."
+    }
 
-$RevisionName = Get-CheckedCommandOutput -FilePath "az" -Arguments @(
-    "containerapp", "show",
-    "--name", $ContainerAppName,
-    "--resource-group", $ResourceGroup,
-    "--query", "properties.latestRevisionName",
-    "--output", "tsv",
-    "--only-show-errors"
-) -FailureMessage "Unable to retrieve latest Azure Container App revision name."
+    Write-Host "Updating Azure Container App $ContainerAppName for role $Role to $RemoteImage"
+    Invoke-CheckedCommand -FilePath "az" -Arguments @(
+        "containerapp", "update",
+        "--name", $ContainerAppName,
+        "--resource-group", $ResourceGroup,
+        "--image", $RemoteImage,
+        "--set-env-vars", "TRIGGERTRADE_PROCESS_ROLE=$Role",
+        "--only-show-errors",
+        "--output", "none"
+    ) -FailureMessage "Azure Container App update failed for role $Role."
 
-$AzureFqdn = Get-CheckedCommandOutput -FilePath "az" -Arguments @(
-    "containerapp", "show",
-    "--name", $ContainerAppName,
-    "--resource-group", $ResourceGroup,
-    "--query", "properties.configuration.ingress.fqdn",
-    "--output", "tsv",
-    "--only-show-errors"
-) -FailureMessage "Unable to retrieve Azure Container App FQDN."
+    $RevisionName = Get-CheckedCommandOutput -FilePath "az" -Arguments @(
+        "containerapp", "show",
+        "--name", $ContainerAppName,
+        "--resource-group", $ResourceGroup,
+        "--query", "properties.latestRevisionName",
+        "--output", "tsv",
+        "--only-show-errors"
+    ) -FailureMessage "Unable to retrieve latest Azure Container App revision name for $Role."
 
-if ([string]::IsNullOrWhiteSpace($RevisionName)) {
-    throw "Azure Container App latest revision name was empty."
+    if ([string]::IsNullOrWhiteSpace($RevisionName)) {
+        throw "Azure Container App latest revision name was empty for role $Role."
+    }
+
+    $RoleHealthResult = Wait-ContainerAppReady -Name $ContainerAppName -ResourceGroup $ResourceGroup -TimeoutSeconds $HealthTimeoutSeconds -PollIntervalSeconds $HealthPollIntervalSeconds
+    Write-Host "$Role role provisioning: $RoleHealthResult"
+
+    if ($Role -eq "web") {
+        $AzureFqdn = Get-CheckedCommandOutput -FilePath "az" -Arguments @(
+            "containerapp", "show",
+            "--name", $ContainerAppName,
+            "--resource-group", $ResourceGroup,
+            "--query", "properties.configuration.ingress.fqdn",
+            "--output", "tsv",
+            "--only-show-errors"
+        ) -FailureMessage "Unable to retrieve latest Azure Container App FQDN for web role."
+
+        if ([string]::IsNullOrWhiteSpace($AzureFqdn)) {
+            throw "Azure Container App FQDN was empty for web role."
+        }
+
+        $AzureHealthUri = "https://$AzureFqdn/healthz"
+        $CustomDomainHealthUri = "https://$CustomDomain/healthz"
+
+        Write-Host "Polling $AzureHealthUri"
+        $AzureHealthResult = Wait-Healthz -Uri $AzureHealthUri -TimeoutSeconds $HealthTimeoutSeconds -PollIntervalSeconds $HealthPollIntervalSeconds
+
+        Write-Host "Polling $CustomDomainHealthUri"
+        $CustomDomainHealthResult = Wait-Healthz -Uri $CustomDomainHealthUri -TimeoutSeconds $HealthTimeoutSeconds -PollIntervalSeconds $HealthPollIntervalSeconds
+
+        Write-Host "Web Azure health: $AzureHealthResult"
+        Write-Host "Web custom-domain health: $CustomDomainHealthResult"
+    }
 }
-
-if ([string]::IsNullOrWhiteSpace($AzureFqdn)) {
-    throw "Azure Container App FQDN was empty."
-}
-
-$AzureHealthUri = "https://$AzureFqdn/healthz"
-$CustomDomainHealthUri = "https://$CustomDomain/healthz"
-
-Write-Host "Polling $AzureHealthUri"
-$AzureHealthResult = Wait-Healthz -Uri $AzureHealthUri -TimeoutSeconds $HealthTimeoutSeconds -PollIntervalSeconds $HealthPollIntervalSeconds
-
-Write-Host "Polling $CustomDomainHealthUri"
-$CustomDomainHealthResult = Wait-Healthz -Uri $CustomDomainHealthUri -TimeoutSeconds $HealthTimeoutSeconds -PollIntervalSeconds $HealthPollIntervalSeconds
 
 Write-Host ""
 Write-Host "Deployment summary"
 Write-Host "Git SHA: $GitSha"
 Write-Host "Image: $RemoteImage"
-Write-Host "Azure revision: $RevisionName"
-Write-Host "Azure FQDN: $AzureFqdn"
-Write-Host "Azure health: $AzureHealthResult"
-Write-Host "Custom-domain health: $CustomDomainHealthResult"
+Write-Host "Roles: $($Roles -join ', ')"
