@@ -14,6 +14,7 @@ import secrets
 from urllib.parse import parse_qs, unquote, urlparse
 
 from triggertrade.dashboard.read_model import DashboardReadModel
+from triggertrade.dashboard.readiness import evaluate_dashboard_readiness
 from triggertrade.exchanges import BybitDemoClient
 from triggertrade.backtest import BacktestPlan
 from triggertrade.persistence import InstrumentCatalogStore, MessageStore, MessageStoreError, OperatorStateStore, ResearchStore, ResearchStoreError, TradingRulesStore, TriggerSetStore
@@ -42,6 +43,8 @@ class DashboardServer(ThreadingHTTPServer):
         instrument_catalog_service: InstrumentCatalogService,
         research_service: ResearchService,
         operator_actions=None,
+        readiness_env=None,
+        postgres_health_probe=None,
     ) -> None:
         super().__init__(server_address, handler_class)
         self.read_model = read_model
@@ -52,6 +55,8 @@ class DashboardServer(ThreadingHTTPServer):
         self.research_service = research_service
         self.operator_actions = operator_actions
         self.operator_control_token = secrets.token_urlsafe(24)
+        self.readiness_env = dict(os.environ if readiness_env is None else readiness_env)
+        self.postgres_health_probe = postgres_health_probe
 
 
 class DashboardHandler(BaseHTTPRequestHandler):
@@ -97,7 +102,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json({"available": False, "error": _safe_public_error(exc)}, HTTPStatus.SERVICE_UNAVAILABLE)
             return
         if parsed.path == "/api/readiness":
-            self._send_json(_readiness_payload(self.server.read_model))
+            self._send_json(_readiness_payload(self.server))
             return
         if parsed.path == "/api/research":
             self._send_json({"research": [_research_summary_payload(row) for row in self.server.read_model.list_research_summaries(limit=50)]})
@@ -205,7 +210,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_html(render_recommendation_detail(detail))
             return
         if parsed.path == "/healthz":
-            self._send_text("ok")
+            readiness = _readiness_report(self.server)
+            status = HTTPStatus.OK if readiness.ready else HTTPStatus.SERVICE_UNAVAILABLE
+            self._send_text("ok" if readiness.ready else "not ready", status)
             return
         self._send_html(render_not_found(parsed.path), HTTPStatus.NOT_FOUND)
 
@@ -661,6 +668,8 @@ def create_server(
     instrument_catalog_service: InstrumentCatalogService | None = None,
     research_service: ResearchService | None = None,
     operator_actions=None,
+    readiness_env: dict[str, str] | None = None,
+    postgres_health_probe=None,
 ) -> DashboardServer:
     if host not in ALLOWED_HOSTS:
         raise ValueError("dashboard host must be one of: 127.0.0.1, 0.0.0.0")
@@ -686,6 +695,8 @@ def create_server(
         instrument_catalog_service=catalog_service,
         research_service=research_boundary,
         operator_actions=operator_actions,
+        readiness_env=readiness_env,
+        postgres_health_probe=postgres_health_probe,
     )
     read_model.operator_control_token = server.operator_control_token
     return server
@@ -860,20 +871,16 @@ def _catalog_state_payload(read_model: DashboardReadModel) -> dict[str, object]:
     }
 
 
-def _readiness_payload(read_model: DashboardReadModel) -> dict[str, object]:
-    readiness = read_model.get_demo_readiness()
-    return {
-        "status": readiness.status,
-        "checks": [
-            {
-                "name": check.name,
-                "status": check.status,
-                "detail": check.detail,
-                "observed_at": check.observed_at,
-            }
-            for check in readiness.checks
-        ],
-    }
+def _readiness_report(server: DashboardServer):
+    return evaluate_dashboard_readiness(
+        server.read_model,
+        env=server.readiness_env,
+        postgres_probe=server.postgres_health_probe,
+    )
+
+
+def _readiness_payload(server: DashboardServer) -> dict[str, object]:
+    return _readiness_report(server).to_payload()
 
 
 def _rules_changes_from_payload(payload: dict) -> dict[str, object]:
