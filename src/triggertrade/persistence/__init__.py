@@ -2,6 +2,7 @@
 
 from .execution_store import ExecutionFill, ExecutionRecord, ExecutionStore
 from .futures_execution_store import FuturesExecutionRecord, FuturesExecutionStore
+from .capital_grant_store import CapitalGrantConflict, CapitalGrantRecord, CapitalGrantStore
 from .coins_scope_store import CoinsScopeConflict, CoinsScopeRevisionRecord, CoinsScopeStore, SetScopeApplyResult
 from .daily_loss_store import DailyLossRecord, DailyLossStore
 from .durable_messages import (
@@ -79,6 +80,9 @@ __all__ = [
     "ExecutionFill",
     "ExecutionRecord",
     "ExecutionStore",
+    "CapitalGrantConflict",
+    "CapitalGrantRecord",
+    "CapitalGrantStore",
     "DailyLossRecord",
     "DailyLossStore",
     "CoinsScopeConflict",
