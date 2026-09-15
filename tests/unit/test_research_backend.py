@@ -25,6 +25,7 @@ from triggertrade.persistence.futures_execution_store import FuturesExecutionSto
 from triggertrade.persistence.runtime_store import RuntimeStore
 from triggertrade.persistence.trace_store import TraceStore
 from triggertrade.rules import TakeProfitMode, TradingRulesService
+from triggertrade.research_pins import research_pin_digest
 from triggertrade.services.research import ResearchDemoIsolation, ResearchService, ResearchServiceError
 from tests.unit.test_backtest_replay import _config, _instrument, _trade_candles
 from tests.unit.test_futures_performance_analytics import _fill as _accounting_fill
@@ -56,6 +57,11 @@ def test_research_persists_exact_set_and_rules_pins_and_survives_restart(tmp_pat
     assert restarted.set_version == "v1"
     assert restarted.rules_version_id == current.rules_version_id
     assert restarted.rules_display_version == "v1"
+    assert restarted.pin_digest == research_pin_digest(restarted.pin_payload)
+    assert restarted.pin_payload["methodology_package_revision"] == "v1.2.14"
+    assert restarted.pin_payload["config_pins"]["trigger_set"]["set_id"] == "triggertrade-futures-core"
+    assert restarted.pin_payload["config_pins"]["trading_rules"]["rules_version_id"] == current.rules_version_id
+    assert "MARKET_HANDOFF" in restarted.pin_payload["contract_versions"]
 
 
 def test_research_rejects_latest_or_display_only_version_selectors(tmp_path):
@@ -84,6 +90,10 @@ def test_research_backtest_reuses_existing_engine_and_selects_by_reference(tmp_p
 
     assert run.engine_run_id is not None
     assert run.metrics["closed_trades"] >= 1
+    assert run.pin_payload["parent_research_pin_digest"] == research.pin_digest
+    assert run.pin_payload["run_inputs"]["plan"]["symbol"] == "BTCUSDT"
+    assert run.pin_payload["execution_pins"]["simulator_version"] == "backtest-sim-v1-next-candle"
+    assert run.pin_digest == research_pin_digest(run.pin_payload)
     assert selected.selected_backtest_run_id == run.run_id
     assert set(FuturesAccountingStore(db).list_closed_trades(limit=20)[0].keys()) >= {"evidence_source"}
     assert {row["evidence_source"] for row in FuturesAccountingStore(db).list_closed_trades(limit=20)} == {BACKTEST_EVIDENCE_SOURCE}
@@ -139,6 +149,34 @@ def test_research_backtest_runner_receives_pinned_rules_config(tmp_path):
     }
 
 
+def test_research_pin_replay_ignores_later_current_rules_changes(tmp_path):
+    db, rules = _research_db(tmp_path)
+    original = rules.get_current_rules_version()
+    service = _service(db, with_backtest_runtime=True)
+    research = service.create_research(
+        set_id="triggertrade-futures-core",
+        set_version="v1",
+        rules_version_id=original.rules_version_id,
+    )
+    replacement = rules.create_rules_version_from_current(
+        changes={"fixed_take_profit_pct": Decimal("0.018")},
+        created_source="unit",
+    ).rules
+    _set_current_rules(db, replacement.rules_version_id)
+    candles = _trade_candles()
+    plan = BacktestPlan("BTCUSDT", "linear", "1m", candles[60].close_time, candles[-2].close_time)
+
+    restarted = ResearchStore(db).get_research(research.research_id)
+    run = service.run_backtest(research_id=research.research_id, plan=plan, candles=candles)
+
+    assert restarted is not None
+    assert restarted.pin_digest == research.pin_digest
+    assert restarted.pin_payload["config_pins"]["trading_rules"]["rules_version_id"] == original.rules_version_id
+    assert restarted.pin_payload["config_pins"]["trading_rules"]["rules_version_id"] != replacement.rules_version_id
+    assert run.pin_payload["parent_research_pin_digest"] == research.pin_digest
+    assert run.pin_digest == research_pin_digest(run.pin_payload)
+
+
 def test_research_demo_start_fails_closed_without_isolation_and_dedupes_message(tmp_path):
     db, rules = _research_db(tmp_path)
     service = _service(db)
@@ -154,6 +192,9 @@ def test_research_demo_start_fails_closed_without_isolation_and_dedupes_message(
     assert first.status.value == "BLOCKED"
     assert second.status.value == "BLOCKED"
     assert first.blocked_reason == "research_demo_exchange_isolation_unavailable"
+    assert first.pin_payload["parent_research_pin_digest"] == research.pin_digest
+    assert first.pin_payload["execution_pins"]["live_side_effects"] == "forbidden"
+    assert first.pin_digest == research_pin_digest(first.pin_payload)
     assert MessageStore(db).get_unread_message_count() == 1
     assert FuturesExecutionStore(db).unresolved() == ()
 

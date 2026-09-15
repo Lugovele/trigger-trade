@@ -11,6 +11,15 @@ from typing import Any, Callable
 
 from triggertrade.analytics import TradePerformanceFact, compute_futures_performance
 from triggertrade.backtest import BacktestPlan, BacktestResult, HistoricalCandle, run_backtest
+from triggertrade.backtest.models import (
+    BACKTEST_COST_MODEL_VERSION,
+    BACKTEST_DATA_SOURCE_VERSION,
+    BACKTEST_FUNDING_MODEL_VERSION,
+    BACKTEST_SIMULATOR_VERSION,
+    BACKTEST_SLIPPAGE_MODEL_VERSION,
+    BACKTEST_SPREAD_MODEL_VERSION,
+    HISTORICAL_REPLAY_VERSION,
+)
 from triggertrade.config import AppConfig
 from triggertrade.market_data import FuturesInstrumentMetadata
 from triggertrade.persistence import MessageStore, TraceStore, TradingRulesStore, TriggerSetStore
@@ -27,6 +36,7 @@ from triggertrade.persistence.research_store import (
 )
 from triggertrade.rules.trading import TRADING_RULES_SCOPE_LIVE, draft_from_json
 from triggertrade.rules import DirectionMode, TakeProfitMode, TradingRulesVersion
+from triggertrade.research_pins import research_pin_payload, research_run_pin_payload
 from triggertrade.trigger_sets import TriggerSetStatus, TriggerSetVersion
 
 
@@ -91,12 +101,14 @@ class ResearchService:
         if trigger_set is None:
             raise ResearchServiceError("exact trigger set version not found")
         rules = self._exact_rules_version(rules_version_id)
+        pins = _research_config_pins(trigger_set, rules, created_source=created_source)
         record, _created = self._store.create_research(
             set_id=trigger_set.set_id,
             set_version=trigger_set.version,
             rules_version_id=rules.rules_version_id,
             rules_display_version=rules.version,
             created_source=created_source,
+            pin_payload=pins,
             created_at=created_at,
         )
         self._audit_research_event(
@@ -118,11 +130,13 @@ class ResearchService:
         created_at: datetime | None = None,
     ) -> ResearchBacktestRunRecord:
         research = self._required_research(research_id)
+        run_pins = _backtest_run_pins(research, plan)
         if self._config is None or self._instrument is None or not candles:
             return self._blocked_backtest(
                 research,
                 plan=plan,
                 reason="backend_historical_replay_inputs_unavailable",
+                pin_payload=run_pins,
                 created_at=(created_at or datetime.now(UTC)).isoformat(),
             )
         rules = self._exact_rules_version(research.rules_version_id)
@@ -132,6 +146,7 @@ class ResearchService:
                 research,
                 plan=plan,
                 reason=block_reason,
+                pin_payload=run_pins,
                 created_at=(created_at or datetime.now(UTC)).isoformat(),
             )
         try:
@@ -153,6 +168,7 @@ class ResearchService:
                 status=ResearchBacktestStatus.FAILED,
                 metrics={},
                 unavailable_reason=_public_reason(str(exc)),
+                pin_payload=run_pins,
                 created_at=(created_at or datetime.now(UTC)).isoformat(),
             )
             self._message(
@@ -182,6 +198,7 @@ class ResearchService:
             status=status,
             engine_run_id=result.backtest_run_id,
             metrics=_backtest_metrics(result),
+            pin_payload=run_pins,
             created_at=(created_at or datetime.now(UTC)).isoformat(),
         )
         self._audit_research_run_event(
@@ -212,12 +229,23 @@ class ResearchService:
             return self._blocked_demo(research, reason=block_reason, created_at=created_at)
         now = created_at or datetime.now(UTC).isoformat()
         scope = self._demo_isolation.execution_scope_id or f"research:{research.research_id}"
+        run_pins = _demo_run_pins(
+            research,
+            status=ResearchDemoStatus.RUNNING,
+            started_at=now,
+            stopped_at=None,
+            execution_scope_id=scope,
+            account_scope=self._demo_isolation.account_scope or scope,
+            blocked_reason=None,
+            isolation=self._demo_isolation,
+        )
         record = self._store.add_demo_run(
             research_id=research.research_id,
             status=ResearchDemoStatus.RUNNING,
             started_at=now,
             execution_scope_id=scope,
             account_scope=self._demo_isolation.account_scope or scope,
+            pin_payload=run_pins,
             created_at=now,
         )
         self._audit_research_run_event(
@@ -550,6 +578,7 @@ class ResearchService:
         *,
         plan: BacktestPlan,
         reason: str,
+        pin_payload: dict[str, Any],
         created_at: str,
     ) -> ResearchBacktestRunRecord:
         record = self._store.add_backtest_run(
@@ -559,6 +588,7 @@ class ResearchService:
             timeframe=plan.timeframe,
             status=ResearchBacktestStatus.FAILED,
             unavailable_reason=reason,
+            pin_payload=pin_payload,
             created_at=created_at,
         )
         self._audit_research_run_event(
@@ -591,6 +621,16 @@ class ResearchService:
             research_id=research.research_id,
             status=ResearchDemoStatus.BLOCKED,
             blocked_reason=reason,
+            pin_payload=_demo_run_pins(
+                research,
+                status=ResearchDemoStatus.BLOCKED,
+                started_at=None,
+                stopped_at=None,
+                execution_scope_id=None,
+                account_scope=None,
+                blocked_reason=reason,
+                isolation=self._demo_isolation,
+            ),
             created_at=created_at,
         )
         self._audit_research_run_event(
@@ -764,6 +804,100 @@ def _backtest_metrics(result: BacktestResult) -> dict[str, Any]:
     for key in ("net_pnl", "expectancy", "profit_factor", "max_drawdown", "fees", "funding"):
         data[key] = None if data[key] is None else str(data[key])
     return data
+
+
+def _research_config_pins(trigger_set: TriggerSetVersion, rules: TradingRulesVersion, *, created_source: str) -> dict[str, Any]:
+    return research_pin_payload(
+        config_pins={
+            "trigger_set": {
+                "set_id": trigger_set.set_id,
+                "set_version": trigger_set.version,
+                "status": trigger_set.status.value,
+                "purpose": trigger_set.purpose,
+                "symbol": trigger_set.symbol,
+                "timeframe": trigger_set.timeframe,
+                "rule_versions": tuple(tuple(item) for item in trigger_set.rule_versions),
+                "strategy_version": trigger_set.strategy_version,
+                "risk_profile_version": trigger_set.risk_profile_version,
+                "config_snapshot": dict(trigger_set.config_snapshot),
+            },
+            "trading_rules": {
+                "rules_version_id": rules.rules_version_id,
+                "display_version": rules.version,
+                "config_hash": rules.config_hash,
+                "schema_version": rules.schema_version,
+                "created_from_version_id": rules.created_from_version_id,
+            },
+        },
+        source_pins={
+            "market_data_selector": "deferred_until_market_data_request_selector_replay",
+            "historical_source": "pinned_per_backtest_run",
+        },
+        adapter_profile_pins={
+            "research_demo_isolation": "required_before_demo_run",
+            "live_side_effects": "forbidden",
+        },
+        simulation_assumptions={"metrics_gate": "research_parameter_only"},
+        created_source=created_source,
+    )
+
+
+def _backtest_run_pins(research: ResearchRecord, plan: BacktestPlan) -> dict[str, Any]:
+    return research_run_pin_payload(
+        research_pin_digest_value=research.pin_digest,
+        run_kind="BACKTEST",
+        run_inputs={
+            "plan": {
+                "symbol": plan.symbol,
+                "category": plan.category,
+                "timeframe": plan.timeframe,
+                "research_start": plan.research_start.astimezone(UTC).isoformat(),
+                "research_end": plan.research_end.astimezone(UTC).isoformat(),
+                "validation_start": None if plan.validation_start is None else plan.validation_start.astimezone(UTC).isoformat(),
+                "validation_end": None if plan.validation_end is None else plan.validation_end.astimezone(UTC).isoformat(),
+                "warmup_candles": plan.warmup_candles,
+            },
+            "historical_source": BACKTEST_DATA_SOURCE_VERSION,
+        },
+        execution_pins={
+            "historical_replay_version": HISTORICAL_REPLAY_VERSION,
+            "simulator_version": BACKTEST_SIMULATOR_VERSION,
+            "cost_model_version": BACKTEST_COST_MODEL_VERSION,
+            "spread_model_version": BACKTEST_SPREAD_MODEL_VERSION,
+            "slippage_model_version": BACKTEST_SLIPPAGE_MODEL_VERSION,
+            "funding_model_version": BACKTEST_FUNDING_MODEL_VERSION,
+        },
+    )
+
+
+def _demo_run_pins(
+    research: ResearchRecord,
+    *,
+    status: ResearchDemoStatus,
+    started_at: str | None,
+    stopped_at: str | None,
+    execution_scope_id: str | None,
+    account_scope: str | None,
+    blocked_reason: str | None,
+    isolation: ResearchDemoIsolation,
+) -> dict[str, Any]:
+    return research_run_pin_payload(
+        research_pin_digest_value=research.pin_digest,
+        run_kind="DEMO",
+        run_inputs={
+            "status": status.value,
+            "started_at": started_at,
+            "stopped_at": stopped_at,
+            "execution_scope_id": execution_scope_id,
+            "account_scope": account_scope,
+            "blocked_reason": blocked_reason,
+        },
+        execution_pins={
+            "isolation_available": isolation.available,
+            "isolation_reason": isolation.reason,
+            "live_side_effects": "forbidden",
+        },
+    )
 
 
 def _config_for_rules(config: AppConfig, rules: TradingRulesVersion) -> AppConfig:

@@ -12,6 +12,13 @@ import re
 import sqlite3
 from typing import Any
 
+from triggertrade.research_pins import (
+    default_store_research_pin_payload,
+    research_pin_digest,
+    research_pin_text,
+    research_run_pin_payload,
+)
+
 
 RESEARCH_SCHEMA_VERSION = "research-v1"
 
@@ -77,6 +84,8 @@ class ResearchRecord:
     promotion_result_metadata: dict[str, Any]
     created_source: str
     schema_version: str
+    pin_payload: dict[str, Any]
+    pin_digest: str
 
 
 @dataclass(frozen=True)
@@ -93,6 +102,8 @@ class ResearchBacktestRunRecord:
     selected_for_use: bool
     metrics: dict[str, Any]
     unavailable_reason: str | None
+    pin_payload: dict[str, Any]
+    pin_digest: str
 
 
 @dataclass(frozen=True)
@@ -109,6 +120,8 @@ class ResearchDemoRunRecord:
     selected_for_use: bool
     metrics: dict[str, Any]
     blocked_reason: str | None
+    pin_payload: dict[str, Any]
+    pin_digest: str
 
 
 _ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,160}$")
@@ -130,13 +143,25 @@ class ResearchStore:
         rules_version_id: str,
         rules_display_version: str,
         created_source: str,
+        pin_payload: dict[str, Any] | None = None,
         created_at: str | None = None,
     ) -> tuple[ResearchRecord, bool]:
         _validate_id(set_id, "set_id")
         _validate_id(set_version, "set_version")
         _validate_id(rules_version_id, "rules_version_id")
         created_at = created_at or _now()
-        research_id = _research_id(set_id, set_version, rules_version_id)
+        clean_source = _clean_text(created_source, "created_source", 80)
+        clean_display_version = _clean_text(rules_display_version, "rules_display_version", 40)
+        pins = pin_payload or default_store_research_pin_payload(
+            set_id=set_id,
+            set_version=set_version,
+            rules_version_id=rules_version_id,
+            rules_display_version=clean_display_version,
+            created_source=clean_source,
+            schema_version=RESEARCH_SCHEMA_VERSION,
+        )
+        pin_json, pin_digest = _pin_json_and_digest(pins)
+        research_id = _research_id(set_id, set_version, rules_version_id, pin_digest)
         with self._connect() as conn:
             existing = self._get_research(conn, research_id)
             if existing is not None:
@@ -147,8 +172,8 @@ class ResearchStore:
                     research_id, created_at, updated_at, status, set_id, set_version,
                     rules_version_id, rules_display_version, selected_backtest_run_id,
                     selected_demo_run_id, decision, decision_at, archived_at,
-                    made_active_at, created_source, schema_version
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, NULL, NULL, NULL, ?, ?)
+                    made_active_at, created_source, schema_version, pin_payload, pin_digest
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, NULL, NULL, NULL, ?, ?, ?, ?)
                 """,
                 (
                     research_id,
@@ -158,10 +183,12 @@ class ResearchStore:
                     set_id,
                     set_version,
                     rules_version_id,
-                    _clean_text(rules_display_version, "rules_display_version", 40),
+                    clean_display_version,
                     ResearchDecision.NONE.value,
-                    _clean_text(created_source, "created_source", 80),
+                    clean_source,
                     RESEARCH_SCHEMA_VERSION,
+                    pin_json,
+                    pin_digest,
                 ),
             )
             return self._get_research(conn, research_id), True  # type: ignore[return-value]
@@ -194,22 +221,35 @@ class ResearchStore:
         engine_run_id: str | None = None,
         metrics: dict[str, Any] | None = None,
         unavailable_reason: str | None = None,
+        pin_payload: dict[str, Any] | None = None,
         created_at: str | None = None,
     ) -> ResearchBacktestRunRecord:
         _validate_id(research_id, "research_id")
         if engine_run_id is not None:
             _validate_id(engine_run_id, "engine_run_id")
         created_at = created_at or _now()
-        run_id = _run_id("rbt", research_id, period_start, period_end, engine_run_id or status.value, created_at)
         with self._connect() as conn:
-            self._ensure_mutable_research(conn, research_id)
+            research = self._ensure_mutable_research(conn, research_id)
+            pins = pin_payload or research_run_pin_payload(
+                research_pin_digest_value=research.pin_digest,
+                run_kind="BACKTEST",
+                run_inputs={
+                    "period_start": period_start,
+                    "period_end": period_end,
+                    "timeframe": timeframe,
+                    "engine_run_id": engine_run_id,
+                    "status": status.value,
+                },
+            )
+            pin_json, pin_digest = _pin_json_and_digest(pins)
+            run_id = _run_id("rbt", research_id, pin_digest, created_at)
             conn.execute(
                 """
                 INSERT INTO research_backtest_runs (
                     research_id, run_id, created_at, updated_at, status, period_start,
                     period_end, timeframe, engine_run_id, selected_for_use,
-                    metrics_json, unavailable_reason
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+                    metrics_json, unavailable_reason, pin_payload, pin_digest
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
                 """,
                 (
                     research_id,
@@ -223,6 +263,8 @@ class ResearchStore:
                     engine_run_id,
                     json.dumps(_jsonable(metrics or {}), sort_keys=True),
                     None if unavailable_reason is None else _clean_text(unavailable_reason, "unavailable_reason", 240),
+                    pin_json,
+                    pin_digest,
                 ),
             )
             self._update_research_status(conn, research_id, _research_status_after_backtest(status), created_at)
@@ -289,20 +331,34 @@ class ResearchStore:
         account_scope: str | None = None,
         metrics: dict[str, Any] | None = None,
         blocked_reason: str | None = None,
+        pin_payload: dict[str, Any] | None = None,
         created_at: str | None = None,
     ) -> ResearchDemoRunRecord:
         _validate_id(research_id, "research_id")
         created_at = created_at or _now()
-        run_id = _run_id("rdm", research_id, status.value, started_at or "", blocked_reason or "", created_at)
         with self._connect() as conn:
-            self._ensure_mutable_research(conn, research_id)
+            research = self._ensure_mutable_research(conn, research_id)
+            pins = pin_payload or research_run_pin_payload(
+                research_pin_digest_value=research.pin_digest,
+                run_kind="DEMO",
+                run_inputs={
+                    "status": status.value,
+                    "started_at": started_at,
+                    "stopped_at": stopped_at,
+                    "execution_scope_id": execution_scope_id,
+                    "account_scope": account_scope,
+                    "blocked_reason": blocked_reason,
+                },
+            )
+            pin_json, pin_digest = _pin_json_and_digest(pins)
+            run_id = _run_id("rdm", research_id, pin_digest, created_at)
             conn.execute(
                 """
                 INSERT INTO research_demo_runs (
                     research_id, run_id, created_at, updated_at, status, started_at,
                     stopped_at, execution_scope_id, account_scope, selected_for_use,
-                    metrics_json, blocked_reason
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+                    metrics_json, blocked_reason, pin_payload, pin_digest
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
                 """,
                 (
                     research_id,
@@ -316,6 +372,8 @@ class ResearchStore:
                     None if account_scope is None else _clean_text(account_scope, "account_scope", 160),
                     json.dumps(_jsonable(metrics or {}), sort_keys=True),
                     None if blocked_reason is None else _clean_text(blocked_reason, "blocked_reason", 240),
+                    pin_json,
+                    pin_digest,
                 ),
             )
             self._update_research_status(conn, research_id, _research_status_after_demo(status), created_at)
@@ -492,7 +550,9 @@ class ResearchStore:
                     promotion_result_metadata TEXT NOT NULL DEFAULT '{}',
                     created_source TEXT NOT NULL,
                     schema_version TEXT NOT NULL,
-                    UNIQUE(set_id, set_version, rules_version_id)
+                    pin_payload TEXT NOT NULL DEFAULT '{}',
+                    pin_digest TEXT NOT NULL DEFAULT '',
+                    UNIQUE(set_id, set_version, rules_version_id, pin_digest)
                 )
                 """
             )
@@ -511,6 +571,8 @@ class ResearchStore:
                     selected_for_use INTEGER NOT NULL DEFAULT 0,
                     metrics_json TEXT NOT NULL DEFAULT '{}',
                     unavailable_reason TEXT,
+                    pin_payload TEXT NOT NULL DEFAULT '{}',
+                    pin_digest TEXT NOT NULL DEFAULT '',
                     PRIMARY KEY (research_id, run_id),
                     FOREIGN KEY (research_id) REFERENCES research_entities(research_id)
                 )
@@ -531,6 +593,8 @@ class ResearchStore:
                     selected_for_use INTEGER NOT NULL DEFAULT 0,
                     metrics_json TEXT NOT NULL DEFAULT '{}',
                     blocked_reason TEXT,
+                    pin_payload TEXT NOT NULL DEFAULT '{}',
+                    pin_digest TEXT NOT NULL DEFAULT '',
                     PRIMARY KEY (research_id, run_id),
                     FOREIGN KEY (research_id) REFERENCES research_entities(research_id)
                 )
@@ -563,6 +627,12 @@ class ResearchStore:
             _ensure_column(conn, "research_entities", "previous_active_set_version", "TEXT")
             _ensure_column(conn, "research_entities", "previous_rules_version_id", "TEXT")
             _ensure_column(conn, "research_entities", "promotion_result_metadata", "TEXT NOT NULL DEFAULT '{}'")
+            _ensure_column(conn, "research_entities", "pin_payload", "TEXT NOT NULL DEFAULT '{}'")
+            _ensure_column(conn, "research_entities", "pin_digest", "TEXT NOT NULL DEFAULT ''")
+            _ensure_column(conn, "research_backtest_runs", "pin_payload", "TEXT NOT NULL DEFAULT '{}'")
+            _ensure_column(conn, "research_backtest_runs", "pin_digest", "TEXT NOT NULL DEFAULT ''")
+            _ensure_column(conn, "research_demo_runs", "pin_payload", "TEXT NOT NULL DEFAULT '{}'")
+            _ensure_column(conn, "research_demo_runs", "pin_digest", "TEXT NOT NULL DEFAULT ''")
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path)
@@ -595,6 +665,8 @@ def _research_from_row(row: sqlite3.Row) -> ResearchRecord:
         promotion_result_metadata=_json_dict(row["promotion_result_metadata"]),
         created_source=row["created_source"],
         schema_version=row["schema_version"],
+        pin_payload=_json_dict(row["pin_payload"]),
+        pin_digest=row["pin_digest"],
     )
 
 
@@ -612,6 +684,8 @@ def _backtest_from_row(row: sqlite3.Row) -> ResearchBacktestRunRecord:
         selected_for_use=bool(row["selected_for_use"]),
         metrics=_json_dict(row["metrics_json"]),
         unavailable_reason=row["unavailable_reason"],
+        pin_payload=_json_dict(row["pin_payload"]),
+        pin_digest=row["pin_digest"],
     )
 
 
@@ -629,6 +703,8 @@ def _demo_from_row(row: sqlite3.Row) -> ResearchDemoRunRecord:
         selected_for_use=bool(row["selected_for_use"]),
         metrics=_json_dict(row["metrics_json"]),
         blocked_reason=row["blocked_reason"],
+        pin_payload=_json_dict(row["pin_payload"]),
+        pin_digest=row["pin_digest"],
     )
 
 
@@ -650,8 +726,8 @@ def _research_status_after_demo(status: ResearchDemoStatus) -> ResearchStatus:
     return ResearchStatus.BLOCKED
 
 
-def _research_id(set_id: str, set_version: str, rules_version_id: str) -> str:
-    digest = sha256("|".join([set_id, set_version, rules_version_id]).encode("utf-8")).hexdigest()[:20]
+def _research_id(set_id: str, set_version: str, rules_version_id: str, pin_digest: str) -> str:
+    digest = sha256("|".join([set_id, set_version, rules_version_id, pin_digest]).encode("utf-8")).hexdigest()[:20]
     return f"res-{digest}"
 
 
@@ -695,6 +771,11 @@ def _jsonable(value: Any) -> Any:
     if value.__class__.__name__ == "Decimal":
         return str(value)
     return value
+
+
+def _pin_json_and_digest(pin_payload: dict[str, Any]) -> tuple[str, str]:
+    digest = research_pin_digest(pin_payload)
+    return research_pin_text(pin_payload), digest
 
 
 def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
