@@ -24,6 +24,7 @@ from .futures_position_store import FuturesClosedPositionRecord, FuturesPosition
 from .market_data_fact_store import MarketDataFactConflict, MarketDataFactStore, MarketDataPageRecord
 from .message_store import MessageRecord, MessageSeverity, MessageStore, MessageStoreError
 from .operator_state_store import OperatorStateStore, OperatorTradingState, TradingState
+from .order_spec_store import OrderSpecConflict, OrderSpecRecord, OrderSpecStore
 from .postgres import (
     MigrationRecord,
     OwnerStateConflict,
@@ -154,6 +155,9 @@ __all__ = [
     "FuturesPositionStore",
     "OperatorStateStore",
     "OperatorTradingState",
+    "OrderSpecConflict",
+    "OrderSpecRecord",
+    "OrderSpecStore",
     "RESEARCH_SCHEMA_VERSION",
     "ResearchBacktestRunRecord",
     "ResearchBacktestStatus",

@@ -86,7 +86,7 @@ def test_position_construction_rejects_constructed_failed_minimum_net_edge():
         )
 
 
-def constructed_result(grant: dict[str, object] | None = None) -> dict[str, object]:
+def constructed_result(grant: dict[str, object] | None = None, *, order_spec_digest_value: str = "a" * 64) -> dict[str, object]:
     grant_payload = build_grant() if grant is None else grant
     return build_constructed_position_result(
         event_id="construction-event-1",
@@ -96,7 +96,7 @@ def constructed_result(grant: dict[str, object] | None = None) -> dict[str, obje
         position_plan_id="position-plan-1",
         tranche_id="tranche-1",
         order_spec_id="order-spec-1",
-        order_spec_digest="a" * 64,
+        order_spec_digest=order_spec_digest_value,
         approved_economics=approved_economics(),
         minimum_net_edge=minimum_net_edge(enabled=True, status="PASS"),
         direction="LONG",
