@@ -118,7 +118,7 @@ def test_operator_controls_are_protected_frontend_boundaries(tmp_path):
     assert "Type CLOSE ALL to confirm" in html
     assert 'id="operatorPauseForm"' in html
     assert 'action="/operator/pause"' in html
-    assert server.operator_control_token not in html
+    assert server.operator_control_token == ""
     assert 'id="operatorResumeForm"' in html
     assert 'action="/operator/resume"' in html
     assert "/order/create" not in html
@@ -165,12 +165,16 @@ def test_managed_oidc_operator_pause_does_not_require_local_token(tmp_path):
     event = TraceStore(db).list_audit_events(event_type=OPERATOR_AUTH_EVENT_TYPE)[0]
     assert event.source_id == "operator-1"
     assert event.safe_metadata["authz_source"] == "managed_oidc"
-    assert server.operator_control_token not in str(event.safe_metadata)
+    assert server.operator_control_token == ""
 
 
 def test_portfolio_close_actions_fail_closed_without_execution_bridge(tmp_path):
     db = _empty_db(tmp_path)
-    server = create_server(port=0, db_path=db)
+    server = create_server(
+        port=0,
+        db_path=db,
+        operator_authorizer=OperatorCommandAuthorizer(db, auth_mode="local_dev_compat"),
+    )
     host, port = server.server_address
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -222,7 +226,12 @@ def test_portfolio_close_actions_use_injected_backend_contract(tmp_path):
 
     db = _empty_db(tmp_path)
     actions = FakeOperatorActions()
-    server = create_server(port=0, db_path=db, operator_actions=actions)
+    server = create_server(
+        port=0,
+        db_path=db,
+        operator_actions=actions,
+        operator_authorizer=OperatorCommandAuthorizer(db, auth_mode="local_dev_compat"),
+    )
     host, port = server.server_address
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()

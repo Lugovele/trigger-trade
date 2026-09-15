@@ -11,6 +11,7 @@ from triggertrade.services.operator_auth import (
     OperatorCommandAuthorizer,
     operator_authorizer_from_env,
 )
+from triggertrade.dashboard.__main__ import create_server
 
 
 def test_managed_oidc_operator_command_is_durably_authorized_without_token(tmp_path):
@@ -145,3 +146,27 @@ def test_env_authorizer_requires_explicit_local_dev_compat_for_process_token(tmp
 
     assert authorizer.auth_mode == "local_dev_compat"
     assert command.principal.auth_source == LOCAL_DEV_AUTH_SOURCE
+
+
+def test_dashboard_server_does_not_mint_process_local_token_for_managed_auth(tmp_path):
+    db = tmp_path / "dashboard-auth.sqlite3"
+    server = create_server(port=0, db_path=db)
+    try:
+        assert server.operator_authorizer.auth_mode == MANAGED_OIDC_AUTH_SOURCE
+        assert server.operator_control_token == ""
+    finally:
+        server.server_close()
+
+
+def test_dashboard_server_mints_process_local_token_only_for_explicit_local_dev_compat(tmp_path):
+    db = tmp_path / "dashboard-auth.sqlite3"
+    server = create_server(
+        port=0,
+        db_path=db,
+        operator_authorizer=OperatorCommandAuthorizer(db, auth_mode="local_dev_compat"),
+    )
+    try:
+        assert server.operator_authorizer.auth_mode == LOCAL_DEV_AUTH_SOURCE
+        assert server.operator_control_token
+    finally:
+        server.server_close()

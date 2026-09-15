@@ -23,6 +23,7 @@ from triggertrade.rules import CoinRule, TradingRulesError, TradingRulesService
 from triggertrade.services.bootstrap import ensure_runtime_registry_for_env, merged_runtime_env, runtime_db_path
 from triggertrade.services.instrument_catalog import InstrumentCatalogService
 from triggertrade.services.operator_auth import (
+    LOCAL_DEV_AUTH_SOURCE,
     AuthorizedOperatorCommand,
     OperatorAuthorizationError,
     OperatorCommandAuthorizer,
@@ -64,7 +65,11 @@ class DashboardServer(ThreadingHTTPServer):
         self.operator_authorizer = operator_authorizer
         self.command_boundary = command_boundary
         self.operator_actions = operator_actions
-        self.operator_control_token = secrets.token_urlsafe(24)
+        self.operator_control_token = (
+            secrets.token_urlsafe(24)
+            if operator_authorizer.auth_mode == LOCAL_DEV_AUTH_SOURCE
+            else ""
+        )
         self.readiness_env = dict(os.environ if readiness_env is None else readiness_env)
         self.postgres_health_probe = postgres_health_probe
 
@@ -605,7 +610,7 @@ def create_server(
         trading_rules_store=TradingRulesStore(db_path),
         message_store=message_store,
     )
-    authorizer = operator_authorizer or OperatorCommandAuthorizer(db_path)
+    authorizer = operator_authorizer or operator_authorizer_from_env(db_path, {})
     command_boundary = DashboardCommandBoundary(
         read_model=read_model,
         operator_store=operator_store,
