@@ -25,6 +25,12 @@ from .postgres import (
     PostgresUnitOfWork,
     apply_postgres_migrations,
 )
+from .portfolio_data_facts import (
+    PortfolioDataFactConflict,
+    PortfolioDataFactStore,
+    PortfolioDataRequestRecord,
+    PortfolioDataResponseRecord,
+)
 from .research_store import (
     RESEARCH_SCHEMA_VERSION,
     ResearchBacktestRunRecord,
@@ -93,6 +99,10 @@ __all__ = [
     "PostgresPersistenceError",
     "PostgresSettings",
     "PostgresUnitOfWork",
+    "PortfolioDataFactConflict",
+    "PortfolioDataFactStore",
+    "PortfolioDataRequestRecord",
+    "PortfolioDataResponseRecord",
     "apply_postgres_migrations",
     "FuturesClosedPositionRecord",
     "FuturesPositionEvent",
