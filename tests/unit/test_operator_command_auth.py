@@ -9,6 +9,7 @@ from triggertrade.services.operator_auth import (
     OPERATOR_AUTH_EVENT_TYPE,
     OperatorAuthorizationError,
     OperatorCommandAuthorizer,
+    operator_authorizer_from_env,
 )
 
 
@@ -114,3 +115,33 @@ def test_idempotency_key_conflict_is_rejected(tmp_path):
             local_dev_token="process-secret-token",
             idempotency_key="operator-command-001",
         )
+
+
+def test_env_authorizer_defaults_to_managed_oidc_not_local_token(tmp_path):
+    authorizer = operator_authorizer_from_env(tmp_path / "auth.sqlite3", {})
+
+    assert authorizer.auth_mode == MANAGED_OIDC_AUTH_SOURCE
+    with pytest.raises(OperatorAuthorizationError, match="required"):
+        authorizer.authorize_http_command(
+            "PAUSE_ENTRIES",
+            headers={},
+            payload={"token": "process-secret-token"},
+            local_dev_token="process-secret-token",
+        )
+
+
+def test_env_authorizer_requires_explicit_local_dev_compat_for_process_token(tmp_path):
+    authorizer = operator_authorizer_from_env(
+        tmp_path / "auth.sqlite3",
+        {"TRIGGERTRADE_AUTH_MODE": "local_dev_compat"},
+    )
+
+    command = authorizer.authorize_http_command(
+        "PAUSE_ENTRIES",
+        headers={},
+        payload={"token": "process-secret-token"},
+        local_dev_token="process-secret-token",
+    )
+
+    assert authorizer.auth_mode == "local_dev_compat"
+    assert command.principal.auth_source == LOCAL_DEV_AUTH_SOURCE

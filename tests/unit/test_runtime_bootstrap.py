@@ -143,6 +143,42 @@ def test_dashboard_startup_bootstraps_registry_before_read_only_render(tmp_path)
     assert "Research" in html
 
 
+def test_dashboard_env_startup_uses_managed_oidc_auth_by_default(tmp_path):
+    db = tmp_path / "dashboard-auth.sqlite3"
+    server, _initialized_db = create_server_from_env(
+        {"TRIGGERTRADE_RUNTIME_DB_PATH": str(db), "TRIGGERTRADE_DASHBOARD_PORT": "0"},
+        env_file=tmp_path / "missing.env",
+    )
+    try:
+        html = render_dashboard(server.read_model)
+        assert server.operator_authorizer.auth_mode == "managed_oidc"
+        assert server.read_model.operator_command_submit_enabled is True
+        assert server.operator_control_token not in html
+        assert 'name="token"' not in html
+    finally:
+        server.server_close()
+
+
+def test_dashboard_env_startup_requires_explicit_local_dev_compat_for_process_token(tmp_path):
+    db = tmp_path / "dashboard-local-auth.sqlite3"
+    server, _initialized_db = create_server_from_env(
+        {
+            "TRIGGERTRADE_RUNTIME_DB_PATH": str(db),
+            "TRIGGERTRADE_DASHBOARD_PORT": "0",
+            "TRIGGERTRADE_AUTH_MODE": "local_dev_compat",
+        },
+        env_file=tmp_path / "missing.env",
+    )
+    try:
+        html = render_dashboard(server.read_model)
+        assert server.operator_authorizer.auth_mode == "local_dev_compat"
+        assert server.read_model.operator_command_submit_enabled is False
+        assert server.operator_control_token not in html
+        assert 'name="token"' not in html
+    finally:
+        server.server_close()
+
+
 def test_runtime_builder_bootstraps_same_configured_db_path(tmp_path):
     db = tmp_path / "runtime-builder.sqlite3"
     runtime = build_runtime_from_env(

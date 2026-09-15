@@ -194,7 +194,7 @@ class OperatorCommandAuthorizer:
 def operator_authorizer_from_env(trace_store: TraceStore | str | Path, env: Mapping[str, str]) -> OperatorCommandAuthorizer:
     return OperatorCommandAuthorizer(
         trace_store,
-        auth_mode=env.get("TRIGGERTRADE_AUTH_MODE", "local_dev_compat"),
+        auth_mode=env.get("TRIGGERTRADE_AUTH_MODE", MANAGED_OIDC_AUTH_SOURCE),
         allowed_principals=_split_csv(env.get("TRIGGERTRADE_OPERATOR_PRINCIPALS", "")),
     )
 
