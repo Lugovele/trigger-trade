@@ -65,8 +65,8 @@ def test_trading_worker_role_runs_injected_canonical_worker_with_cycle_limit():
     assert worker.max_cycles == 2
 
 
-def test_default_trading_worker_role_excludes_legacy_demo_runtime():
-    with pytest.raises(ConfigError, match="target message-driven trading worker"):
+def test_default_trading_worker_role_requires_canonical_postgres_state():
+    with pytest.raises(ConfigError, match="TRIGGERTRADE_POSTGRES_DSN"):
         run_process_role(
             {"TRIGGERTRADE_PROCESS_ROLE": "trading-worker"},
             install_signal_handlers=False,

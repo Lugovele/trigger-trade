@@ -221,10 +221,10 @@ def test_legacy_demo_futures_runtime_active_formula_execution_requires_separate_
     assert runtime._allow_uncertified_active_formula_execution is True
 
 
-def test_canonical_runtime_builder_excludes_legacy_demo_futures_runtime(tmp_path):
+def test_canonical_runtime_builder_excludes_legacy_demo_futures_runtime_and_requires_postgres(tmp_path):
     db = tmp_path / "canonical-runtime.sqlite3"
 
-    with pytest.raises(ConfigError, match="target message-driven trading worker"):
+    with pytest.raises(ConfigError, match="TRIGGERTRADE_POSTGRES_DSN"):
         build_canonical_runtime_from_env(
             {
                 "TRIGGERTRADE_RUNTIME_DB_PATH": str(db),

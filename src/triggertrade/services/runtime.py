@@ -579,9 +579,23 @@ def runtime_state_store_from_env(env: dict[str, str], db_path):
 
 
 def build_canonical_runtime_from_env(env: dict[str, str]):
-    raise ConfigError(
-        "target message-driven trading worker is not implemented yet; "
-        "legacy demo futures runtime requires explicit compatibility builder"
+    from triggertrade.persistence import PostgresConnectionFactory, PostgresSettings, apply_postgres_migrations
+    from triggertrade.persistence.postgres_runtime_store import PostgresRuntimeStore
+    from triggertrade.services.runtime_storage import require_canonical_durable_runtime_state
+    from triggertrade.services.trading_worker import build_target_trading_worker
+
+    runtime_env = dict(env)
+    require_canonical_durable_runtime_state(runtime_env, component="trading worker")
+    config = load_config(runtime_env)
+    validate_canonical_runtime_config(config)
+    settings = PostgresSettings.from_env(runtime_env)
+    apply_postgres_migrations(dsn=settings.dsn, schema=settings.schema)
+    factory = PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)
+    return build_target_trading_worker(
+        factory=factory,
+        runtime_store=PostgresRuntimeStore(factory),
+        worker_id=str(runtime_env.get("TRIGGERTRADE_WORKER_ID") or "").strip() or None,
+        poll_seconds=_poll_seconds(runtime_env, key="TRIGGERTRADE_WORKER_POLL_SECONDS", default="5"),
     )
 
 
@@ -628,6 +642,17 @@ build_runtime_from_env = build_canonical_runtime_from_env
 
 def _env_true(value: object) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _poll_seconds(env: dict[str, str], *, key: str, default: str) -> float:
+    raw = str(env.get(key) or default).strip()
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ConfigError(f"{key} must be numeric") from exc
+    if value <= 0:
+        raise ConfigError(f"{key} must be positive")
+    return min(value, 300.0)
 
 
 def main() -> int:
