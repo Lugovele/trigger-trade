@@ -56,6 +56,11 @@ from .research_store import (
     ResearchStore,
     ResearchStoreError,
 )
+from .submit_authorization_store import (
+    SubmitAuthorizationConflict,
+    SubmitAuthorizationRecord,
+    SubmitAuthorizationStore,
+)
 from .trading_rules_store import TradingRulesStore
 from .runtime_store import (
     CandleLifecycle,
@@ -154,6 +159,9 @@ __all__ = [
     "RuntimeCheckpoint",
     "RuntimeStore",
     "RuntimeStoreError",
+    "SubmitAuthorizationConflict",
+    "SubmitAuthorizationRecord",
+    "SubmitAuthorizationStore",
     "TraceStore",
     "AuditEvent",
     "TradingRulesStore",
