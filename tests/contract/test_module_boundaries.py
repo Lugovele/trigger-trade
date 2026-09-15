@@ -95,3 +95,12 @@ def test_legacy_strategy_and_risk_paths_remain_explicit_compatibility_imports():
 
     assert hasattr(strategies, "BuyCandidateStrategy")
     assert hasattr(risk, "RiskManager")
+
+
+def test_legacy_execution_stores_remain_explicit_compatibility_imports():
+    persistence = importlib.import_module("triggertrade.persistence")
+
+    assert hasattr(persistence, "ExecutionStore")
+    assert hasattr(persistence, "FuturesExecutionStore")
+    assert persistence.is_legacy_execution_evidence_store(persistence.ExecutionStore)
+    assert persistence.is_legacy_execution_evidence_store(persistence.FuturesExecutionStore)

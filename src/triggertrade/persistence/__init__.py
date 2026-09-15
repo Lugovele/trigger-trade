@@ -2,6 +2,14 @@
 
 from .execution_store import ExecutionFill, ExecutionRecord, ExecutionStore
 from .futures_execution_store import FuturesExecutionRecord, FuturesExecutionStore
+from .legacy_execution_boundary import (
+    LEGACY_EXECUTION_EVIDENCE_ROLE,
+    TARGET_LIFECYCLE_TRUTH_ROLE,
+    LegacyExecutionStoreBoundaryError,
+    execution_store_role,
+    is_legacy_execution_evidence_store,
+    require_target_lifecycle_truth_store,
+)
 from .capital_grant_store import CapitalGrantConflict, CapitalGrantRecord, CapitalGrantStore
 from .coins_scope_store import CoinsScopeConflict, CoinsScopeRevisionRecord, CoinsScopeStore, SetScopeApplyResult
 from .daily_loss_store import DailyLossRecord, DailyLossStore
@@ -94,6 +102,9 @@ __all__ = [
     "DurableMessageStore",
     "FuturesExecutionRecord",
     "FuturesExecutionStore",
+    "LEGACY_EXECUTION_EVIDENCE_ROLE",
+    "TARGET_LIFECYCLE_TRUTH_ROLE",
+    "LegacyExecutionStoreBoundaryError",
     "InboxMessageRecord",
     "InstrumentCatalogStore",
     "MarketDataFactConflict",
@@ -121,6 +132,7 @@ __all__ = [
     "PortfolioStateRecord",
     "PortfolioStateStore",
     "apply_postgres_migrations",
+    "execution_store_role",
     "FuturesClosedPositionRecord",
     "FuturesPositionEvent",
     "FuturesPositionRecord",
@@ -156,4 +168,6 @@ __all__ = [
     "current_testing_trigger_set",
     "current_volume_recommendation",
     "definition_hash",
+    "is_legacy_execution_evidence_store",
+    "require_target_lifecycle_truth_store",
 ]

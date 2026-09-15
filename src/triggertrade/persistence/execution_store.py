@@ -8,6 +8,7 @@ import sqlite3
 from typing import Iterable
 
 from triggertrade.execution.contracts import OrderStatus
+from triggertrade.persistence.legacy_execution_boundary import LEGACY_EXECUTION_EVIDENCE_ROLE
 
 
 @dataclass(frozen=True)
@@ -46,6 +47,8 @@ class ExecutionFill:
 
 
 class ExecutionStore:
+    __triggertrade_lifecycle_store_role__ = LEGACY_EXECUTION_EVIDENCE_ROLE
+
     def __init__(self, path: str | Path = "runtime/triggertrade.sqlite3") -> None:
         self.path = Path(path)
         if self.path.parent != Path("."):
