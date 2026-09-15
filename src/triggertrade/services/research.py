@@ -24,6 +24,7 @@ from triggertrade.backtest.models import (
 from triggertrade.config import AppConfig
 from triggertrade.market_data import FuturesInstrumentMetadata
 from triggertrade.persistence import MessageStore, TraceStore, TradingRulesStore, TriggerSetStore
+from triggertrade.persistence.trace_store import TraceStoreError
 from triggertrade.persistence.research_store import (
     ResearchBacktestRunRecord,
     ResearchBacktestStatus,
@@ -63,6 +64,13 @@ class ResearchCompareResult:
     research_demo: dict[str, Any] | None = None
     active_benchmark: dict[str, Any] | None = None
     difference: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class ResearchPromotionCommand:
+    operator_principal: str
+    authorization_source: str
+    idempotency_key: str
 
 
 BacktestRunner = Callable[..., BacktestResult]
@@ -292,21 +300,24 @@ class ResearchService:
         self._audit_research_event("RESEARCH_ARCHIVED", record, result="ARCHIVED", created_at=record.updated_at)
         return record
 
-    def request_make_active(self, research_id: str) -> ResearchRecord:
-        return self.make_active(research_id)
+    def request_make_active(self, research_id: str, *, command: ResearchPromotionCommand) -> ResearchRecord:
+        return self.make_active(research_id, command=command)
 
     def make_active(
         self,
         research_id: str,
         *,
+        command: ResearchPromotionCommand | None = None,
         decided_at: str | None = None,
         _fault_after: str | None = None,
     ) -> ResearchRecord:
         decided_at = decided_at or datetime.now(UTC).isoformat()
+        command = _validate_promotion_command(command)
         research = self._required_research(research_id)
         self._exact_trigger_set(research.set_id, research.set_version)
         self._exact_rules_version(research.rules_version_id)
         blocked_reason = None
+        self._audit_promotion_command(command, research, decided_at=decided_at)
 
         with sqlite3.connect(self._store.path) as conn:
             conn.row_factory = sqlite3.Row
@@ -355,6 +366,8 @@ class ResearchService:
                 conn=conn,
                 research_id=research.research_id,
             )
+            if blocked_reason is None:
+                blocked_reason = _promotion_evidence_block_reason(conn=conn, research=current_research)
             if blocked_reason is not None:
                 conn.execute(
                     """
@@ -435,10 +448,15 @@ class ResearchService:
                         raise ResearchServiceError("injected promotion failure after rules update")
                     metadata = {
                         "result": "promoted",
+                        "operator_principal": command.operator_principal,
+                        "authz_source": command.authorization_source,
+                        "command_idempotency_key": command.idempotency_key,
                         "promoted_set": f"{research.set_id}@{research.set_version}",
                         "promoted_rules_version_id": research.rules_version_id,
                         "previous_set": None if previous_set_id is None else f"{previous_set_id}@{previous_set_version}",
                         "previous_rules_version_id": previous_rules_id,
+                        "selected_backtest_run_id": current_research["selected_backtest_run_id"],
+                        "selected_demo_run_id": current_research["selected_demo_run_id"],
                     }
                     conn.execute(
                         """
@@ -514,6 +532,9 @@ class ResearchService:
                     "previous_active_set_id": record.previous_active_set_id,
                     "previous_active_set_version": record.previous_active_set_version,
                     "previous_rules_version_id": record.previous_rules_version_id,
+                    "operator_principal": command.operator_principal,
+                    "authz_source": command.authorization_source,
+                    "command_idempotency_key": command.idempotency_key,
                     "promotion_result_metadata": record.promotion_result_metadata,
                 },
                 event_id=f"audit-research-made-active-{record.research_id}",
@@ -529,6 +550,7 @@ class ResearchService:
                     "set_id": record.set_id,
                     "set_version": record.set_version,
                     "rules_version_id": record.rules_version_id,
+                    "command_idempotency_key": command.idempotency_key,
                 },
             )
         return record
@@ -769,8 +791,65 @@ class ResearchService:
         except Exception:
             return
 
+    def _audit_promotion_command(
+        self,
+        command: ResearchPromotionCommand,
+        record: ResearchRecord,
+        *,
+        decided_at: str,
+    ) -> None:
+        event_id = f"audit-research-promotion-command-{command.idempotency_key}"
+        existing = self._trace_store.get_audit_event(event_id)
+        if existing is not None:
+            if (
+                existing.entity_id == record.research_id
+                and existing.source_id == command.operator_principal
+                and existing.safe_metadata.get("authz_source") == command.authorization_source
+            ):
+                return
+            raise ResearchServiceError("research promotion command idempotency key conflict")
+        try:
+            self._trace_store.record_audit_event(
+                event_type="RESEARCH_PROMOTION_OPERATOR_COMMAND",
+                source_type="USER_OPERATOR",
+                source_id=command.operator_principal,
+                scope="RESEARCH",
+                entity_type="research",
+                entity_id=record.research_id,
+                set_id=record.set_id,
+                set_version=record.set_version,
+                rules_version_id=record.rules_version_id,
+                research_id=record.research_id,
+                result="AUTHORIZED",
+                safe_metadata={
+                    "authz_source": command.authorization_source,
+                    "command_idempotency_key": command.idempotency_key,
+                    "automatic_promotion": False,
+                    "live_execution_side_effect": False,
+                },
+                created_at=decided_at,
+                event_id=event_id,
+            )
+        except TraceStoreError:
+            existing = self._trace_store.get_audit_event(event_id)
+            if (
+                existing is not None
+                and existing.entity_id == record.research_id
+                and existing.source_id == command.operator_principal
+                and existing.safe_metadata.get("authz_source") == command.authorization_source
+            ):
+                return
+            raise ResearchServiceError("research promotion command idempotency key conflict") from None
+        except Exception as exc:
+            raise ResearchServiceError(f"research promotion command audit failed: {exc.__class__.__name__}") from exc
+
 
 _LIVE_SCOPE_TOKENS = {"live", "main", "mainnet", "prod", "production", "real"}
+_SECRET_VALUE_RE = re.compile(
+    r"(api[_-]?key|api[_-]?secret|authorization|bearer|cookie|csrf|session|token|password|credential|signature|\.env)",
+    re.I,
+)
+_COMMAND_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{8,160}$")
 
 
 def _demo_isolation_scope_block_reason(isolation: ResearchDemoIsolation) -> str | None:
@@ -822,6 +901,64 @@ def _locked_promotion_block_reason(
     if running_demo is not None:
         return "research_demo_must_be_stopped_before_promotion"
     return None
+
+
+def _promotion_evidence_block_reason(*, conn: sqlite3.Connection, research: sqlite3.Row) -> str | None:
+    selected_backtest = research["selected_backtest_run_id"]
+    selected_demo = research["selected_demo_run_id"]
+    if not selected_backtest and not selected_demo:
+        return "research_promotion_requires_selected_evidence"
+    if selected_backtest:
+        row = conn.execute(
+            """
+            SELECT status
+            FROM research_backtest_runs
+            WHERE research_id = ? AND run_id = ?
+            """,
+            (research["research_id"], selected_backtest),
+        ).fetchone()
+        if row is None:
+            return "selected_backtest_evidence_unavailable"
+        if row["status"] not in {ResearchBacktestStatus.COMPLETED.value, ResearchBacktestStatus.COMPLETED_NO_TRADES.value}:
+            return "selected_backtest_evidence_not_terminal"
+    if selected_demo:
+        row = conn.execute(
+            """
+            SELECT status
+            FROM research_demo_runs
+            WHERE research_id = ? AND run_id = ?
+            """,
+            (research["research_id"], selected_demo),
+        ).fetchone()
+        if row is None:
+            return "selected_demo_evidence_unavailable"
+        if row["status"] != ResearchDemoStatus.STOPPED.value:
+            return "selected_demo_evidence_must_be_stopped"
+    return None
+
+
+def _validate_promotion_command(command: ResearchPromotionCommand | None) -> ResearchPromotionCommand:
+    if command is None:
+        raise ResearchServiceError("research promotion requires an authorized operator command")
+    principal = _clean_command_text(command.operator_principal, "operator_principal")
+    source = _clean_command_text(command.authorization_source, "authorization_source")
+    idempotency_key = _clean_command_text(command.idempotency_key, "idempotency_key")
+    if not _COMMAND_ID_RE.fullmatch(idempotency_key):
+        raise ResearchServiceError("research promotion command idempotency key is invalid")
+    return ResearchPromotionCommand(
+        operator_principal=principal,
+        authorization_source=source,
+        idempotency_key=idempotency_key,
+    )
+
+
+def _clean_command_text(value: str, field: str) -> str:
+    text = " ".join(str(value or "").replace("\x00", "").split())[:160]
+    if not text:
+        raise ResearchServiceError(f"research promotion command {field} is required")
+    if _SECRET_VALUE_RE.search(text):
+        raise ResearchServiceError(f"research promotion command {field} must not contain secrets")
+    return text
 
 
 def _backtest_metrics(result: BacktestResult) -> dict[str, Any]:

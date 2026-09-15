@@ -43,7 +43,7 @@ from triggertrade.services.backup_restore import BackupService, critical_state_f
 from triggertrade.services.db_integrity_audit import run_database_integrity_audit
 from triggertrade.services.futures_runtime import FuturesDualLaneRuntime, _is_futures_set
 from triggertrade.services.instrument_catalog import InstrumentCatalogService
-from triggertrade.services.research import ResearchService
+from triggertrade.services.research import ResearchPromotionCommand, ResearchService
 from triggertrade.rules import DirectionMode, TakeProfitMode, TradingRulesService
 from triggertrade.services.runtime import RuntimeCycleResult, build_runtime_from_env
 from triggertrade.execution.position_lifecycle import PositionStatus, futures_position_id
@@ -1070,7 +1070,23 @@ def test_runtime_new_active_entries_use_promoted_research_set_and_rules_pair(tmp
         set_version="v2-test",
         rules_version_id=candidate_rules.rules_version_id,
     )
-    research_service.request_make_active(research.research_id)
+    demo = ResearchStore(path).add_demo_run(
+        research_id=research.research_id,
+        status=ResearchDemoStatus.STOPPED,
+        started_at="2026-09-08T12:00:00+00:00",
+        stopped_at="2026-09-08T13:00:00+00:00",
+        execution_scope_id="research-safe",
+        account_scope="research-account",
+    )
+    research_service.select_demo_run(research.research_id, demo.run_id)
+    research_service.request_make_active(
+        research.research_id,
+        command=ResearchPromotionCommand(
+            operator_principal="unit-operator",
+            authorization_source="unit-test-operator-auth",
+            idempotency_key="runtime-promote-001",
+        ),
+    )
     adapter = RecordingFuturesAdapter(order_status="New")
 
     result = _runtime(tmp_path, path=path, active_adapter=adapter).process_once()

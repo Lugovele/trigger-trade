@@ -1296,7 +1296,8 @@ def _research_wiring_script(research: dict[str, Any] | None, token: str) -> str:
     if(!currentResearch?.research?.research_id)return;
     const id=currentResearch.research.research_id;
     try{{
-      const data=await postJson(`/api/research/${{encodeURIComponent(id)}}/decision/make-active`, {{token}});
+      const idempotency_key=`research-promotion-${{id}}-${{Date.now()}}`;
+      const data=await postJson(`/api/research/${{encodeURIComponent(id)}}/decision/make-active`, {{token,idempotency_key}});
       const label=document.getElementById("decisionStateInline");
       if(label)label.textContent=data?.research?.decision || "Decision unavailable";
       await refreshAndOpen(id);

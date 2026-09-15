@@ -396,6 +396,19 @@ class TraceStore:
             ).fetchall()
         return tuple(_audit_from_row(row) for row in rows)
 
+    def get_audit_event(self, event_id: str) -> AuditEvent | None:
+        clean_event_id = _clean_id(event_id, "event_id")
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM audit_events
+                WHERE event_id = ?
+                """,
+                (clean_event_id,),
+            ).fetchone()
+        return None if row is None else _audit_from_row(row)
+
     def trace_for_intent(self, intent_id: str) -> dict[str, Any]:
         with self._connect() as conn:
             strategy = conn.execute(

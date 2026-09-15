@@ -21,7 +21,7 @@ from triggertrade.persistence import InstrumentCatalogStore, MessageStore, Messa
 from triggertrade.rules import CoinRule, TradingRulesError, TradingRulesService
 from triggertrade.services.bootstrap import ensure_runtime_registry_for_env, merged_runtime_env, runtime_db_path
 from triggertrade.services.instrument_catalog import InstrumentCatalogService
-from triggertrade.services.research import ResearchService, ResearchServiceError
+from triggertrade.services.research import ResearchPromotionCommand, ResearchService, ResearchServiceError
 from triggertrade.services.system_history import SystemHistoryExporter
 
 
@@ -274,7 +274,18 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     self._send_json({"research": _research_record_payload(record)})
                     return
                 if len(parts) == 5 and parts[:2] == ["api", "research"] and parts[3] == "decision" and parts[4] == "make-active":
-                    record = self.server.research_service.request_make_active(parts[2])
+                    idempotency_key = str(payload.get("idempotency_key") or "").strip()
+                    if not idempotency_key:
+                        self._send_json({"error": "idempotency_key required"}, HTTPStatus.BAD_REQUEST)
+                        return
+                    record = self.server.research_service.request_make_active(
+                        parts[2],
+                        command=ResearchPromotionCommand(
+                            operator_principal="local_dashboard_operator",
+                            authorization_source="local_dev_compat",
+                            idempotency_key=idempotency_key,
+                        ),
+                    )
                     blocked = record.decision.value == "MAKE_ACTIVE_BLOCKED"
                     self._send_json({"research": _research_record_payload(record), "blocked": blocked}, HTTPStatus.CONFLICT if blocked else HTTPStatus.OK)
                     return

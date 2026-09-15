@@ -162,6 +162,14 @@ def test_research_api_make_active_uses_backend_confirmed_exact_pair(tmp_path):
         rules_display_version=candidate_rules.version,
         created_source="unit",
     )
+    demo = ResearchStore(db).add_demo_run(
+        research_id=research.research_id,
+        status=ResearchDemoStatus.STOPPED,
+        started_at="2026-09-08T12:00:00+00:00",
+        stopped_at="2026-09-08T13:00:00+00:00",
+        execution_scope_id="research-safe",
+        account_scope="research-account",
+    )
     with sqlite3.connect(db) as conn:
         conn.execute(
             "UPDATE trading_rules_current SET rules_version_id = ?, updated_at = ? WHERE scope = ?",
@@ -175,8 +183,15 @@ def test_research_api_make_active_uses_backend_confirmed_exact_pair(tmp_path):
             host,
             port,
             "POST",
-            f"/api/research/{research.research_id}/decision/make-active",
+            f"/api/research/{research.research_id}/demo/{demo.run_id}/select",
             {"token": server.operator_control_token},
+        )
+        result = _json_request(
+            host,
+            port,
+            "POST",
+            f"/api/research/{research.research_id}/decision/make-active",
+            {"token": server.operator_control_token, "idempotency_key": "dashboard-promote-001"},
         )
         detail = _json_request(host, port, "GET", f"/api/research/{research.research_id}")["research"]
 
@@ -215,7 +230,7 @@ def test_research_api_make_active_blocked_state_is_factual(tmp_path):
             port,
             "POST",
             f"/api/research/{research.research_id}/decision/make-active",
-            {"token": server.operator_control_token},
+            {"token": server.operator_control_token, "idempotency_key": "dashboard-promote-blocked"},
             expected=HTTPStatus.CONFLICT,
         )
 

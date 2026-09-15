@@ -26,7 +26,7 @@ from triggertrade.persistence.runtime_store import RuntimeStore
 from triggertrade.persistence.trace_store import TraceStore
 from triggertrade.rules import TakeProfitMode, TradingRulesService
 from triggertrade.research_pins import research_pin_digest
-from triggertrade.services.research import ResearchDemoIsolation, ResearchService, ResearchServiceError
+from triggertrade.services.research import ResearchDemoIsolation, ResearchPromotionCommand, ResearchService, ResearchServiceError
 from tests.unit.test_backtest_replay import _config, _instrument, _trade_candles
 from tests.unit.test_futures_performance_analytics import _fill as _accounting_fill
 from triggertrade.accounting import close_futures_trade
@@ -295,9 +295,9 @@ def test_research_demo_stop_select_compare_and_make_active_promotes_exact_pair(t
     stopped_again = service.stop_demo_run(research.research_id, running.run_id, stopped_at="2026-09-08T14:00:00+00:00")
     selected = service.select_demo_run(research.research_id, running.run_id)
     compare = service.compare(research.research_id)
-    promoted = service.request_make_active(research.research_id)
+    promoted = service.request_make_active(research.research_id, command=_promotion_command("promote-main"))
     pair = TriggerSetStore(db).get_active_trading_pair("BTCUSDT", "1m")
-    idempotent = service.request_make_active(research.research_id)
+    idempotent = service.request_make_active(research.research_id, command=_promotion_command("promote-main"))
     promotion_message = next(message for message in MessageStore(db).list_messages() if message.dedupe_key == f"research:{research.research_id}:made_active")
 
     assert running.status is ResearchDemoStatus.RUNNING
@@ -342,6 +342,7 @@ def test_research_demo_stop_select_compare_and_make_active_promotes_exact_pair(t
         "set_id": "triggertrade-futures-candidate",
         "set_version": "v2-test",
         "rules_version_id": pinned_rules.rules_version_id,
+        "command_idempotency_key": "promote-main",
     }
     audit_types = {event.event_type for event in TraceStore(db).list_audit_events(limit=20, entity_id=research.research_id)}
     assert {
@@ -349,12 +350,41 @@ def test_research_demo_stop_select_compare_and_make_active_promotes_exact_pair(t
         "DEMO_RUN_STARTED",
         "DEMO_RUN_STOPPED",
         "DEMO_SELECTED_FOR_USE",
+        "RESEARCH_PROMOTION_OPERATOR_COMMAND",
         "RESEARCH_MADE_ACTIVE",
     }.issubset(audit_types)
     promoted_audit = TraceStore(db).list_audit_events(limit=10, event_type="RESEARCH_MADE_ACTIVE")[0]
     assert promoted_audit.set_id == "triggertrade-futures-candidate"
     assert promoted_audit.set_version == "v2-test"
     assert promoted_audit.rules_version_id == pinned_rules.rules_version_id
+    assert promoted_audit.safe_metadata["operator_principal"] == "unit-operator"
+    assert promoted_audit.safe_metadata["command_idempotency_key"] == "promote-main"
+
+
+def test_make_active_requires_operator_command_and_selected_evidence(tmp_path):
+    db, rules = _research_db(tmp_path)
+    service = _service(db)
+    candidate_rules = rules.create_rules_version_from_current(changes={"fixed_take_profit_pct": Decimal("0.026")}, created_source="unit").rules
+    research = service.create_research(
+        set_id="triggertrade-futures-candidate",
+        set_version="v2-test",
+        rules_version_id=candidate_rules.rules_version_id,
+    )
+
+    with pytest.raises(ResearchServiceError, match="authorized operator command"):
+        service.make_active(research.research_id)
+
+    blocked = service.request_make_active(research.research_id, command=_promotion_command("promote-no-evidence"))
+
+    assert blocked.decision is ResearchDecision.MAKE_ACTIVE_BLOCKED
+    assert blocked.made_active_at is None
+    assert TraceStore(db).list_audit_events(event_type="RESEARCH_PROMOTION_OPERATOR_COMMAND")[0].source_id == "unit-operator"
+    blocked_message = next(
+        message
+        for message in MessageStore(db).list_messages()
+        if message.dedupe_key == f"research:{research.research_id}:make_active_blocked:research_promotion_requires_selected_evidence"
+    )
+    assert blocked_message.metadata == {"reason": "research_promotion_requires_selected_evidence"}
 
 
 def test_make_active_blocks_running_demo_without_changing_pair(tmp_path):
@@ -370,7 +400,7 @@ def test_make_active_blocks_running_demo_without_changing_pair(tmp_path):
     )
     service.start_demo_run(research.research_id, created_at="2026-09-08T12:00:00+00:00")
 
-    blocked = service.request_make_active(research.research_id)
+    blocked = service.request_make_active(research.research_id, command=_promotion_command("promote-running-demo"))
     pair = TriggerSetStore(db).get_active_trading_pair("BTCUSDT", "1m")
     blocked_message = next(
         message
@@ -404,9 +434,10 @@ def test_make_active_rolls_back_if_promotion_fails_mid_transaction(tmp_path):
         set_version="v2-test",
         rules_version_id=new_rules.rules_version_id,
     )
+    _select_stopped_demo_evidence(service, research.research_id)
 
     with pytest.raises(ResearchServiceError, match="injected promotion failure"):
-        service.make_active(research.research_id, _fault_after="rules")
+        service.make_active(research.research_id, command=_promotion_command("promote-fault-rules"), _fault_after="rules")
 
     pair = TriggerSetStore(db).get_active_trading_pair("BTCUSDT", "1m")
     reloaded = ResearchStore(db).get_research(research.research_id)
@@ -430,9 +461,10 @@ def test_make_active_rolls_back_if_set_update_fails_mid_transaction(tmp_path):
         set_version="v2-test",
         rules_version_id=candidate_rules.rules_version_id,
     )
+    _select_stopped_demo_evidence(service, research.research_id)
 
     with pytest.raises(ResearchServiceError, match="injected promotion failure"):
-        service.make_active(research.research_id, _fault_after="set")
+        service.make_active(research.research_id, command=_promotion_command("promote-fault-set"), _fault_after="set")
 
     pair = TriggerSetStore(db).get_active_trading_pair("BTCUSDT", "1m")
     reloaded = ResearchStore(db).get_research(research.research_id)
@@ -491,8 +523,9 @@ def test_make_active_does_not_rewrite_existing_open_positions(tmp_path):
         set_version="v2-test",
         rules_version_id=candidate_rules.rules_version_id,
     )
+    _select_stopped_demo_evidence(_service(db), research.research_id)
 
-    _service(db).request_make_active(research.research_id)
+    _service(db).request_make_active(research.research_id, command=_promotion_command("promote-open-position-safe"))
     reloaded = FuturesPositionStore(db).get_position("pos-existing")
 
     assert reloaded.trigger_set_id == "triggertrade-futures-core"
@@ -513,20 +546,21 @@ def test_make_active_survives_restart_and_blocks_unknown_or_unsupported_rules(tm
     _set_current_rules(db, original_rules.rules_version_id)
     service = _service(db)
     with pytest.raises(ResearchServiceError, match="research id not found"):
-        service.request_make_active("res-unknown")
+        service.request_make_active("res-unknown", command=_promotion_command("promote-unknown"))
     dynamic_research = service.create_research(
         set_id="triggertrade-futures-candidate",
         set_version="v2-test",
         rules_version_id=dynamic_rules.rules_version_id,
     )
-    blocked = service.request_make_active(dynamic_research.research_id)
+    blocked = service.request_make_active(dynamic_research.research_id, command=_promotion_command("promote-dynamic-blocked"))
     research = service.create_research(
         set_id="triggertrade-futures-candidate",
         set_version="v2-test",
         rules_version_id=candidate_rules.rules_version_id,
     )
+    _select_stopped_demo_evidence(service, research.research_id)
 
-    promoted = service.request_make_active(research.research_id)
+    promoted = service.request_make_active(research.research_id, command=_promotion_command("promote-restart"))
     restarted_pair = TriggerSetStore(db).get_active_trading_pair("BTCUSDT", "1m")
     restarted_research = ResearchStore(db).get_research(research.research_id)
 
@@ -551,9 +585,10 @@ def test_concurrent_make_active_requests_leave_one_coherent_pair(tmp_path):
         set_version="v2-test",
         rules_version_id=candidate_rules.rules_version_id,
     )
+    _select_stopped_demo_evidence(_service(db), research.research_id)
 
     def promote():
-        return _service(db).request_make_active(research.research_id).decision.value
+        return _service(db).request_make_active(research.research_id, command=_promotion_command("promote-concurrent-same")).decision.value
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         decisions = tuple(pool.map(lambda _: promote(), range(2)))
@@ -588,9 +623,11 @@ def test_concurrent_different_research_promotions_leave_one_exact_pair(tmp_path)
         set_version=alt.version,
         rules_version_id=second_rules.rules_version_id,
     )
+    _select_stopped_demo_evidence(_service(db), first.research_id)
+    _select_stopped_demo_evidence(_service(db), second.research_id)
 
     def promote(research_id):
-        return _service(db).request_make_active(research_id).decision.value
+        return _service(db).request_make_active(research_id, command=_promotion_command(f"promote-concurrent-{research_id[-8:]}")).decision.value
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         decisions = tuple(pool.map(promote, (first.research_id, second.research_id)))
@@ -699,7 +736,7 @@ def test_archived_research_is_immutable(tmp_path):
     with pytest.raises(ResearchStoreError, match="archived research is immutable"):
         service.select_demo_run(research.research_id, demo.run_id)
     with pytest.raises(ResearchStoreError, match="archived research is immutable"):
-        service.request_make_active(research.research_id)
+        service.request_make_active(research.research_id, command=_promotion_command("promote-archived"))
 
 
 def _research_db(tmp_path):
@@ -735,6 +772,27 @@ def _safe_demo_isolation() -> ResearchDemoIsolation:
         adapter_scope_id="research-demo-paper",
         state_scope_id="research-demo-state",
     )
+
+
+def _promotion_command(idempotency_key: str) -> ResearchPromotionCommand:
+    return ResearchPromotionCommand(
+        operator_principal="unit-operator",
+        authorization_source="unit-test-operator-auth",
+        idempotency_key=idempotency_key,
+    )
+
+
+def _select_stopped_demo_evidence(service: ResearchService, research_id: str) -> None:
+    run = ResearchStore(service._store.path).add_demo_run(
+        research_id=research_id,
+        status=ResearchDemoStatus.STOPPED,
+        started_at="2026-09-08T12:00:00+00:00",
+        stopped_at="2026-09-08T13:00:00+00:00",
+        execution_scope_id="research-safe",
+        account_scope="research-account",
+        metrics={},
+    )
+    service.select_demo_run(research_id, run.run_id)
 
 
 def _set_current_rules(db, rules_version_id: str) -> None:

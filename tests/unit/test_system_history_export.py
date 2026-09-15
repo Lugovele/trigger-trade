@@ -4,11 +4,11 @@ from decimal import Decimal
 from triggertrade.accounting import EquitySnapshot
 from triggertrade.dashboard.read_model import DashboardReadModel
 from triggertrade.config import load_config
-from triggertrade.persistence import LaneCandleLifecycle, MessageStore, RuntimeStore, TraceStore, TradingRulesStore
+from triggertrade.persistence import LaneCandleLifecycle, MessageStore, ResearchDemoStatus, RuntimeStore, TraceStore, TradingRulesStore
 from triggertrade.persistence.futures_accounting_store import FuturesAccountingStore
 from triggertrade.rules import TradingRulesService
 from triggertrade.persistence.operator_state_store import OperatorStateStore
-from triggertrade.services.research import ResearchService
+from triggertrade.services.research import ResearchPromotionCommand, ResearchService
 from triggertrade.services.system_history import SystemHistoryExporter
 from tests.unit.test_dashboard_read_model import _empty_db, _save_buy_lifecycle
 
@@ -104,7 +104,23 @@ def test_system_history_export_includes_bounded_factual_research(tmp_path):
         rules_version_id=current.rules_version_id,
         created_at="2026-09-08T12:00:00+00:00",
     )
-    service.request_make_active(record.research_id)
+    demo = ResearchStore(db).add_demo_run(
+        research_id=record.research_id,
+        status=ResearchDemoStatus.STOPPED,
+        started_at="2026-09-08T12:00:00+00:00",
+        stopped_at="2026-09-08T13:00:00+00:00",
+        execution_scope_id="research-safe",
+        account_scope="research-account",
+    )
+    service.select_demo_run(record.research_id, demo.run_id)
+    service.request_make_active(
+        record.research_id,
+        command=ResearchPromotionCommand(
+            operator_principal="unit-operator",
+            authorization_source="unit-test-operator-auth",
+            idempotency_key="history-promote-001",
+        ),
+    )
 
     text = SystemHistoryExporter(read_model=DashboardReadModel(db)).build_export()
 
