@@ -6,8 +6,11 @@ import threading
 import pytest
 
 from triggertrade.dashboard.__main__ import DEFAULT_HOST, create_server, create_server_from_env, render_dashboard
+from triggertrade.dashboard.product_ui import render_product_dashboard
 from triggertrade.dashboard.read_model import DashboardReadModel
+from triggertrade.persistence import TraceStore
 from triggertrade.persistence.operator_state_store import OperatorStateStore
+from triggertrade.services.operator_auth import OPERATOR_AUTH_EVENT_TYPE, OperatorCommandAuthorizer
 from tests.unit.test_dashboard_read_model import _empty_db, _save_no_signal
 
 
@@ -115,12 +118,54 @@ def test_operator_controls_are_protected_frontend_boundaries(tmp_path):
     assert "Type CLOSE ALL to confirm" in html
     assert 'id="operatorPauseForm"' in html
     assert 'action="/operator/pause"' in html
-    assert f'value="{server.operator_control_token}"' in html
+    assert server.operator_control_token not in html
     assert 'id="operatorResumeForm"' in html
     assert 'action="/operator/resume"' in html
     assert "/order/create" not in html
     assert "manual BUY" not in html
     assert "manual SELL" not in html
+
+
+def test_product_renderer_never_emits_process_local_token_argument():
+    html = render_product_dashboard(operator_control_token="process-secret-token", operator_command_submit_enabled=True)
+
+    assert "process-secret-token" not in html
+    assert 'name="token"' not in html
+
+
+def test_managed_oidc_operator_pause_does_not_require_local_token(tmp_path):
+    db = _empty_db(tmp_path)
+    authorizer = OperatorCommandAuthorizer(db, auth_mode="managed_oidc")
+    server = create_server(port=0, db_path=db, operator_authorizer=authorizer)
+    host, port = server.server_address
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection(host, port, timeout=2)
+        conn.request(
+            "POST",
+            "/operator/pause",
+            body="confirm=yes",
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "X-MS-CLIENT-PRINCIPAL-ID": "operator-1",
+                "X-MS-CLIENT-PRINCIPAL-ROLES": "TriggerTrade.Operator",
+            },
+        )
+        response = conn.getresponse()
+        response.read()
+        assert response.status == HTTPStatus.SEE_OTHER
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+    state = OperatorStateStore(db).get_trading_state()
+    assert state.state.value == "TRADING_PAUSED"
+    event = TraceStore(db).list_audit_events(event_type=OPERATOR_AUTH_EVENT_TYPE)[0]
+    assert event.source_id == "operator-1"
+    assert event.safe_metadata["authz_source"] == "managed_oidc"
+    assert server.operator_control_token not in str(event.safe_metadata)
 
 
 def test_portfolio_close_actions_fail_closed_without_execution_bridge(tmp_path):

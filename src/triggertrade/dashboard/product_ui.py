@@ -41,32 +41,27 @@ def _data_provenance_html(*, portfolio_live: bool, registry_live: bool) -> str:
     )
 
 
-def _operator_forms_html(token: str) -> str:
-    safe_token = escape(token, quote=True)
+def _operator_forms_html() -> str:
     return (
         '<form id="operatorPauseForm" method="post" action="/operator/pause" hidden>'
         '<input type="hidden" name="confirm" value="yes">'
-        f'<input type="hidden" name="token" value="{safe_token}">'
         "</form>"
         '<form id="operatorResumeForm" method="post" action="/operator/resume" hidden>'
         '<input type="hidden" name="confirm" value="yes">'
-        f'<input type="hidden" name="token" value="{safe_token}">'
         "</form>"
         '<form id="operatorCloseOneForm" method="post" action="/operator/close-one" hidden>'
         '<input type="hidden" name="confirm" value="yes">'
-        f'<input type="hidden" name="token" value="{safe_token}">'
         '<input type="hidden" name="position_id" value="">'
         '<input type="hidden" name="symbol" value="">'
         "</form>"
         '<form id="operatorCloseAllForm" method="post" action="/operator/close-all" hidden>'
         '<input type="hidden" name="confirm" value="yes">'
-        f'<input type="hidden" name="token" value="{safe_token}">'
         '<input type="hidden" name="phrase" value="CLOSE ALL">'
         "</form>"
     )
 
 
-def _server_boundary_script(state: str, has_operator_token: bool, state_available: bool) -> str:
+def _server_boundary_script(state: str, operator_command_submit_enabled: bool, state_available: bool) -> str:
     state_json = json.dumps(state)
     return """
 <script id="triggertrade-server-boundaries">
@@ -203,7 +198,7 @@ def _server_boundary_script(state: str, has_operator_token: bool, state_availabl
 """ % (
         state_json,
         "true" if state_available else "false",
-        "true" if has_operator_token else "false",
+        "true" if operator_command_submit_enabled else "false",
     )
 
 
@@ -1376,6 +1371,7 @@ def render_product_dashboard(
     initial_page: str = "portfolio",
     operator_state: Any = None,
     operator_control_token: str = "",
+    operator_command_submit_enabled: bool = False,
     portfolio: dict[str, Any] | None = None,
     registry: dict[str, Any] | None = None,
     rules: dict[str, Any] | None = None,
@@ -1393,6 +1389,7 @@ def render_product_dashboard(
     state = raw_state if state_available else "UNKNOWN"
     if state == "TRADING_PAUSED":
         startup.append("if(window.botDot){botDot.style.background='#a16207';botDot.style.boxShadow='0 0 0 4px #fff8e6';botDot.title='Bot running · new entries paused';}")
+    operator_control_token = ""
     marker = "</body>"
     html = _PRODUCT_UI_HTML.replace(
         "<main class=\"container\">",
@@ -1418,8 +1415,8 @@ def render_product_dashboard(
         '\n<script id="triggertrade-server-startup">'
         + "".join(startup)
         + "</script>\n"
-        + _operator_forms_html(operator_control_token)
-        + _server_boundary_script(state, bool(operator_control_token), state_available)
+        + _operator_forms_html()
+        + _server_boundary_script(state, operator_command_submit_enabled, state_available)
         + _portfolio_wiring_script(portfolio)
         + _registry_wiring_script(registry)
         + _rules_wiring_script(rules, operator_control_token)

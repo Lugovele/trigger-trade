@@ -21,6 +21,12 @@ from triggertrade.persistence import InstrumentCatalogStore, MessageStore, Messa
 from triggertrade.rules import CoinRule, TradingRulesError, TradingRulesService
 from triggertrade.services.bootstrap import ensure_runtime_registry_for_env, merged_runtime_env, runtime_db_path
 from triggertrade.services.instrument_catalog import InstrumentCatalogService
+from triggertrade.services.operator_auth import (
+    AuthorizedOperatorCommand,
+    OperatorAuthorizationError,
+    OperatorCommandAuthorizer,
+    operator_authorizer_from_env,
+)
 from triggertrade.services.research import ResearchPromotionCommand, ResearchService, ResearchServiceError
 from triggertrade.services.system_history import SystemHistoryExporter
 
@@ -42,6 +48,7 @@ class DashboardServer(ThreadingHTTPServer):
         trading_rules_service: TradingRulesService,
         instrument_catalog_service: InstrumentCatalogService,
         research_service: ResearchService,
+        operator_authorizer: OperatorCommandAuthorizer,
         operator_actions=None,
         readiness_env=None,
         postgres_health_probe=None,
@@ -53,6 +60,7 @@ class DashboardServer(ThreadingHTTPServer):
         self.trading_rules_service = trading_rules_service
         self.instrument_catalog_service = instrument_catalog_service
         self.research_service = research_service
+        self.operator_authorizer = operator_authorizer
         self.operator_actions = operator_actions
         self.operator_control_token = secrets.token_urlsafe(24)
         self.readiness_env = dict(os.environ if readiness_env is None else readiness_env)
@@ -220,8 +228,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path == "/api/research":
             payload = self._read_json_body(max_bytes=4096)
-            if str(payload.get("token") or "") != self.server.operator_control_token:
-                self._send_json({"error": "operator token required"}, HTTPStatus.FORBIDDEN)
+            command = self._authorize_json_operator_command("RESEARCH_CREATE", payload, scope="RESEARCH")
+            if command is None:
                 return
             try:
                 record = self.server.research_service.create_research(
@@ -239,8 +247,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if parsed.path.startswith("/api/research/"):
             parts = [unquote(part) for part in parsed.path.strip("/").split("/")]
             payload = self._read_json_body(max_bytes=4096)
-            if str(payload.get("token") or "") != self.server.operator_control_token:
-                self._send_json({"error": "operator token required"}, HTTPStatus.FORBIDDEN)
+            command_type = _research_command_type(parts)
+            command = self._authorize_json_operator_command(command_type, payload, scope="RESEARCH", target=parts[2] if len(parts) > 2 else "RESEARCH")
+            if command is None:
                 return
             try:
                 if len(parts) == 4 and parts[:2] == ["api", "research"] and parts[3] == "backtests":
@@ -281,8 +290,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     record = self.server.research_service.request_make_active(
                         parts[2],
                         command=ResearchPromotionCommand(
-                            operator_principal="local_dashboard_operator",
-                            authorization_source="local_dev_compat",
+                            operator_principal=command.principal.principal_id,
+                            authorization_source=command.principal.auth_source,
                             idempotency_key=idempotency_key,
                         ),
                     )
@@ -296,9 +305,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/rules/versions":
             payload = self._read_json_body(max_bytes=16000)
-            token = str(payload.get("token") or "")
-            if token != self.server.operator_control_token:
-                self._send_json({"error": "operator token required"}, HTTPStatus.FORBIDDEN)
+            if self._authorize_json_operator_command("RULES_VERSION_CREATE", payload, scope="OPERATOR", target="RULES") is None:
                 return
             try:
                 changes = _rules_changes_from_payload(payload)
@@ -323,9 +330,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/instruments/refresh":
             payload = self._read_json_body(max_bytes=2048)
-            token = str(payload.get("token") or "")
-            if token != self.server.operator_control_token:
-                self._send_json({"error": "operator token required"}, HTTPStatus.FORBIDDEN)
+            if self._authorize_json_operator_command("INSTRUMENTS_REFRESH", payload, scope="OPERATOR", target="INSTRUMENT_CATALOG") is None:
                 return
             result = self.server.instrument_catalog_service.refresh_instrument_catalog()
             status = HTTPStatus.OK if result.status == "OK" else HTTPStatus.SERVICE_UNAVAILABLE
@@ -354,9 +359,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/messages/mark-read":
             payload = self._read_json_body(max_bytes=4096)
-            token = str(payload.get("token") or "")
-            if token != self.server.operator_control_token:
-                self._send_json({"error": "operator token required"}, HTTPStatus.FORBIDDEN)
+            if self._authorize_json_operator_command("MESSAGES_MARK_READ", payload, scope="OPERATOR", target="MESSAGES") is None:
                 return
             raw_ids = payload.get("message_ids")
             if not isinstance(raw_ids, list) or not all(isinstance(item, str) for item in raw_ids):
@@ -371,9 +374,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/system-history/export":
             payload = self._read_json_body(max_bytes=2048)
-            token = str(payload.get("token") or "")
-            if token != self.server.operator_control_token:
-                self._send_json({"error": "operator token required"}, HTTPStatus.FORBIDDEN)
+            command = self._authorize_json_operator_command("SYSTEM_HISTORY_EXPORT", payload, scope="OPERATOR", target="SYSTEM_HISTORY")
+            if command is None:
                 return
             try:
                 text = SystemHistoryExporter(
@@ -385,7 +387,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     action="SYSTEM_HISTORY_EXPORTED",
                     target="CLIPBOARD",
                     result="SUCCESS",
-                    source="local_dashboard",
+                    source=command.audit_source,
                 )
                 self._send_json({"format": "text/plain", "text": text})
             except Exception as exc:  # noqa: BLE001 - export failures are surfaced and audited without leaking payloads.
@@ -394,7 +396,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     action="SYSTEM_HISTORY_EXPORTED",
                     target="CLIPBOARD",
                     result="FAILED",
-                    source="local_dashboard",
+                    source=command.audit_source,
                     error=error,
                 )
                 self._send_json({"error": error}, HTTPStatus.SERVICE_UNAVAILABLE)
@@ -403,19 +405,20 @@ class DashboardHandler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", "0") or "0")
             body = self.rfile.read(min(length, 2048)).decode("utf-8")
             values = parse_qs(body)
-            if (
-                values.get("confirm", [""])[0] != "yes"
-                or values.get("token", [""])[0] != self.server.operator_control_token
-            ):
+            if values.get("confirm", [""])[0] != "yes":
+                self._send_html(render_not_found("operator confirmation required"), HTTPStatus.BAD_REQUEST)
+                return
+            command = self._authorize_form_operator_command(_operator_form_command_type(parsed.path), values)
+            if command is None:
                 self._send_html(render_not_found("operator confirmation required"), HTTPStatus.BAD_REQUEST)
                 return
             if parsed.path.endswith("/pause"):
-                self.server.operator_store.pause(reason="confirmed local Pause Entries")
+                self.server.operator_store.pause(source=command.audit_source, reason="confirmed dashboard Pause Entries")
                 self.server.operator_store.record_operator_action(
                     action="PAUSE_ENTRIES",
                     target="ACTIVE",
                     result="SUCCESS",
-                    source="local_dashboard",
+                    source=command.audit_source,
                 )
                 _record_message(
                     self.server.message_store,
@@ -426,12 +429,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     dedupe_key="operator:PAUSE_ENTRIES:ACTIVE",
                 )
             elif parsed.path.endswith("/resume"):
-                self.server.operator_store.resume(reason="confirmed local Resume")
+                self.server.operator_store.resume(source=command.audit_source, reason="confirmed dashboard Resume")
                 self.server.operator_store.record_operator_action(
                     action="RESUME_ENTRIES",
                     target="ACTIVE",
                     result="SUCCESS",
-                    source="local_dashboard",
+                    source=command.audit_source,
                 )
                 _record_message(
                     self.server.message_store,
@@ -454,7 +457,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         action="CLOSE_ONE",
                         target=position_id,
                         result="FAILED",
-                        source="local_dashboard",
+                        source=command.audit_source,
                         error=error,
                     )
                     _record_message(
@@ -477,7 +480,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         action="CLOSE_ONE",
                         target=position_id,
                         result="FAILED",
-                        source="local_dashboard",
+                        source=command.audit_source,
                         error=error,
                     )
                     _record_message(
@@ -496,7 +499,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     action="CLOSE_ONE",
                     target=position_id,
                     result="SUCCESS",
-                    source="local_dashboard",
+                    source=command.audit_source,
                 )
                 self.send_response(HTTPStatus.SEE_OTHER)
                 self.send_header("Location", "/")
@@ -514,7 +517,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         action="CLOSE_ALL",
                         target="ACTIVE",
                         result="FAILED",
-                        source="local_dashboard",
+                        source=command.audit_source,
                         error=error,
                     )
                     _record_message(
@@ -535,7 +538,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         action="CLOSE_ALL",
                         target="ACTIVE",
                         result="FAILED",
-                        source="local_dashboard",
+                        source=command.audit_source,
                         error=error,
                     )
                     _record_message(
@@ -552,7 +555,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     action="CLOSE_ALL",
                     target="ACTIVE",
                     result="SUCCESS",
-                    source="local_dashboard",
+                    source=command.audit_source,
                 )
                 self.send_response(HTTPStatus.SEE_OTHER)
                 self.send_header("Location", "/")
@@ -605,6 +608,49 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return {}
         return value if isinstance(value, dict) else {}
 
+    def _authorize_json_operator_command(
+        self,
+        command_type: str,
+        payload: dict,
+        *,
+        scope: str,
+        target: str = "ACTIVE",
+    ) -> AuthorizedOperatorCommand | None:
+        try:
+            return self.server.operator_authorizer.authorize_http_command(
+                command_type,
+                headers=self.headers,
+                payload=payload,
+                local_dev_token=self.server.operator_control_token,
+                scope=scope,
+                target=target,
+                idempotency_key=str(payload.get("idempotency_key") or "") or None,
+            )
+        except OperatorAuthorizationError as exc:
+            message = str(exc)
+            status = HTTPStatus.BAD_REQUEST if "invalid" in message or "conflict" in message else HTTPStatus.FORBIDDEN
+            public = "operator token required" if message == "operator authorization required" else message
+            self._send_json({"error": public}, status)
+            return None
+
+    def _authorize_form_operator_command(
+        self,
+        command_type: str,
+        values: dict[str, list[str]],
+    ) -> AuthorizedOperatorCommand | None:
+        payload = {key: items[0] for key, items in values.items() if items}
+        try:
+            return self.server.operator_authorizer.authorize_http_command(
+                command_type,
+                headers=self.headers,
+                payload=payload,
+                local_dev_token=self.server.operator_control_token,
+                scope="OPERATOR",
+                target="ACTIVE",
+            )
+        except OperatorAuthorizationError:
+            return None
+
 
 def render_dashboard(
     read_model: DashboardReadModel,
@@ -617,7 +663,8 @@ def render_dashboard(
     from triggertrade.dashboard.product_ui import render_product_dashboard
 
     operator_state = getattr(read_model, "get_operator_trading_state", lambda: None)()
-    operator_control_token = getattr(read_model, "operator_control_token", "")
+    operator_control_token = ""
+    operator_command_submit_enabled = bool(getattr(read_model, "operator_command_submit_enabled", False))
     open_positions = read_model.list_portfolio_open_positions()
     closed_positions = read_model.list_portfolio_closed_positions()
     portfolio = {
@@ -655,6 +702,7 @@ def render_dashboard(
         initial_page=initial_page,
         operator_state=operator_state,
         operator_control_token=operator_control_token,
+        operator_command_submit_enabled=operator_command_submit_enabled,
         portfolio=portfolio,
         registry=registry,
         rules=rules,
@@ -678,6 +726,7 @@ def create_server(
     trading_rules_service: TradingRulesService | None = None,
     instrument_catalog_service: InstrumentCatalogService | None = None,
     research_service: ResearchService | None = None,
+    operator_authorizer: OperatorCommandAuthorizer | None = None,
     operator_actions=None,
     readiness_env: dict[str, str] | None = None,
     postgres_health_probe=None,
@@ -696,6 +745,7 @@ def create_server(
         trading_rules_store=TradingRulesStore(db_path),
         message_store=MessageStore(db_path),
     )
+    authorizer = operator_authorizer or OperatorCommandAuthorizer(db_path)
     server = DashboardServer(
         (host, port),
         DashboardHandler,
@@ -705,12 +755,44 @@ def create_server(
         trading_rules_service=rules_service,
         instrument_catalog_service=catalog_service,
         research_service=research_boundary,
+        operator_authorizer=authorizer,
         operator_actions=operator_actions,
         readiness_env=readiness_env,
         postgres_health_probe=postgres_health_probe,
     )
     read_model.operator_control_token = server.operator_control_token
+    read_model.operator_command_submit_enabled = authorizer.browser_commands_supported
     return server
+
+
+def _research_command_type(parts: list[str]) -> str:
+    if len(parts) == 4 and parts[:2] == ["api", "research"] and parts[3] == "backtests":
+        return "RESEARCH_BACKTEST_RUN"
+    if len(parts) == 6 and parts[:2] == ["api", "research"] and parts[3] == "backtests" and parts[5] == "select":
+        return "RESEARCH_BACKTEST_SELECT"
+    if len(parts) == 5 and parts[:2] == ["api", "research"] and parts[3] == "demo" and parts[4] == "start":
+        return "RESEARCH_DEMO_START"
+    if len(parts) == 6 and parts[:2] == ["api", "research"] and parts[3] == "demo" and parts[5] == "stop":
+        return "RESEARCH_DEMO_STOP"
+    if len(parts) == 6 and parts[:2] == ["api", "research"] and parts[3] == "demo" and parts[5] == "select":
+        return "RESEARCH_DEMO_SELECT"
+    if len(parts) == 4 and parts[:2] == ["api", "research"] and parts[3] == "archive":
+        return "RESEARCH_ARCHIVE"
+    if len(parts) == 5 and parts[:2] == ["api", "research"] and parts[3] == "decision" and parts[4] == "make-active":
+        return "RESEARCH_PROMOTION_REQUEST"
+    return "RESEARCH_UNKNOWN"
+
+
+def _operator_form_command_type(path: str) -> str:
+    if path.endswith("/pause"):
+        return "PAUSE_ENTRIES"
+    if path.endswith("/resume"):
+        return "RESUME_ENTRIES"
+    if path.endswith("/close-one"):
+        return "CLOSE_ONE"
+    if path.endswith("/close-all"):
+        return "CLOSE_ALL"
+    return "OPERATOR_UNKNOWN"
 
 
 def _close_single_position(operator_actions, *, position_id: str, symbol: str):
@@ -854,7 +936,15 @@ def create_server_from_env(
     db_path = runtime_db_path(config, env)
     catalog_service = InstrumentCatalogService(store=InstrumentCatalogStore(db_path), client=BybitDemoClient(config=config.bybit))
     rules_service = TradingRulesService(TradingRulesStore(db_path), symbol_validator=catalog_service.validate_symbol)
-    return create_server(host=host, port=port, db_path=db_path, trading_rules_service=rules_service, instrument_catalog_service=catalog_service), bootstrap.db_path
+    authorizer = operator_authorizer_from_env(db_path, env)
+    return create_server(
+        host=host,
+        port=port,
+        db_path=db_path,
+        trading_rules_service=rules_service,
+        instrument_catalog_service=catalog_service,
+        operator_authorizer=authorizer,
+    ), bootstrap.db_path
 
 
 def main() -> int:
