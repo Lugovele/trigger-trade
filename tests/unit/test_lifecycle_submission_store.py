@@ -9,6 +9,7 @@ from triggertrade.lifecycle_submission import lifecycle_client_order_id
 from triggertrade.persistence import (
     LifecycleStartGateStore,
     LifecycleSubmissionConflict,
+    LifecycleSubmissionRecord,
     LifecycleSubmissionStore,
     PostgresConnectionFactory,
     PostgresSettings,
@@ -53,6 +54,7 @@ def test_lifecycle_submission_store_persists_replays_and_recovers_dispatch_cutpo
             "0011",
             "0012",
             "0013",
+            "0014",
         ]
         factory = PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)
 
@@ -182,3 +184,39 @@ def _start_gate(uow):
         submit_authorized=authorization,
     )
     return record
+
+
+def fake_submission_record(
+    *,
+    lifecycle_state: str = "READY_TO_SUBMIT",
+    exchange_order_id: str | None = None,
+) -> LifecycleSubmissionRecord:
+    return LifecycleSubmissionRecord(
+        submission_intent_id="submission-1",
+        start_gate_id="start-gate-1",
+        order_spec_id="order-spec-1",
+        authorization_id="authorization-1",
+        capital_grant_id="capital-grant-1",
+        decision_cycle_id="decision-cycle-1",
+        set_result_id="set-result-1",
+        position_decision_id="position-decision-1",
+        construction_result_id="construction-result-1",
+        position_plan_id="position-plan-1",
+        tranche_id="tranche-1",
+        symbol="BTCUSDT",
+        direction="LONG",
+        target_client_order_id="client-order-1",
+        lifecycle_state=lifecycle_state,
+        order_spec_digest="0" * 64,
+        submit_authorized_digest="1" * 64,
+        start_gate_digest="2" * 64,
+        payload={"lifecycle_submission_intent": {"submission_intent_id": "submission-1"}},
+        payload_digest="3" * 64,
+        dispatch_attempts=1 if lifecycle_state != "READY_TO_SUBMIT" else 0,
+        last_dispatch_cutpoint_id="dispatch-1" if lifecycle_state != "READY_TO_SUBMIT" else None,
+        last_dispatch_started_at="2026-09-14 12:00:00+00" if lifecycle_state != "READY_TO_SUBMIT" else None,
+        last_uncertain_at=None,
+        last_error_code=None,
+        exchange_order_id=exchange_order_id,
+        exchange_status="create_accepted" if exchange_order_id else None,
+    )
