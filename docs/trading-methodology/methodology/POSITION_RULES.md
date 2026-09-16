@@ -1,7 +1,7 @@
 # TriggerTrade — Position Rules Methodology
 
 **File:** `POSITION_RULES.md`  
-**Version:** 1.2.14  
+**Version:** 1.2.15
 **Architecture role:** `Position Rules — Trade Decision`
 
 
@@ -303,6 +303,26 @@ Then normalize to tick size while preserving direction.
 
 No market-structure SL logic runs in FIXED mode.
 
+**F-009 FIXED-mode prerequisites and output boundary.** Before evaluating the formulas, require a valid same-bound AVAILABLE F-008 Entry E, finite positive tick t with bound factual provenance, valid LONG/SHORT direction and pinned stop mode/configuration. A missing/nonfinite/nonpositive Entry uses `DEPENDENCY_ENTRY_UNAVAILABLE` or its upstream reason; missing/nonfinite/nonpositive tick uses `MISSING_EXCHANGE_FACT`. Invalid mode uses `CONFIG_INVALID`.
+
+For FIXED only, S is an exact finite percentage where `1` means one percent:
+
+```text
+S > 0
+LONG additionally: S < 100
+```
+
+Missing/malformed/nonfinite/out-of-domain fixed configuration yields `usable=false`, `CONFIG_INVALID`, with no default. No universal SHORT upper bound is inferred from LONG. DYNAMIC does not consume fixed_pct; a supplied fixed value in that mode remains ignored / NOT_APPLICABLE.
+
+Apply exactly the outward tick normalization:
+
+```text
+LONG:  SL = floor(raw_sl / t) * t
+SHORT: SL = ceil(raw_sl / t) * t
+```
+
+Require finite `SL > 0`, integer `SL/t`, the corresponding exact rounding equality, and protective side `SL < E` LONG / `SL > E` SHORT. Arithmetic or invariant failure yields `usable=false`, `ROUNDING_ERROR`, with no actionable stop. Do not clamp, offset, retry, change S/Entry, reprice or switch to DYNAMIC as repair. Retain raw/rounded values only as non-actionable diagnostics on failure.
+
 ---
 
 # 10. Dynamic Stop Loss semantics
@@ -337,6 +357,12 @@ If unusable:
 SL_UNAVAILABLE
 → REJECT
 ```
+
+**F-009 DYNAMIC-mode pass-through.** LONG consumes F-006; SHORT consumes F-007. The chosen branch must have `usable=true`, `reason=AVAILABLE`, and the same instrument, immutable direction, frozen handoff/digest, decision cycle/result, certified F-008 Entry, pinned Position configuration and tick provenance (or validated equivalent tick identity). Its selected reference and rounded stop pass through unchanged.
+
+Unavailable or mismatched branch evidence rejects F-009 while retaining the original branch result/reason: `usable=false`, `reason=SL_UNAVAILABLE` or the dependency-specific reason, with `dependency_reason` equal to the original reason. Identity/provenance mismatch retains its mismatch diagnostics and may use `IDENTITY_INVALID` under the local reason mapping. Existing overall `SL_UNAVAILABLE -> REJECT` aggregation remains.
+
+There is no second rounding, clamp, offset, fallback, weaker-reference retry, ATR recomputation or change of branch feasibility. Fixed-percentage validation is not a DYNAMIC gate. Only the same frozen usable stop can feed later sizing and economics.
 
 ---
 
@@ -466,6 +492,32 @@ Capital and Limits issued by Portfolio
 
 All independently evaluable gates in each stage are evaluated. No final gate status is fabricated before its required grant input exists. Failed final construction does not rerun Set or revise frozen Entry/SL/TP. Before native submit Lifecycle applies only P2 current hard compatibility to the exact spec.
 
+The certified construction chain is:
+
+```text
+F-005 immutable Set direction
+→ F-008 planned Entry
+→ F-006 / F-007 directional dynamic stop, when DYNAMIC is selected
+→ F-009 stop-mode result / F-010 Dynamic Take Profit
+→ F-011 final quantity, notional and committed capital
+→ F-012 final planned R:R and minimum net edge
+```
+
+For complete F-011/F-012 construction, initial Position approval, the matching
+Portfolio grant and pinned Position configuration must already exist. F-008
+Entry, F-009 Stop and F-010 Dynamic TP must be AVAILABLE/usable and share the
+instrument, direction, cycle, handoff, grant, configuration and metadata
+bindings. The retained Fixed TP methodology is not a substitute for the F-010
+dependency in this certified chain. Stop and TP are F-011 construction
+prerequisites, not quantity-sizing operands. F-008's identical Entry/LIMIT price
+is consumed unchanged; LIMIT POST_ONLY is retained, LONG maps to BUY and SHORT
+to SELL. Position never reinterprets Set direction.
+
+This dependency statement does not move grant-dependent sizing, fees or full
+F-012 evaluation into the initial OPPORTUNITY stage. P1's existing pre-grant
+geometry/gross-R:R stage remains in place; no stage depends on a grant that its
+own initial decision must precede.
+
 ---
 
 # 15. Set direction gate
@@ -540,22 +592,31 @@ Portfolio Rules
 Semantic:
 
 ```text
-the user's own portfolio capital allocated to this logical tranche
+C: the user's own-capital bound supplied by the matching, non-reserving Portfolio grant
 ```
 
 Requirements:
 
 ```text
-requested_capital_per_tranche > 0
-finite
+C = requested_capital_per_tranche
+C > 0
+finite exact decimal
+C / Qcapital is an integer
 same settlement/accounting currency as Portfolio Rules
+same initial approval, cycle, handoff, grant, configuration and metadata bindings
 ```
 
 If invalid:
 
 ```text
-REQUESTED_CAPITAL_INVALID
+UNAVAILABLE / INVALID_CAPITAL_GRANT
 ```
+
+A missing, malformed, nonfinite, nonpositive or Qcapital-unaligned grant
+cannot produce usable construction. Do not round or repair an unaligned C.
+Grant issuance does not reserve capital or create a hold. The local F-011
+outcome above is aggregated under §43; unrelated generic S-003 reason names are
+not renamed.
 
 ---
 
@@ -577,10 +638,14 @@ C × L
 
 This is a Position Rules technical calculation.
 
-Portfolio Rules continues to account only:
+C is the non-reserving grant bound. Final F-011 construction determines
+persisted committed capital H (defined in §20); Portfolio later holds and
+accounts that same H. Neither C nor leveraged target notional T is automatically
+reserved. In particular:
 
 ```text
-C
+T = target_order_notional = C × L
+Portfolio hold amount after approval/confirmation = H
 ```
 
 The leveraged order notional is not fed back into portfolio allocation logic.
@@ -629,8 +694,9 @@ final_qty × Entry
 and:
 
 ```text
-actual_committed_capital =
-actual_order_notional / L
+A = actual_committed_capital_exact = actual_order_notional / L
+H = actual_committed_capital_persisted = ceil_Qcapital(A)
+actual_committed_capital = H
 ```
 
 Only TT_NUMERIC_V1 output-class rounding is permitted. Arbitrary small numerical differences are not acceptable; the grant-aligned actual commitment invariant must hold exactly.
@@ -649,6 +715,58 @@ actual_order_notional
 ```
 
 Position Rules does not increase quantity merely to force exact capital equality.
+
+For F-011 only, A denotes exact own capital, not the ATR symbol used in
+Entry/Stop/TP Parts. Use the following exact local symbols and invariants:
+
+```text
+C = requested_capital_per_tranche
+L = configured leverage
+E = certified F-008 planned Entry / LIMIT price
+q = qty_step
+p = Qcapital = 0.000000000001
+T = C * L
+R = T / E
+Q = q * floor(R / q)
+N = Q * E
+A = N / L
+H = p * ceil(A / p)
+
+Q / q is an integer
+Q = q * floor(R / q)
+T = C * L
+R = T / E
+N = Q * E
+A = N / L
+H = p * ceil(A / p)
+A <= C
+H <= C
+```
+
+Retain both capital-bound checks even though correct quantity flooring and an
+aligned C imply them. A violation is CAPITAL_BOUND_VIOLATION, not permission to
+repair a rounded value. Equality passes the inclusive bounds. No failed gate
+permits clamping, splitting, resizing, changed leverage, a revised price or a
+revised grant.
+
+Existing Order Spec and confirmation scalars bind the same construction:
+`entry.quantity = approved_quantity = Q`, `leverage = approved_leverage = L`,
+`economics.target_order_notional = T`,
+`economics.actual_order_notional = approved_actual_order_notional = N`, and
+`economics.actual_committed_capital = approved_actual_committed_capital = H`.
+There is no new wire field. T, Q, N and H serialize as complete exact finite
+decimals; N is not rounded to Qcapital. Division preserves exact rational R/A;
+when recurring, retain local reduced integer numerator / positive denominator
+pairs encoded as strings, not external scalar contracts.
+
+Retain the existing cycle/result/decision/grant/construction/plan/tranche IDs,
+configuration identity/version/content digest, bound grant payload digest and
+contract version, source/profile/metadata revisions, original venue facts,
+Entry/Stop/TP identities and values, numeric policy, exact/rational construction
+values, ordered gates/reasons, spec digest and confirmation scalars. Replay
+uses these frozen facts, never a current API refresh. Changed content under an
+identity, missing required replay evidence or inconsistent persisted outputs
+fails closed and creates no new grant, approval or resized spec.
 
 ---
 
@@ -676,6 +794,43 @@ QTY_BELOW_MINIMUM
 QTY_ABOVE_MAXIMUM
 NOTIONAL_BELOW_MINIMUM
 ```
+
+For F-011, C, L, E, qty_step, minimum quantity, minimum notional and venue
+maximum leverage must be positive finite exact decimal facts with the required
+units and provenance. `min_qty` is an alias for canonical `min_order_qty`, not
+another threshold; the required contract field remains `min_order_qty`.
+Contradictory supplied aliases, units or provenance, nonpositive/invalid facts,
+or inconsistent min/max values reject. Do not round minimum/maximum thresholds
+to the quantity grid.
+
+`max_order_qty_status = AVAILABLE` requires:
+
+```text
+max_order_qty > 0
+applicable provenance
+max_order_qty >= min_order_qty
+```
+
+For the declared Bybit linear LIMIT POST_ONLY profile, require the applicable:
+
+```text
+lotSizeFilter.maxOrderQty
+```
+
+`max_order_qty_status = UNAVAILABLE` always prevents usable construction, even
+if a stale numeric maximum accompanies it.
+
+`max_order_qty_status = NOT_APPLICABLE` requires a null maximum and affirmative
+evidence from the pinned profile that no maximum applies. Missing evidence
+cannot establish non-applicability.
+
+Unknown statuses, contradictory facts and unsupported non-applicability reject.
+Facts come through Capital and Limits; Position performs no API refresh.
+
+A correctly floored Q = 0 is QTY_ZERO_AFTER_FLOOR. Otherwise preserve the
+inclusive minimum/maximum/notional checks above; equality passes. Independently
+determinable failures are retained and ordered under the F-011 table in §43.
+Failed construction exposes no approved/actionable sizing.
 
 ---
 
@@ -710,11 +865,19 @@ margin_required =
 actual_order_notional / L
 ```
 
-which should approximately equal:
+Under F-011 this is an exact equality, not an approximate comparison:
 
 ```text
-actual_committed_capital
+margin_required = A = actual_order_notional / L
+actual_committed_capital = H = ceil_Qcapital(A)
+0 <= H - A < Qcapital
 ```
+
+L must be a positive finite exact decimal with a valid positive venue maximum
+and applicable provenance. Beyond finite decimal representation, L > 0 and the
+supplied maximum, no integer, step, precision or L >= 1 restriction is added.
+Invalid configured leverage and violated venue maximum retain their separate
+local F-011 outcomes in §43.
 
 Venue-specific maintenance margin / liquidation mechanics are technical constraints and may be added later.
 
@@ -747,6 +910,43 @@ is used by Portfolio Rules for:
 ---
 
 # 23. Gross risk distance
+For complete F-012 evaluation, require usable certified F-008 Entry, F-009
+Stop, F-010 Dynamic TP and successful F-011 sizing, with matching instrument,
+direction, cycle, handoff, configuration, grant and metadata bindings. E, SL,
+TP, Q and N are positive finite exact decimals; require N = Q * E. Consume
+final prices and quantity unchanged, retaining LIMIT POST_ONLY entry and MARKET
+exits. No rerounding, resizing or repair is permitted. These post-grant
+prerequisites do not displace P1's initial gross-opportunity evaluation.
+
+Before applying the absolute-distance descriptions below, validate directional
+geometry:
+
+```text
+s = 1 for LONG, -1 for SHORT
+E = final certified Entry
+Q = final certified quantity
+N = actual_order_notional = Q * E
+dr = s * (E - SL)
+dw = s * (TP - E)
+
+if dr = 0: FAIL / ZERO_RISK_DISTANCE; do not divide for R:R
+otherwise if dr < 0 or dw <= 0: FAIL / INVALID_GEOMETRY
+valid geometry requires dr > 0 and dw > 0
+```
+
+Only after these checks do the absolute-distance formulas represent the
+certified risk/reward distances; they must not hide wrong-side geometry. For
+valid geometry:
+
+```text
+risk_distance_price = dr
+reward_distance_price = dw
+risk_distance_pct = 100 * dr / E
+reward_distance_pct = 100 * dw / E
+gross_rr = dw / dr
+gross_profit_tp = dw * Q
+gross_loss_sl = dr * Q
+```
 
 ```text
 risk_distance_price =
@@ -856,6 +1056,23 @@ MISSING_FEE_RATE
 → REJECT
 ```
 
+F-012 uses exact finite **signed fractional rates**, applicable to the
+bound instrument/account fee schedule and execution mechanics at the frozen
+construction time. Require matching fee_schedule_version, fee_effective_at and
+fee_rate_source_ref plus the existing identity/profile/configuration bindings.
+Supported zero fees and negative rebates preserve their signs. Missing values
+are not zero; there is no sign clamp, guessed rate, research-rate substitution
+or fee refresh.
+
+For formula-local reporting, missing/unavailable fee facts or provenance use
+UNAVAILABLE / MISSING_EXCHANGE_FACT identifying the fee field. Malformed or
+nonfinite rates, unsupported units or failed applicability use UNAVAILABLE /
+INVALID_EXCHANGE_FACT; conflicting supplied bindings use IDENTITY_INVALID
+with §43 precedence. The generic MISSING_FEE_RATE rejection above does not
+replace these local F-012 distinctions. A-003's approved factual policy basis
+is sufficient for these planned inputs; realized attribution is not being
+substituted for planned economics.
+
 ---
 # 29. Entry fee
 
@@ -879,7 +1096,7 @@ This is a plan-stage fee calculation based on the intended order mechanics.
 
 # 30. TP exit fee
 
-Baseline attached TP execution is `MARKET`, so Position Rules uses the governed current **taker fee rate**.
+Baseline attached TP execution is `MARKET`, so Position Rules uses the governed **taker fee rate frozen in the bound construction/grant**.
 
 ```text
 expected_tp_exit_fee =
@@ -894,6 +1111,11 @@ TP × final_qty
 ```
 
 The rate comes from the governed upstream fee-fact contract.
+
+The bound factual rate and schedule/effective/source provenance remain
+unchanged throughout calculation and replay. Position must not refresh the
+rate after freezing. TP exit notional remains TP × Q, not Entry notional,
+committed capital or target notional.
 
 ---
 
@@ -957,6 +1179,27 @@ other_exchange_costs_if_deterministic
 ```
 
 Credits must preserve sign.
+
+The F-012 baseline additional TP-cost set is empty:
+
+```text
+other_exchange_costs_if_deterministic = 0
+entry_fee = N * maker_fee_rate
+tp_exit_notional = TP * Q
+tp_exit_fee = TP * Q * taker_fee_rate
+tp_total_cost = entry_fee + tp_exit_fee
+net_profit_tp = dw * Q - tp_total_cost
+net_edge_pct = 100 * net_profit_tp / N
+funding_in_planned_net_edge = false
+```
+
+An asserted applicable additional cost requires a separately approved
+deterministic definition and reviewed integration. Without that authority,
+economics is UNAVAILABLE / COST_POLICY_UNAVAILABLE; the asserted applicable
+cost must not silently become zero. Funding, research spread/slippage and
+simulated cost assumptions are not inserted into this certified planned edge.
+The formula above uses actual notional N = Q × E in the denominator, never C,
+H or target notional T.
 
 ---
 
@@ -1023,11 +1266,27 @@ expected_sl_exit_fee
 other_deterministic_sl_costs
 ```
 
+The additional SL-cost set is empty in the certified baseline:
+
+```text
+other_deterministic_sl_costs = 0
+sl_exit_notional = SL * Q
+sl_exit_fee = SL * Q * taker_fee_rate
+sl_total_cost = entry_fee + sl_exit_fee
+```
+
+The SL fee/net-R:R extension is an optional owner-local diagnostic, not an
+additional external field or hard gate. As with §33, an asserted applicable
+extra cost without separately approved deterministic definition and integration
+uses COST_POLICY_UNAVAILABLE rather than silently inserting or zeroing it.
+Planned funding remains excluded.
+
 ---
 
 # 37. Net SL loss
 
-Positive loss magnitude:
+Signed optional net-loss diagnostic (gross_loss_sl remains the positive
+gross loss magnitude after valid geometry):
 
 ```text
 net_loss_sl =
@@ -1038,16 +1297,31 @@ sl_total_cost
 
 Planned SL economics exclude funding, just as planned Net Edge does. Signed actual funding receipts/payments are accounted only after they occur by Lifecycle; planned fee/rebate signs remain preserved.
 
+Supported signed rebates can make net_loss_sl zero or negative. That is
+not itself a mandatory construction failure; §38 governs the optional net-R:R
+denominator without converting the signed value to an absolute loss.
+
 ---
 
 # 38. Net R:R diagnostic
 
+Only when net_loss_sl > 0:
+
 ```text
-net_rr =
-net_profit_tp
-/
-net_loss_sl
+net_rr = net_profit_tp / net_loss_sl
 ```
+
+Otherwise:
+
+```text
+net_rr = null
+diagnostic_status = UNAVAILABLE
+diagnostic_reason = NONPOSITIVE_NET_LOSS_SL
+```
+
+Do not divide at a nonpositive denominator or repair it with absolute value,
+infinity or fabricated zero. Diagnostic absence or undefined net R:R does not
+reject an otherwise valid construction.
 
 This is diagnostic only in baseline v0.2.1.
 
@@ -1071,6 +1345,25 @@ RR_BELOW_MINIMUM
 ```
 
 No price repair is permitted.
+
+For the enabled comparison above, “Else” means that an evaluable enabled
+comparison failed; it does not mean the rule was disabled. Enablement must be
+an actual Boolean. An enabled configured_minimum_rr must be present and an
+exact finite decimal; no default or additional positive lower bound is inferred.
+Disabled thresholds are unused. Apply the exact local branches:
+
+```text
+disabled -> NOT_APPLICABLE
+enabled with blocked prerequisite -> UNAVAILABLE
+enabled and dw >= configured_minimum_rr * dr -> PASS
+enabled and dw < configured_minimum_rr * dr -> FAIL / RR_BELOW_MINIMUM
+```
+
+The comparison requires previously validated dr > 0 and dw > 0. R:R and its
+threshold are dimensionless; comparison uses exact pre-report values, not a
+rounded ratio. Unknown enablement is CONFIG_INVALID, never fabricated disabled.
+The local minimum_rr_result and existing economics.gross_rr do not add a
+minimum_rr field to construction contract v5.
 
 ---
 
@@ -1104,7 +1397,43 @@ If disabled:
 status = NOT_APPLICABLE
 ```
 
-A disabled gate is never represented as fabricated `PASS`. All fee effects remain inside an enabled calculation.
+A disabled gate is never represented as fabricated `PASS`. Mandatory fee/economic/provenance outputs remain required even when this
+gate is disabled.
+
+Enablement must be an actual Boolean. An enabled threshold must be
+present and an exact finite decimal, without an invented positivity bound;
+a disabled threshold is unused. Compare in percent units, exactly:
+
+```text
+100 * net_profit_tp >= configured_minimum_net_edge_pct * N
+N = Q * E > 0
+```
+
+Zero or negative net edge is valid signed data; the configured comparison
+determines PASS/FAIL, including a nonpositive configured threshold. Disabled
+rules remain NOT_APPLICABLE and blocked enabled rules remain UNAVAILABLE.
+For local rule results, disabled configured_value is null; calculated_value is
+the valid reported ratio when available, otherwise null; reasons for PASS and
+NOT_APPLICABLE are null. An unknown flag is not represented as disabled.
+
+Successful construction requires numeric planned net edge, maker/taker facts
+and their provenance even with Minimum Net Edge disabled. Missing/invalid fees
+therefore block construction while that disabled gate remains NOT_APPLICABLE.
+Disabling both rules never bypasses dependencies, geometry, integrity or
+required economics. Preserve the existing minimum_net_edge wire rule result.
+
+Apply TT_NUMERIC_V1: exact decimal products/sums and exact rational division,
+without intermediate rounding, binary floats or epsilon comparisons. Reports
+use Qratio = 10^-18 and `Qratio * floor(exact_ratio / Qratio)`, including floor
+toward negative infinity for negative values. Preserve reduced signed integer
+numerator / positive denominator string pairs for exact ratios alongside their
+canonical reports. Reporting quantization cannot decide either gate.
+
+Retain the frozen dependency/configuration/grant/fee provenance, exact
+construction values, numerical policy and ordered outcomes with the existing
+identity/digest lineage for replay. Available diagnostic values from a non-PASS
+result are not approved/actionable economics; no re-evaluation may refresh fees
+or repair frozen prices/quantity.
 
 ---
 
@@ -1177,6 +1506,71 @@ Required `UNAVAILABLE` rejects the position.
 Calculate all independently evaluable gates in the current stage. Initial opportunity FAIL/required UNAVAILABLE yields REJECT; otherwise initial APPROVE. Capital-dependent gates do not participate until the grant is issued; they are recorded only as NOT_YET_EVALUATED in the initial envelope.
 
 During post-grant construction, any mandatory FAIL or required UNAVAILABLE yields CONSTRUCTION_RESULT(REJECT), otherwise CONSTRUCTED with immutable Order Spec. Disabled gates retain NOT_APPLICABLE. No second initial APPROVE is emitted and no failed gate is repaired by modifying the trade.
+
+### F-011 local construction results
+
+Table order determines the primary reason. Preserve all determinable secondary
+failures in that order, using ordinal field-name order for ties. Absent
+dependency objects use their dependency reason; inconsistent supplied bindings
+use `IDENTITY_INVALID`. A prerequisite-blocked gate is `UNAVAILABLE`, never
+`PASS`; only a proven inapplicable maximum subcheck is `NOT_APPLICABLE`. Every
+non-PASS construction exposes no approved/actionable sizing.
+
+| Condition, in precedence order | Result / reason |
+|---|---|
+| Invalid initial-approval binding; inconsistent supplied identity, digest, provenance, direction, currency/unit/profile or required version | `UNAVAILABLE / IDENTITY_INVALID` |
+| Missing or invalid pinned configuration envelope | `UNAVAILABLE / CONFIG_INVALID` |
+| Missing grant or missing/malformed/nonfinite/nonpositive/Qcapital-unaligned `C` | `UNAVAILABLE / INVALID_CAPITAL_GRANT` |
+| Missing/unusable F-008 Entry, F-009 Stop or F-010 TP; invalid respective price | `UNAVAILABLE / DEPENDENCY_ENTRY_UNAVAILABLE`, then `DEPENDENCY_STOP_UNAVAILABLE`, then `DEPENDENCY_TP_UNAVAILABLE`; preserve upstream reasons |
+| Missing/malformed/nonfinite/nonpositive configured `L` | `FAIL / INVALID_LEVERAGE` |
+| Missing required venue fact, status or provenance, accounting for the maximum-status rules | `UNAVAILABLE / MISSING_EXCHANGE_FACT` |
+| Malformed/nonfinite/nonpositive required venue value; alias conflict; inconsistent min/max; unknown status or unsupported `NOT_APPLICABLE` | `UNAVAILABLE / INVALID_EXCHANGE_FACT` |
+| `max_order_qty_status = UNAVAILABLE` | `UNAVAILABLE / MAX_ORDER_QTY_UNAVAILABLE` |
+| `L >` valid `venue_max_leverage` | `FAIL / LEVERAGE_ABOVE_MAXIMUM` |
+| Arithmetic failure or inconsistent floor/grid/product/ceiling/serialized-output invariant, excluding the separately checked capital bounds | `UNAVAILABLE / NUMERIC_INVARIANT_VIOLATION` |
+| `A > C` or `H > C` | `FAIL / CAPITAL_BOUND_VIOLATION`; retain separate exact/persisted check results |
+| Correctly floored `Q = 0` | `FAIL / QTY_ZERO_AFTER_FLOOR` |
+| Positive `Q < min_order_qty` | `FAIL / QTY_BELOW_MINIMUM` |
+| `AVAILABLE` maximum and `Q > max_order_qty` | `FAIL / QTY_ABOVE_MAXIMUM` |
+| `N < min_notional` | `FAIL / NOTIONAL_BELOW_MINIMUM` |
+| All required prerequisites, invariants and gates pass | `PASS / AVAILABLE` |
+
+### F-012 local planned-economics results
+
+Table order determines the primary local F-012 result. Retain every
+independently determinable secondary failure in order, with ordinal field-name
+ordering for ties. Missing whole dependency objects use dependency reasons;
+inconsistent supplied bindings use `IDENTITY_INVALID`. Blocked enabled gates
+are `UNAVAILABLE`; validated disabled gates remain `NOT_APPLICABLE`.
+
+| Priority | Condition | Local result / reason |
+|---:|---|---|
+| 1 | Invalid/missing required identity within supplied evidence; conflicting digest, direction, version, unit, profile or provenance binding | `UNAVAILABLE / IDENTITY_INVALID` |
+| 2 | Missing/invalid pinned configuration, invalid enabled flag, or missing/malformed/nonfinite enabled threshold | `UNAVAILABLE / CONFIG_INVALID` |
+| 3 | Missing/unusable dependency or missing/malformed/nonfinite/nonpositive required output | `UNAVAILABLE / DEPENDENCY_ENTRY_UNAVAILABLE`, then `DEPENDENCY_STOP_UNAVAILABLE`, then `DEPENDENCY_TP_UNAVAILABLE`, then `DEPENDENCY_SIZING_UNAVAILABLE`; retain upstream reasons |
+| 4 | Required arithmetic failure, `N != Q*E`, or inconsistent required exact/report/output invariant | `UNAVAILABLE / NUMERIC_INVARIANT_VIOLATION` |
+| 5 | Valid positive Entry and Stop coincide: `dr = 0` | `FAIL / ZERO_RISK_DISTANCE`; R:R is unavailable, never divided |
+| 6 | Otherwise `dr < 0` or `dw <= 0` | `FAIL / INVALID_GEOMETRY`; enabled economic gates are unavailable |
+| 7 | Required maker/taker fact or required fee provenance is absent/unavailable | `UNAVAILABLE / MISSING_EXCHANGE_FACT`, identifying the fee field |
+| 8 | Supplied fee is malformed/nonfinite, has unsupported units, or fails established applicability; binding conflicts already use priority 1 | `UNAVAILABLE / INVALID_EXCHANGE_FACT` |
+| 9 | Applicable additional cost lacks the separately approved deterministic definition/integration required above | `UNAVAILABLE / COST_POLICY_UNAVAILABLE` |
+| 10 | Evaluable enabled gross R:R comparison fails | `FAIL / RR_BELOW_MINIMUM` |
+| 11 | Evaluable enabled net-edge comparison fails | `FAIL / NET_EDGE_BELOW_MINIMUM` |
+
+With no failures:
+
+```text
+PASS / AVAILABLE
+```
+
+Any overall non-PASS result prevents successful construction and approved /
+actionable economics. Available values remain diagnostic.
+
+These formula-local ordered outcomes coexist with the original S-003
+stage/global aggregation above. Initial capital-dependent gates remain
+NOT_YET_EVALUATED. Validated disabled gates remain NOT_APPLICABLE but never
+waive independently required dependencies, geometry, identity or economics.
+No local reason table creates a second initial approval or a new wire enum.
 
 ---
 
@@ -1520,6 +1914,96 @@ DEPENDENCY_TP_UNAVAILABLE
 
 ```
 
+**F-009 local reasons.** Preserve the existing generic/global vocabulary. The formula-local mapping is:
+
+| Condition | Reason |
+|---|---|
+| invalid stop-loss mode | `CONFIG_INVALID` |
+| FIXED mode missing `fixed_sl_pct` | `CONFIG_INVALID` |
+| malformed, nonfinite or nonpositive `fixed_sl_pct` | `CONFIG_INVALID` |
+| LONG FIXED `fixed_sl_pct >= 100` | `CONFIG_INVALID` |
+| missing, nonfinite or nonpositive Entry | `DEPENDENCY_ENTRY_UNAVAILABLE` or source-specific entry reason |
+| missing, nonfinite or nonpositive tick size | `MISSING_EXCHANGE_FACT` |
+| arithmetic failure or invalid fixed rounded stop | `ROUNDING_ERROR` |
+| dynamic branch unavailable | `SL_UNAVAILABLE` with original branch `dependency_reason` |
+| dynamic branch identity/provenance mismatch | `SL_UNAVAILABLE` or `IDENTITY_INVALID`, preserving mismatch diagnostics |
+
+The branch `dependency_reason` is retained; these local results do not rename unrelated S-003 outcomes or wire enums.
+
+**F-010 local reasons.** Apply the exact primary sequence in Part IV §24 and retain secondary diagnostics. The local conditions are:
+
+| Condition | Reason |
+|---|---|
+| invalid/missing TP mode/configuration | `CONFIG_INVALID` |
+| invalid F-008/handoff identity, digest, provenance, duplicate/conflicting IDs or invalid binding | `IDENTITY_INVALID` |
+| `E` missing or `<= 0` | `MISSING_ENTRY_REFERENCE` |
+| `A` missing or `<= 0` | `MISSING_ATR` |
+| `t` missing or `<= 0` | `MISSING_TICK_SIZE` |
+| `set_family` missing/invalid | `MISSING_SET_FAMILY` |
+| thesis policy missing/invalid | `MISSING_THESIS_REFERENCE_POLICY` |
+| `reference_geometry.levels` unavailable/unusable, or usable but no governed directionally permitted levels for the active direction/family | `NO_FAVORABLE_SIDE_GEOMETRY` |
+| required thesis reference invalid after valid handoff primitives | `THESIS_REFERENCE_INVALID` |
+| directional_pool non-empty but zero strict favorable-side references | `NO_ELIGIBLE_REFERENCE` |
+| no reachable target after allowed too-close skips | `NO_REACHABLE_TARGET` |
+| next traversed candidate too far | `TARGET_TOO_FAR` |
+| inward rounding makes target too close | `TARGET_TOO_CLOSE_AFTER_ROUNDING` |
+| arithmetic or rounded-output invariant failure | `ROUNDING_ERROR` |
+
+### F-011 local reason vocabulary
+
+The F-011 table in §43 governs its local primary/secondary outcome order and
+spelling. It does not replace unrelated generic/global S-003 codes or wire
+enums. Retain upstream dependency reasons.
+
+```text
+IDENTITY_INVALID
+CONFIG_INVALID
+INVALID_CAPITAL_GRANT
+DEPENDENCY_ENTRY_UNAVAILABLE
+DEPENDENCY_STOP_UNAVAILABLE
+DEPENDENCY_TP_UNAVAILABLE
+INVALID_LEVERAGE
+MISSING_EXCHANGE_FACT
+INVALID_EXCHANGE_FACT
+MAX_ORDER_QTY_UNAVAILABLE
+LEVERAGE_ABOVE_MAXIMUM
+NUMERIC_INVARIANT_VIOLATION
+CAPITAL_BOUND_VIOLATION
+QTY_ZERO_AFTER_FLOOR
+QTY_BELOW_MINIMUM
+QTY_ABOVE_MAXIMUM
+NOTIONAL_BELOW_MINIMUM
+AVAILABLE
+```
+
+### F-012 local reason vocabulary
+
+Use §43's exact local precedence and preserve upstream reasons. STOP in
+DEPENDENCY_STOP_UNAVAILABLE is the certified local spelling; do not rename
+unrelated legacy/global SL reason codes.
+
+```text
+IDENTITY_INVALID
+CONFIG_INVALID
+DEPENDENCY_ENTRY_UNAVAILABLE
+DEPENDENCY_STOP_UNAVAILABLE
+DEPENDENCY_TP_UNAVAILABLE
+DEPENDENCY_SIZING_UNAVAILABLE
+NUMERIC_INVARIANT_VIOLATION
+ZERO_RISK_DISTANCE
+INVALID_GEOMETRY
+MISSING_EXCHANGE_FACT
+INVALID_EXCHANGE_FACT
+COST_POLICY_UNAVAILABLE
+RR_BELOW_MINIMUM
+NET_EDGE_BELOW_MINIMUM
+AVAILABLE
+```
+
+NONPOSITIVE_NET_LOSS_SL is an optional diagnostic reason with null net_rr, not
+a new mandatory construction rejection. Generic S-003/global codes and existing
+wire enums remain unchanged.
+
 ---
 
 # 53. Hard gates
@@ -1721,16 +2205,25 @@ No taker fallback.
 
 # 8. Approved entry reference level types
 
+LONG permits only:
+
 ```text
 SWING_LOW_15M
-SWING_HIGH_15M
 SWING_LOW_1H
-SWING_HIGH_1H
 PREVIOUS_DAY_LOW
-PREVIOUS_DAY_HIGH
 RANGE_LOW
+```
+
+SHORT permits only:
+
+```text
+SWING_HIGH_15M
+SWING_HIGH_1H
+PREVIOUS_DAY_HIGH
 RANGE_HIGH
 ```
+
+These restrictions apply to both thesis overrides and default candidates. A price-side test does not admit a wrong structural type. BREAKOUT_RECLAIM adds no implicit high-to-support or low-to-resistance conversion.
 
 No free-form level is permitted.
 
@@ -1815,6 +2308,22 @@ PREFERRED
 NONE
 ```
 
+**F-008 preflight precedes every policy branch.** Consume a valid committed LONG/SHORT Market Handoff for the same `decision_cycle_id`, `set_result_id`, immutable handoff digest and pinned Position configuration. Invalid contract identity, direction, provenance or required structure terminates handoff consumption before selection; it is not a fallback warning. Non-null thesis references require unique exact IDs and consistent originating role, occurrence, type, timeframe and price evidence. Missing/conflicting origin bindings, dangling or duplicate IDs and producer availability violations reject the handoff before any REQUIRED/PREFERRED/NONE branch. Preserve the original producer reference even when it fails calculation eligibility; a selected calculation reference is not a new producer binding.
+
+`NONE` requires both `entry_context.thesis_reference_level_id` and its originating binding to be null. A contract-valid PREFERRED null pair is permitted. For REQUIRED, absent or calculation-ineligible thesis evidence has no fallback and yields `THESIS_ENTRY_REFERENCE_INVALID` after the binding preflight.
+
+The match reference S, received Q18 ATR A and tick t must be finite and strictly positive; family and policy must be valid. Defensive missing/malformed/nonfinite/nonpositive primitive diagnostics have this primary order:
+
+```text
+MISSING_SET_MATCH_REFERENCE
+MISSING_ATR
+MISSING_TICK_SIZE
+MISSING_SET_FAMILY
+MISSING_THESIS_REFERENCE_POLICY
+```
+
+Retain all known failures; diagnostics do not authorize an invalid handoff. References must have positive finite prices, an approved directional type and exact availability as-of `matched_at`. Strict side improvement and the inclusive raw 0.10–1.25 ATR band precede default ranking. Threshold checks use exact arithmetic, equivalently `10*d >= A` and `4*d <= 5*A`; no extra quantizer, epsilon or recovered ATR precision is permitted.
+
 ---
 
 # 13. Thesis-reference REQUIRED
@@ -1854,7 +2363,7 @@ If the preferred thesis reference is valid and inside the allowed band:
 selected entry reference = thesis reference
 ```
 
-If invalid, TOO_SHALLOW, or TOO_DEEP:
+Only after §12 producer/binding preflight, a contract-valid null pair or a valid-bound reference failing F-008 type/side/raw-depth eligibility (including TOO_SHALLOW or TOO_DEEP) uses:
 
 ```text
 warning = INVALID_THESIS_ENTRY_REFERENCE
@@ -1862,6 +2371,8 @@ continue with default candidate pool
 ```
 
 The preferred thesis reference does not terminate the default pool when it is outside the admissibility band.
+
+A missing, dangling, duplicate, conflicting or producer-future binding is a handoff rejection, never this warning/fallback branch. Once a reference is selected, any rounding or rounded-band failure is terminal, including PREFERRED; no alternate-reference retry is permitted.
 
 ---
 
@@ -1950,10 +2461,12 @@ If multiple eligible levels share the same structural type:
 ```text
 1. latest available_at
 2. smaller improvement distance to set_match_reference_price
-3. lexical level_id
+3. ascending case-sensitive ordinal Unicode code-point level_id (shorter prefix first)
 ```
 
 `age_seconds` is diagnostic only.
+
+Use exact `available_at`, not integer `age_seconds`; neither input array order nor locale-sensitive collation participates.
 
 ---
 
@@ -2098,13 +2611,18 @@ PREFERRED thesis reference TOO_DEEP
 
 # 26. No eligible entry reference
 
-Use:
+For default selection, the base pool contains positive finite, approved directionally typed references with exact availability as-of `matched_at`, before strict improvement and depth checks. Use:
 
 ```text
-NO_ELIGIBLE_ENTRY_REFERENCE
+empty base pool
+    -> NO_ELIGIBLE_ENTRY_REFERENCE
+nonempty base pool with no strictly improving reference
+    -> NO_ENTRY_SIDE_GEOMETRY
+improving references but none inside the inclusive raw ATR band
+    -> NO_ADMISSIBLE_ENTRY_DEPTH
 ```
 
-when structural reference geometry exists but zero governed references pass basic direction/improvement-side eligibility.
+REQUIRED thesis eligibility failure takes precedence over these pool-exhaustion reasons. Preserve reference exclusions and genuine PREFERRED fallback warnings; no raw-ineligible reference can be rescued by rounding.
 
 ---
 
@@ -2184,7 +2702,20 @@ This preserves requested price improvement.
 
 # 31. Post-rounding improvement validation
 
-Recompute:
+Before recomputing depth, require the selected-reference rounding to satisfy:
+
+```text
+finite rounded_entry_price > 0
+rounded_entry_price / tick_size is an integer
+LONG: rounded_entry_price = floor(selected_reference_price / tick_size) * tick_size
+      rounded_entry_price < set_match_reference_price
+SHORT: rounded_entry_price = ceil(selected_reference_price / tick_size) * tick_size
+       rounded_entry_price > set_match_reference_price
+```
+
+Arithmetic failure or failed positivity/grid/correct-outward-rounding/strict-side invariants yields `ROUNDING_ERROR`. Invalid input tick belongs to §12 input rejection. No usable entry price may be exposed after a failure.
+
+Then recompute:
 
 ```text
 rounded_improvement_atr =
@@ -2222,6 +2753,8 @@ return:
 ```text
 ENTRY_TOO_DEEP_AFTER_ROUNDING
 ```
+
+Any selected-reference rounding or rounded-band failure is terminal: no alternative reference, clamp, offset or repricing, including under PREFERRED. Diagnostic prices remain non-actionable.
 
 ---
 
@@ -2497,14 +3030,22 @@ PHASE A — PRICE GENERATION
 M = set_match_reference_price
 A = ATR_15m
 
-validate REQUIRED/PREFERRED/NONE thesis policy
+apply §12 preflight before selection:
+    valid same-bound committed LONG handoff/configuration and immutable producer evidence
+    finite positive M, received A and tick; valid family/policy
+    reject invalid/dangling/duplicate/conflicting/producer-future bindings
+    NONE requires thesis ID and binding both null
+then validate REQUIRED/PREFERRED/NONE thesis policy
 
-build LONG default structural pool using:
+build LONG base pool before side/depth filtering:
+    positive finite prices, §8 permitted LOW types only,
+    exact availability as-of matched_at; same restrictions apply to thesis
+build default structural ordering using:
 hierarchy_for(entry_context.set_family)
 
 where the canonical family tables in Sections 16–19 are authoritative; for RANGE this starts with RANGE_LOW.
 
-for every basic-valid reference:
+for every base-pool reference (exclude non-improving side before depth):
     require reference.price < M
     improvement_atr = (M - reference.price) / A
 
@@ -2519,31 +3060,45 @@ for every basic-valid reference:
 
 REQUIRED thesis reference:
     if not ELIGIBLE:
-        THESIS_ENTRY_REFERENCE_INVALID
+        THESIS_ENTRY_REFERENCE_INVALID; terminate
     else:
         select it
 
 PREFERRED thesis reference:
-    if ELIGIBLE:
+    if valid-bound and ELIGIBLE:
         select it
-    else:
-        warning + use default ELIGIBLE pool
+    else if contract-valid null pair or valid-bound calculation ineligibility:
+        INVALID_THESIS_ENTRY_REFERENCE warning + use default ELIGIBLE pool
+    binding errors already terminated in preflight
 
-default pool:
-    if zero basic-valid refs:
-        NO_ELIGIBLE_ENTRY_REFERENCE
+default pool only if no thesis reference was selected (NONE or permitted PREFERRED fallback):
+    if zero base-pool refs:
+        NO_ELIGIBLE_ENTRY_REFERENCE; terminate
 
-    if zero ELIGIBLE refs:
-        NO_ADMISSIBLE_ENTRY_DEPTH
+    if base pool nonempty but no reference.price < M:
+        NO_ENTRY_SIDE_GEOMETRY; terminate
+
+    if improving references exist but zero ELIGIBLE refs:
+        NO_ADMISSIBLE_ENTRY_DEPTH; terminate
 
     select highest structural-priority ELIGIBLE ref
+    within type: latest exact available_at, smallest raw improvement distance,
+                 ascending case-sensitive Unicode code-point level_id
 
 raw_entry = selected reference price
 rounded_entry = floor(raw_entry / tick) × tick
 
+before success require finite positive rounded_entry, exact tick grid,
+    rounded_entry = floor(raw_entry / tick) * tick,
+    rounded_entry < M
+arithmetic or invariant failure -> ROUNDING_ERROR; terminate
+
 recompute rounded improvement:
     < 0.10 → ENTRY_TOO_SHALLOW_AFTER_ROUNDING
     > 1.25 → ENTRY_TOO_DEEP_AFTER_ROUNDING
+
+Any selected-reference rounding/band failure terminates without another reference,
+including PREFERRED. Failed diagnostic prices are non-actionable.
 
 EMIT IMMUTABLE ENTRY
 
@@ -2565,14 +3120,22 @@ PHASE A — PRICE GENERATION
 M = set_match_reference_price
 A = ATR_15m
 
-validate REQUIRED/PREFERRED/NONE thesis policy
+apply §12 preflight before selection:
+    valid same-bound committed SHORT handoff/configuration and immutable producer evidence
+    finite positive M, received A and tick; valid family/policy
+    reject invalid/dangling/duplicate/conflicting/producer-future bindings
+    NONE requires thesis ID and binding both null
+then validate REQUIRED/PREFERRED/NONE thesis policy
 
-build SHORT default structural pool using:
+build SHORT base pool before side/depth filtering:
+    positive finite prices, §8 permitted HIGH types only,
+    exact availability as-of matched_at; same restrictions apply to thesis
+build default structural ordering using:
 hierarchy_for(entry_context.set_family)
 
 where the canonical family tables in Sections 16–19 are authoritative; for RANGE this starts with RANGE_HIGH.
 
-for every basic-valid reference:
+for every base-pool reference (exclude non-improving side before depth):
     require reference.price > M
     improvement_atr = (reference.price - M) / A
 
@@ -2587,31 +3150,45 @@ for every basic-valid reference:
 
 REQUIRED thesis reference:
     if not ELIGIBLE:
-        THESIS_ENTRY_REFERENCE_INVALID
+        THESIS_ENTRY_REFERENCE_INVALID; terminate
     else:
         select it
 
 PREFERRED thesis reference:
-    if ELIGIBLE:
+    if valid-bound and ELIGIBLE:
         select it
-    else:
-        warning + use default ELIGIBLE pool
+    else if contract-valid null pair or valid-bound calculation ineligibility:
+        INVALID_THESIS_ENTRY_REFERENCE warning + use default ELIGIBLE pool
+    binding errors already terminated in preflight
 
-default pool:
-    if zero basic-valid refs:
-        NO_ELIGIBLE_ENTRY_REFERENCE
+default pool only if no thesis reference was selected (NONE or permitted PREFERRED fallback):
+    if zero base-pool refs:
+        NO_ELIGIBLE_ENTRY_REFERENCE; terminate
 
-    if zero ELIGIBLE refs:
-        NO_ADMISSIBLE_ENTRY_DEPTH
+    if base pool nonempty but no reference.price > M:
+        NO_ENTRY_SIDE_GEOMETRY; terminate
+
+    if improving references exist but zero ELIGIBLE refs:
+        NO_ADMISSIBLE_ENTRY_DEPTH; terminate
 
     select highest structural-priority ELIGIBLE ref
+    within type: latest exact available_at, smallest raw improvement distance,
+                 ascending case-sensitive Unicode code-point level_id
 
 raw_entry = selected reference price
 rounded_entry = ceil(raw_entry / tick) × tick
 
+before success require finite positive rounded_entry, exact tick grid,
+    rounded_entry = ceil(raw_entry / tick) * tick,
+    rounded_entry > M
+arithmetic or invariant failure -> ROUNDING_ERROR; terminate
+
 recompute rounded improvement:
     < 0.10 → ENTRY_TOO_SHALLOW_AFTER_ROUNDING
     > 1.25 → ENTRY_TOO_DEEP_AFTER_ROUNDING
+
+Any selected-reference rounding/band failure terminates without another reference,
+including PREFERRED. Failed diagnostic prices are non-actionable.
 
 EMIT IMMUTABLE ENTRY
 
@@ -2788,16 +3365,25 @@ SHORT
 
 # 6. Approved level types
 
+LONG permits only:
+
 ```text
 SWING_LOW_15M
-SWING_HIGH_15M
 SWING_LOW_1H
-SWING_HIGH_1H
 PREVIOUS_DAY_LOW
-PREVIOUS_DAY_HIGH
 RANGE_LOW
+```
+
+SHORT permits only:
+
+```text
+SWING_HIGH_15M
+SWING_HIGH_1H
+PREVIOUS_DAY_HIGH
 RANGE_HIGH
 ```
+
+These sets apply to thesis and fallback references. Preserve strict adverse-side eligibility against the final F-008 Entry: LONG `r < E - t`, SHORT `r > E + t`. No cached Set side, wrong-type reference or synthetic level can replace these tests.
 
 ---
 
@@ -2894,6 +3480,12 @@ PREFERRED
 NONE
 ```
 
+**F-006/F-007 preflight before reference selection.** Require a valid immutable handoff identity/digest/provenance, same cycle/result/instrument/direction, pinned Position configuration and same-bound AVAILABLE F-008 planned Entry. Entry E, received Q18 ATR A and tick t must be finite and strictly positive; family and thesis policy must be valid. Do not recompute or recover hidden ATR precision. Existing missing-Entry/ATR/tick/family/policy reasons remain.
+
+Reject invalid/conflicting producer bindings, dangling thesis IDs, producer availability violations, duplicate/conflicting canonical level IDs and a NONE policy with either non-null thesis ID or non-null origin binding. These are handoff-consumption failures, not warning-only fallback. Candidate prices must be finite and positive, IDs unique, exact `available_at <= matched_at`, types directionally permitted by §6, and price strictly beyond the one-tick adverse boundary against E.
+
+REQUIRED has no fallback; invalid required thesis evidence yields `usable=false`, `THESIS_REFERENCE_INVALID`, without downgrading the handoff-integrity preflight. PREFERRED fallback is limited to a contract-valid null pair or a valid-bound reference failing the directional stop's calculation eligibility. NONE requires both fields null before default ranking. If a producer reference shared with Entry fails stop-side geometry, retain the original producer binding; calculation fallback never rebinds or rewrites it.
+
 ---
 
 # 11. Thesis-reference REQUIRED
@@ -2944,12 +3536,14 @@ and the thesis reference is eligible:
 selected reference = thesis reference
 ```
 
-If invalid/unavailable:
+Only after §10 producer/binding preflight, if the pair is contract-valid null or a valid-bound reference fails F-006/F-007 calculation eligibility:
 
 ```text
 add warning = INVALID_THESIS_REFERENCE_OVERRIDE
 continue to default hierarchy
 ```
+
+Invalid, dangling, conflicting, duplicate or producer-future bindings reject before this branch. Once a reference is selected, width or rounding failure is terminal, not another PREFERRED fallback; REQUIRED remains no-fallback.
 
 ---
 
@@ -2965,15 +3559,12 @@ then:
 
 ```text
 thesis_reference_level_id must be null
+origin_binding must be null
 ```
 
 and default reference ranking is used.
 
-If a non-null ID is supplied with `NONE`:
-
-```text
-warning = UNUSED_THESIS_REFERENCE_ID
-```
+If either the thesis ID or its origin binding is non-null with `NONE`, reject the invalid handoff/policy binding before selection under §10. This is not a successful-path warning and does not authorize default ranking.
 
 ---
 
@@ -3062,10 +3653,12 @@ If multiple eligible levels share the same level type:
 ```text
 1. latest available_at
 2. smaller adverse-side distance to planned_entry_reference
-3. lexical level_id
+3. ascending case-sensitive ordinal Unicode code-point level_id (shorter prefix first)
 ```
 
 `age_seconds` is diagnostic only and is not a separate ranking criterion because it is derived from `available_at`.
+
+Use exact `available_at` and exact adverse distance (LONG `E - r`, SHORT `r - E`). No array order, locale collation, case folding, natural sort or numeric-substring sorting can decide the ID tie.
 
 ---
 
@@ -3178,6 +3771,15 @@ Persist:
 ```text
 minimum_distance_adjustment_applied = true | false
 ```
+
+The persisted flag is defined by the strict comparison:
+
+```text
+LONG:  minimum_distance_adjustment_applied = (raw_stop > minimum_stop)
+SHORT: minimum_distance_adjustment_applied = (raw_stop < minimum_stop)
+```
+
+Equality means `false`; it is not an adjustment. The min/max formulas and 0.20/0.50/2.00 ATR constants remain unchanged.
 
 ---
 
@@ -3302,6 +3904,17 @@ Violation:
 ```text
 ROUNDING_ERROR
 ```
+
+Before a usable stop is exposed, also require:
+
+```text
+rounded_stop is finite and > 0
+rounded_stop / tick_size is an integer
+LONG: rounded_stop = floor(adjusted_stop / tick_size) * tick_size
+SHORT: rounded_stop = ceil(adjusted_stop / tick_size) * tick_size
+```
+
+Arithmetic failure or violation of any positivity/grid/correct-outward-rounding/reference-side/Entry-side invariant yields `usable=false`, `ROUNDING_ERROR`. Diagnostic raw/rounded prices may be retained but are non-actionable. Both the pre-rounding and post-rounding risk-price bounds remain inclusive `<= 2.00 * ATR_15m`; exceeding either is `SL_TOO_WIDE`. No clamp, offset, inward correction, weaker-reference retry, ATR-only fallback, Entry repricing or exchange-specific repair is permitted.
 
 ---
 
@@ -3446,7 +4059,6 @@ REFERENCE_1H_FALLBACK
 PREVIOUS_DAY_FALLBACK
 RANGE_REFERENCE_USED
 INVALID_THESIS_REFERENCE_OVERRIDE
-UNUSED_THESIS_REFERENCE_ID
 MULTIPLE_NEARBY_LEVELS
 ```
 
@@ -3542,6 +4154,12 @@ dynamic_sl:
 # 37. LONG formula
 
 ```text
+Require §10 same-bound F-008/handoff/configuration and producer-binding preflight.
+Select a §6 directionally permitted LOW reference under §§11–20;
+reference must be strictly below E - tick.
+Use exact recency/adverse-distance/Unicode ID order; no binding repair.
+E, received A and tick must be finite and positive.
+
 R = selected adverse reference
 A = ATR_15m
 E = planned entry
@@ -3549,16 +4167,28 @@ E = planned entry
 raw_stop = R - 0.20A
 minimum_stop = E - 0.50A
 adjusted_stop = min(raw_stop, minimum_stop)
+minimum_distance_adjustment_applied = (raw_stop > minimum_stop)
 
 pre_risk_atr = (E - adjusted_stop)/A
 if pre_risk_atr > 2.0:
-    reject
+    usable = false; reason = SL_TOO_WIDE; terminate
 
 rounded_stop = floor(adjusted_stop/tick)×tick
 
+require finite rounded_stop > 0 and integer rounded_stop/tick
+require rounded_stop = floor(adjusted_stop/tick)×tick
+require rounded_stop < R and rounded_stop < E
+arithmetic or invariant failure:
+    usable = false; reason = ROUNDING_ERROR; terminate
+
 post_risk_atr = (E - rounded_stop)/A
 if post_risk_atr > 2.0:
-    reject
+    usable = false; reason = SL_TOO_WIDE; terminate
+
+Only after all checks pass:
+    usable = true; reason = AVAILABLE
+    rounded_stop_price = rounded_stop
+No weaker-reference retry after width or rounding failure; failed prices are non-actionable.
 ```
 
 ---
@@ -3566,6 +4196,12 @@ if post_risk_atr > 2.0:
 # 38. SHORT formula
 
 ```text
+Require §10 same-bound F-008/handoff/configuration and producer-binding preflight.
+Select a §6 directionally permitted HIGH reference under §§11–20;
+reference must be strictly above E + tick.
+Use exact recency/adverse-distance/Unicode ID order; no binding repair.
+E, received A and tick must be finite and positive.
+
 R = selected adverse reference
 A = ATR_15m
 E = planned entry
@@ -3573,16 +4209,28 @@ E = planned entry
 raw_stop = R + 0.20A
 minimum_stop = E + 0.50A
 adjusted_stop = max(raw_stop, minimum_stop)
+minimum_distance_adjustment_applied = (raw_stop < minimum_stop)
 
 pre_risk_atr = (adjusted_stop - E)/A
 if pre_risk_atr > 2.0:
-    reject
+    usable = false; reason = SL_TOO_WIDE; terminate
 
 rounded_stop = ceil(adjusted_stop/tick)×tick
 
+require finite rounded_stop > 0 and integer rounded_stop/tick
+require rounded_stop = ceil(adjusted_stop/tick)×tick
+require rounded_stop > R and rounded_stop > E
+arithmetic or invariant failure:
+    usable = false; reason = ROUNDING_ERROR; terminate
+
 post_risk_atr = (rounded_stop - E)/A
 if post_risk_atr > 2.0:
-    reject
+    usable = false; reason = SL_TOO_WIDE; terminate
+
+Only after all checks pass:
+    usable = true; reason = AVAILABLE
+    rounded_stop_price = rounded_stop
+No weaker-reference retry after width or rounding failure; failed prices are non-actionable.
 ```
 
 ---
@@ -3718,16 +4366,25 @@ SHORT
 
 # 6. Approved target level types
 
+LONG default and thesis targets permit only:
+
 ```text
 SWING_HIGH_15M
-SWING_LOW_15M
 SWING_HIGH_1H
-SWING_LOW_1H
 PREVIOUS_DAY_HIGH
-PREVIOUS_DAY_LOW
 RANGE_HIGH
+```
+
+SHORT default and thesis targets permit only:
+
+```text
+SWING_LOW_15M
+SWING_LOW_1H
+PREVIOUS_DAY_LOW
 RANGE_LOW
 ```
+
+A wrong structural type is not admitted by price-side geometry. No opposite-type conversion is inferred.
 
 ---
 
@@ -3816,6 +4473,12 @@ PREFERRED
 NONE
 ```
 
+**F-010 preflight precedes thesis/default selection.** The pinned TP mode must be DYNAMIC with a valid Position configuration ID/version/content digest; missing/invalid mode or configuration is `CONFIG_INVALID`. Consume an AVAILABLE F-008 Entry bound to the same instrument, immutable direction, decision cycle/result, Market Handoff identity/digest and tick provenance. Require valid handoff/F-008 provenance, instrument metadata revision, `tp_context.set_family` and thesis policy; E, received Q18 ATR A and tick t must be finite and strictly positive. Preserve Q18 ATR without recomputation or hidden-precision recovery.
+
+Reject invalid/conflicting producer bindings, dangling thesis IDs, producer availability violations and duplicate/conflicting canonical level IDs before fallback. With NONE, both thesis ID and origin binding must be null. These are identity/configuration/dependency failures, never warning-only fallback cases. Preserve original producer bindings separately from selected calculation targets.
+
+PREFERRED fallback is allowed only for a contract-valid null pair or a valid-bound reference failing F-010 calculation eligibility. REQUIRED has no fallback; required thesis absence or failed type/price/as-of/strict-side/reachability eligibility returns `usable=false`, `THESIS_REFERENCE_INVALID` after higher-precedence preflight/geometry checks. Apply the exact local precedence in §24; do not downgrade an identity failure into a thesis warning. F-010 adds no geometry field or current-market query.
+
 ---
 
 # 11. Thesis-reference REQUIRED
@@ -3860,12 +4523,14 @@ If PREFERRED target is fully eligible and reachable:
 selected target = thesis reference
 ```
 
-If invalid or outside reachability band:
+Only after §10 preflight, if the pair is contract-valid null or a valid-bound target fails F-010 calculation eligibility, including the reachability band:
 
 ```text
 warning = INVALID_THESIS_REFERENCE_OVERRIDE
 continue with default target hierarchy
 ```
+
+Malformed, conflicting, duplicate, dangling or producer-future bindings reject before this branch. This is preselection fallback only. Once a target is selected, every rounding or post-rounding failure is terminal, including PREFERRED; no lower-priority target, Entry repricing or synthesized target is permitted.
 
 ---
 
@@ -3956,10 +4621,12 @@ If multiple eligible levels share the same level type:
 ```text
 1. latest available_at
 2. smaller favorable-side distance to planned_entry_reference
-3. lexical level_id
+3. ascending case-sensitive ordinal Unicode code-point level_id, with shorter prefixes first
 ```
 
 `age_seconds` remains diagnostic only.
+
+Use exact `available_at` and exact favorable distance. No locale collation, normalization, case folding, natural sort, numeric-substring sort, array order or arrival order is permitted. A TOO_FAR candidate terminates before every later candidate, including an older one of the same type. PREFERRED preselection fallback does not reorder default traversal.
 
 ---
 
@@ -4095,17 +4762,73 @@ Feasibility may reject the structural target, but must not silently replace the 
 
 Use mutually distinct outcomes.
 
+F-010 introduces no additional geometry dependency and no field outside Market
+Handoff v4. Geometry capability is derived only from the frozen
+`reference_geometry.levels` collection denoted in calculation notation as
+`references.levels[]`.
+
+The `reference_geometry.levels` collection is usable only when it is present in
+the frozen handoff, schema-valid under the handoff version, bound to the same
+handoff identity/digest, and replayable from the persisted handoff snapshot. A
+missing, null, non-array, schema-invalid, unbound or non-replayable collection is
+not silently treated as an empty set; after higher-precedence identity and
+missing-primitive checks, it returns:
+
+```text
+usable = false
+reason = NO_FAVORABLE_SIDE_GEOMETRY
+```
+
+Define:
+
+```text
+directional_pool =
+  governed levels in references.levels[]
+  with level_type in the active direction's permitted target type set
+  and finite positive price
+  and available_at <= matched_at
+```
+
+If the collection is usable but `directional_pool` is empty, F-010 has no
+governed favorable-side geometry capability for the active direction/family and
+returns:
+
+```text
+usable = false
+reason = NO_FAVORABLE_SIDE_GEOMETRY
+```
+
+The `basic_pool` is the subset of `directional_pool` that also passes Part IV §7 strict favorable-side price geometry for the active direction.
+
+If `directional_pool` is non-empty and `basic_pool` is empty:
+
+```text
+usable = false
+reason = NO_ELIGIBLE_REFERENCE
+```
+
+The `traversable_pool` is the ordered subset of `basic_pool` whose level type
+appears in the active Set-family directional hierarchy. If the basic pool is
+non-empty but no basic eligible levels belong to the active hierarchy:
+
+```text
+usable = false
+reason = NO_REACHABLE_TARGET
+```
+
+and preserve diagnostics showing the non-traversable basic eligible levels.
+
 ## `NO_FAVORABLE_SIDE_GEOMETRY`
 
-Use when the upstream favorable-side geometry capability is unavailable.
+Use when the frozen collection is unusable or its governed directional pool is empty, after the higher-precedence configuration/identity/primitive checks. No separate upstream capability field is required.
 
 ## `NO_ELIGIBLE_REFERENCE`
 
-Use when governed reference geometry exists, but **zero** governed levels pass the basic favorable-side eligibility rules relative to `planned_entry_reference`.
+Use when the directional pool is nonempty but its basic pool is empty under strict favorable-side geometry relative to the final F-008 `planned_entry_reference`, subject to REQUIRED thesis precedence.
 
 ## `NO_REACHABLE_TARGET`
 
-Use when at least one governed level passes basic favorable-side eligibility, but the structural hierarchy is exhausted after all traversed candidates are classified `TOO_CLOSE`, with no `ELIGIBLE` or `TOO_FAR` candidate encountered.
+Use when the basic pool is nonempty but its traversable pool is empty, preserving non-traversable-level diagnostics; or when the default structural hierarchy exhausts only TOO_CLOSE traversed candidates without selecting a target or encountering TOO_FAR.
 
 ## `TARGET_TOO_FAR`
 
@@ -4117,19 +4840,42 @@ distance_atr > 4.00
 
 Selection terminates immediately.
 
-Reason precedence:
+Primary reason precedence:
 
 ```text
-missing required primitive
-→ NO_FAVORABLE_SIDE_GEOMETRY if capability absent
-→ NO_ELIGIBLE_REFERENCE if zero basic eligible references
-→ traverse structural hierarchy
-   → TOO_CLOSE may continue
-   → ELIGIBLE selects
-   → TOO_FAR terminates as TARGET_TOO_FAR
-→ hierarchy exhausted after TOO_CLOSE only
-   → NO_REACHABLE_TARGET
+1. CONFIG_INVALID
+   - invalid or missing pinned TP mode/configuration
+
+2. IDENTITY_INVALID
+   - invalid handoff/F-008 identity, digest, provenance or binding consistency
+
+3. missing primitive reasons
+   MISSING_ENTRY_REFERENCE
+   MISSING_ATR
+   MISSING_TICK_SIZE
+   MISSING_SET_FAMILY
+   MISSING_THESIS_REFERENCE_POLICY
+
+4. NO_FAVORABLE_SIDE_GEOMETRY
+   - reference_geometry.levels unavailable/unusable, or usable but no governed
+     directionally permitted level exists for the active direction/family
+
+5. THESIS_REFERENCE_INVALID
+   - REQUIRED thesis reference missing or invalid after valid handoff primitives
+
+6. NO_ELIGIBLE_REFERENCE
+   - directional_pool non-empty but zero levels pass strict favorable-side
+     price geometry
+
+7. traversal outcomes
+   TARGET_TOO_FAR
+   NO_REACHABLE_TARGET
+   TARGET_TOO_CLOSE_AFTER_ROUNDING
+   ROUNDING_ERROR
+   AVAILABLE
 ```
+
+Secondary diagnostics must preserve all discovered contributing conditions.
 
 ---
 
@@ -4255,6 +5001,17 @@ Violation:
 ROUNDING_ERROR
 ```
 
+Before exposing a usable target, also require:
+
+```text
+rounded_tp is finite and > 0
+rounded_tp / tick_size is an integer
+LONG: rounded_tp = floor(selected_target_price / tick_size) * tick_size
+SHORT: rounded_tp = ceil(selected_target_price / tick_size) * tick_size
+```
+
+Together with the Entry/target-side checks above, any arithmetic or positivity/grid/correct-inward-rounding/geometry failure yields `usable=false`, `ROUNDING_ERROR`. Failed prices are non-actionable. Let `rounded_distance_price = abs(rounded_tp - planned_entry_reference)`; require `4 * rounded_distance_price >= 3 * ATR_15m` and `rounded_distance_price <= 4 * ATR_15m`. The lower failure is `TARGET_TOO_CLOSE_AFTER_ROUNDING`; the upper failure is `ROUNDING_ERROR`. These are the existing inclusive 0.75/4.00 ATR post-round bounds. Failure is terminal under all policies, including PREFERRED: no alternative target, Entry repricing, SL-distance target or ATR-only repair.
+
 ---
 
 # 31. Post-rounding minimum-distance validation
@@ -4302,7 +5059,13 @@ ROUNDING_ERROR
 
 `0.75 ATR` is a reachability/meaningfulness candidate, not a guarantee of profitable net economics.
 
-Fees/spread/slippage are checked later.
+After final construction, F-012 evaluates planned fee-aware R:R/net edge
+using frozen factual signed maker/taker rates and the final prices/quantity.
+Its additional deterministic-cost baseline is empty; an asserted applicable
+extra cost without separately approved definition/integration is
+COST_POLICY_UNAVAILABLE. This creates no live spread/slippage gate and inserts
+no research assumptions or planned funding. Planned edge is eligibility, not
+proof of profitability.
 
 Do not move TP for costs inside this methodology.
 
@@ -4477,6 +5240,8 @@ dynamic_tp:
     thesis_reference_level_id:
 
   target_selection:
+    reference_geometry_collection_status:
+    directional_candidate_level_ids: []
     candidate_level_ids_before_distance_filter: []
     ineligible_level_ids_with_reason: []
     too_close_level_ids: []
@@ -4496,6 +5261,7 @@ dynamic_tp:
     selected_target_priority_rank:
 
     alternative_eligible_target_level_ids: []
+    unvisited_level_ids: []
 
   reachability:
     atr_15m:
@@ -4524,6 +5290,8 @@ dynamic_tp:
   warnings: []
 ```
 
+The collection/pool/traversal fields are Position-local diagnostics, not new Market Handoff or Order Spec fields. Optional traversal after primary selection must be marked diagnostic and cannot change the selected target, primary reason or feasibility. Preserve unvisited IDs rather than pretending that primary traversal visited them.
+
 ---
 
 # 45. LONG algorithm
@@ -4532,7 +5300,29 @@ dynamic_tp:
 E = planned entry
 A = ATR_15m
 
-for target in LONG structural priority order:
+Apply §10 preflight and §24 exact reason precedence:
+    valid pinned DYNAMIC configuration, same-bound AVAILABLE F-008 and handoff
+    valid immutable identity/digest/provenance/producer binding; NONE is a null pair
+    finite positive E, received A and tick; valid family/policy
+    reject unusable frozen collection or empty HIGH-type directional_pool
+        as NO_FAVORABLE_SIDE_GEOMETRY after higher-precedence checks
+Build basic_pool using strict r > E + tick; derive traversable_pool under frozen family hierarchy.
+REQUIRED: valid-bound eligible/reachable thesis selects; otherwise THESIS_REFERENCE_INVALID.
+PREFERRED: valid-bound eligible/reachable thesis selects; contract-valid null or
+           valid-bound calculation failure warns INVALID_THESIS_REFERENCE_OVERRIDE
+           and proceeds to default traversal. Binding errors never fall back.
+If no thesis target selected:
+    nonempty directional_pool with empty basic_pool -> NO_ELIGIBLE_REFERENCE
+    nonempty basic_pool with empty traversable_pool -> NO_REACHABLE_TARGET
+Default traversal occurs only when no thesis target has selected.
+Order by family priority, latest exact available_at, smallest exact favorable distance,
+then ascending case-sensitive Unicode code-point ID (shorter prefix first).
+A latest same-type TOO_FAR terminates before older same-type candidates.
+
+for target in LONG structural priority order, only if no thesis target selected:
+    if target not in traversable_pool:
+        preserve exclusion/non-traversable diagnostic
+        continue
 
     if target.price <= E + tick:
         record ineligible
@@ -4552,20 +5342,30 @@ for target in LONG structural priority order:
     selected target = target
     break
 
-if zero basic eligible references:
-    NO_ELIGIBLE_REFERENCE
-elif no target selected and no TOO_FAR termination:
-    NO_REACHABLE_TARGET
+No-target and TOO_FAR outcomes above terminate without constructing a price.
+If no target selected after default traversal and no TOO_FAR termination:
+    NO_REACHABLE_TARGET; terminate
 
 raw_tp = selected target price
 rounded_tp = floor(raw_tp/tick)×tick
 
-recompute rounded distance
+require finite rounded_tp > 0 and integer rounded_tp/tick
+require rounded_tp = floor(raw_tp/tick)×tick
+require rounded_tp > E and rounded_tp <= raw_tp
+arithmetic or invariant failure -> ROUNDING_ERROR; terminate
 
-if rounded distance < 0.75 ATR:
-    TARGET_TOO_CLOSE_AFTER_ROUNDING
+recompute rounded_distance_price = abs(rounded_tp - E)
+
+if 4 * rounded_distance_price < 3 * A:
+    TARGET_TOO_CLOSE_AFTER_ROUNDING; terminate
+elif rounded_distance_price > 4 * A:
+    ROUNDING_ERROR; terminate
 else:
     AVAILABLE
+
+All raw and rounded comparisons are exact; ratio displays never decide eligibility.
+No selected-reference post-round failure retries another target, including PREFERRED.
+Optional alternative traversal is diagnostic only and cannot change selection/reason.
 ```
 
 ---
@@ -4576,7 +5376,29 @@ else:
 E = planned entry
 A = ATR_15m
 
-for target in SHORT structural priority order:
+Apply §10 preflight and §24 exact reason precedence:
+    valid pinned DYNAMIC configuration, same-bound AVAILABLE F-008 and handoff
+    valid immutable identity/digest/provenance/producer binding; NONE is a null pair
+    finite positive E, received A and tick; valid family/policy
+    reject unusable frozen collection or empty LOW-type directional_pool
+        as NO_FAVORABLE_SIDE_GEOMETRY after higher-precedence checks
+Build basic_pool using strict r < E - tick; derive traversable_pool under frozen family hierarchy.
+REQUIRED: valid-bound eligible/reachable thesis selects; otherwise THESIS_REFERENCE_INVALID.
+PREFERRED: valid-bound eligible/reachable thesis selects; contract-valid null or
+           valid-bound calculation failure warns INVALID_THESIS_REFERENCE_OVERRIDE
+           and proceeds to default traversal. Binding errors never fall back.
+If no thesis target selected:
+    nonempty directional_pool with empty basic_pool -> NO_ELIGIBLE_REFERENCE
+    nonempty basic_pool with empty traversable_pool -> NO_REACHABLE_TARGET
+Default traversal occurs only when no thesis target has selected.
+Order by family priority, latest exact available_at, smallest exact favorable distance,
+then ascending case-sensitive Unicode code-point ID (shorter prefix first).
+A latest same-type TOO_FAR terminates before older same-type candidates.
+
+for target in SHORT structural priority order, only if no thesis target selected:
+    if target not in traversable_pool:
+        preserve exclusion/non-traversable diagnostic
+        continue
 
     if target.price >= E - tick:
         record ineligible
@@ -4596,20 +5418,30 @@ for target in SHORT structural priority order:
     selected target = target
     break
 
-if zero basic eligible references:
-    NO_ELIGIBLE_REFERENCE
-elif no target selected and no TOO_FAR termination:
-    NO_REACHABLE_TARGET
+No-target and TOO_FAR outcomes above terminate without constructing a price.
+If no target selected after default traversal and no TOO_FAR termination:
+    NO_REACHABLE_TARGET; terminate
 
 raw_tp = selected target price
 rounded_tp = ceil(raw_tp/tick)×tick
 
-recompute rounded distance
+require finite rounded_tp > 0 and integer rounded_tp/tick
+require rounded_tp = ceil(raw_tp/tick)×tick
+require rounded_tp < E and rounded_tp >= raw_tp
+arithmetic or invariant failure -> ROUNDING_ERROR; terminate
 
-if rounded distance < 0.75 ATR:
-    TARGET_TOO_CLOSE_AFTER_ROUNDING
+recompute rounded_distance_price = abs(rounded_tp - E)
+
+if 4 * rounded_distance_price < 3 * A:
+    TARGET_TOO_CLOSE_AFTER_ROUNDING; terminate
+elif rounded_distance_price > 4 * A:
+    ROUNDING_ERROR; terminate
 else:
     AVAILABLE
+
+All raw and rounded comparisons are exact; ratio displays never decide eligibility.
+No selected-reference post-round failure retries another target, including PREFERRED.
+Optional alternative traversal is diagnostic only and cannot change selection/reason.
 ```
 
 ---

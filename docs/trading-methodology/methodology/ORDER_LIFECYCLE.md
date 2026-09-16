@@ -1,7 +1,7 @@
 # TriggerTrade — Order Lifecycle Methodology
 
 **File:** `ORDER_LIFECYCLE.md`  
-**Version:** 1.2.14  
+**Version:** 1.2.15
 **Architecture role:** `Order Lifecycle — Order Management`
 
 
@@ -704,27 +704,28 @@ Set pending-entry monitoring must terminate because no active unfilled entry rem
 
 Order Lifecycle may receive a request to cancel a live entry remainder from only governed sources.
 
-## 11.1 Set market invalidation
+## 11.1 Set invalidation / monitoring-unavailable fail-safe
 
 ```text
 Set → Order Lifecycle
-Order Cancel Signal
+Order Cancel Signal (contract_version 2)
 ```
 
-Minimum correlation:
+Common correlation is `signal_id`, `cause`, `decision_cycle_id`,
+`set_result_id`, `tranche_id` and `symbol`, bound to the original accepted entry.
+For INVALIDATION, require `invalidated_at`, `reason_code`,
+`condition_record_id`, `condition_id` and `evidence_digest`.
+For MONITORING_UNAVAILABLE, require `unavailable_requirement_id`,
+`unavailable_at` and `unavailable_reason_code`; `signal_id` equals the
+requirement ID. Only a truthfully known `condition_record_id` is optional in
+that cause. Its TRUE-only fields are forbidden, not nullable placeholders.
 
-```text
-decision_cycle_id
-set_result_id
-tranche_id
-symbol
-reason_code
-invalidated_at
-```
-
-Order Lifecycle does not validate the market reason.
-
-It verifies identity and current order state, then attempts cancellation of the **unfilled remainder only**.
+Order Lifecycle does not validate the market reason. It validates exact
+identity/content and reconciles current authoritative order state before
+cancelling the **unfilled remainder only**. MONITORING_UNAVAILABLE is a
+conditional fail-closed request until pending remainder is proven, not a TRUE
+market invalidator. §38 and Order Cancel Signal Semantics govern both variants,
+sticky receipt/replay and terminal no-op handling.
 
 ## 11.2 Manual Cancel
 
@@ -1232,11 +1233,11 @@ Requirements:
 - the source funding transaction has a stable `cashflow_id` and is posted exactly once;
 - eligible tranches are those with attributable open quantity on the funded native symbol/side at the funding effective event;
 - `tranche_open_notional_at_funding_time = attributable_open_quantity × common funding settlement/mark price for that event`;
-- event ordering at the same exchange timestamp follows authoritative execution/cashflow sequence where available; unresolved ties enter reconciliation rather than arbitrary attribution;
+- event ordering at the same exchange timestamp follows authoritative execution/cashflow sequence, or requires proof that the ambiguity is immaterial to funding eligibility/weights; materially unresolved ties enter reconciliation rather than arbitrary attribution;
 - accounting allocation quantum is exactly `0.000000000000000001` settlement-currency units (decimal 18);
 - the normalized signed source funding amount must be exactly representable at that quantum; otherwise financial attribution remains `RECONCILING` rather than rounding the source cashflow;
-- compute each raw signed allocation at arbitrary precision, then quantize its absolute magnitude **toward zero** to the allocation quantum and reapply the source sign;
-- `residue = signed_source_funding_amount - sum(base_allocations)`; assign the entire signed residue to the tranche with the largest absolute unrounded allocation (tie: lowest `tranche_id` lexical order);
+- compute each raw signed allocation with exact rational weights, then quantize its absolute magnitude **toward zero** to the allocation quantum and reapply the source sign;
+- `residue = signed_source_funding_amount - sum(base_allocations)`; assign the entire signed residue to the tranche with the largest absolute unrounded allocation (tie: lowest `tranche_id` in ascending case-sensitive Unicode code-point order);
 - persist `funding_allocation_algorithm_version = FUNDING_ALLOC_V1_DECIMAL18_TOWARD_ZERO_LARGEST_ABS_LEXICAL`;
 - eligibility set, settlement price/basis, source transaction ID and signed allocations are persisted;
 - allocated total must equal the unique signed exchange funding amount exactly after deterministic residue assignment;
@@ -1245,6 +1246,97 @@ Requirements:
 Funding is accounting data only.
 
 It never triggers a close.
+
+A-004 allocation requires complete source identity/alias/deduplication and
+COMPLETE source coverage/finality, or evidenced non-applicability for empty
+funding. A missing row or zero amount does not itself prove complete coverage.
+Every eligible tranche and attributable quantity at the funding effective event,
+the common settlement/mark basis and provenance, and positive total eligible
+open notional must be deterministically known. Missing basis, unmatched nonzero
+funding, unresolved eligibility/order, unsupported currency, source not exactly
+representable at the funding quantum, or incomplete required evidence retains
+RECONCILING/finality-blocked status; no guessing, source rounding, conversion,
+omission or current-position substitution is permitted.
+
+The exact allocation is:
+
+For each unique source funding transaction:
+
+```text
+tranche_open_notional_at_funding_time
+= attributable_open_quantity * common_funding_settlement_or_mark_price
+
+total_triggertrade_open_notional_for_symbol_side_at_funding_time
+= sum(tranche_open_notional_at_funding_time for all eligible tranches)
+
+raw_tranche_funding
+= signed_source_funding_amount
+ * (tranche_open_notional_at_funding_time
+    / total_triggertrade_open_notional_for_symbol_side_at_funding_time)
+```
+
+Let:
+
+```text
+q = 0.000000000000000001
+F = signed_source_funding_amount
+w_i = tranche_open_notional_i / total_open_notional
+```
+
+Base allocation:
+
+```text
+base_i = sign(F) * q * floor((abs(F) * w_i) / q)
+```
+
+Residue:
+
+```text
+residue = F - sum(base_i)
+```
+
+Assign the entire signed residue to the eligible tranche with the largest
+absolute unrounded raw allocation. If tied, choose the lowest `tranche_id` by
+lexical Unicode code-point order.
+
+Final allocation:
+
+```text
+allocated_funding_i = base_i + residue   for the residue recipient
+allocated_funding_i = base_i             for every other eligible tranche
+```
+
+Conservation requirement:
+
+```text
+sum(allocated_funding_i) = signed_source_funding_amount
+```
+
+Persist:
+
+```text
+funding_allocation_algorithm_version =
+FUNDING_ALLOC_V1_DECIMAL18_TOWARD_ZERO_LARGEST_ABS_LEXICAL
+```
+
+The residue recipient is selected by greatest absolute **unrounded allocation**,
+not greatest fractional remainder. Retain the entire signed residue with that
+one recipient; presentation rounding cannot replace persisted allocations.
+Coverage remains half-open [from, to), including the funding event and all
+causally applicable records. Eligibility/weights use funding effective time,
+not recorded/retrieval time, current position state or accounting-day close.
+Proof that ordering is immaterial here is limited to funding eligibility and
+weights: it never waives P13's independent final-execution chronology.
+
+Persist source identity and aliases, accepted coverage/certificate identity,
+funding effective time, eligible tranche IDs and attributable quantities,
+settlement/mark basis and provenance, exact weights and raw/base allocations,
+residue/recipient, final signed allocations and the unchanged algorithm version.
+On restart restore accepted source and coverage history before new evidence.
+Identical duplicate evidence is idempotent; changed content under a known
+identity remains a contradiction. This only supplies A-002's existing allocated
+funding component; canonical result/CLOSED and Portfolio release rules remain
+unchanged.
 
 ---
 
@@ -1449,11 +1541,12 @@ Do not send `Order Placed`:
 
 # 38. Order Cancel Signal consumption
 
-Canonical input:
+Canonical input uses two strict causes in the same family/version 2:
 
 ```yaml
 order_cancel_signal:
   contract_version: 2
+  cause: INVALIDATION
   signal_id: string
   decision_cycle_id: string
   set_result_id: string
@@ -1461,21 +1554,96 @@ order_cancel_signal:
   symbol: string
   invalidated_at: RFC3339-timestamp
   reason_code: string
+  condition_record_id: string
+  condition_id: string
+  evidence_digest: string
 ```
 
-Order Lifecycle validates:
-- identity;
-- matching live entry remainder.
+```yaml
+order_cancel_signal:
+  contract_version: 2
+  cause: MONITORING_UNAVAILABLE
+  signal_id: string
+  decision_cycle_id: string
+  set_result_id: string
+  tranche_id: string
+  symbol: string
+  unavailable_requirement_id: string
+  unavailable_at: RFC3339-timestamp
+  unavailable_reason_code: ACTIVATION_IDENTITY_INVALID | FROZEN_RECORD_INVALID_OR_UNRESOLVED | INVALID_CONDITION | REQUIRED_EVIDENCE_UNAVAILABLE
+```
 
-It does not validate:
-- market condition;
-- trigger logic;
-- direction logic.
+All shown fields are required for their respective cause. Identifiers and
+reason strings are nonempty; timestamps are RFC3339 date-times. In
+MONITORING_UNAVAILABLE only, `condition_record_id` is optional and must be
+omitted unless its exact immutable matched-cycle identity is independently
+known and correctly bound. It is never null or guessed; a known record ID does
+not assert that its contents are valid or that any condition is TRUE.
+`condition_id`, `evidence_digest`, `invalidated_at` and `reason_code` are
+forbidden in this variant. The three `unavailable_*` fields are forbidden in
+INVALIDATION. No nullable placeholder or implicit/default cause is permitted.
+For MONITORING_UNAVAILABLE, `signal_id == unavailable_requirement_id` is a
+mandatory semantic invariant; the two fields name the same logical identity.
 
-If no live remainder exists because the entry already fully filled or terminated:
-- treat signal idempotently;
-- do not close filled exposure;
-- record that cancel intent was no longer applicable.
+Canonical field semantics, reason classes and requirement identity are defined
+in [`ORDER_CANCEL_SIGNAL.md`](../business-contracts/ORDER_CANCEL_SIGNAL.md),
+Semantics; §11.1 is the condensed input description.
+
+Order Lifecycle validates schema, identity/content and the exact persisted
+cycle/result/tranche/symbol-to-original-accepted-entry relationship. It does
+not validate the market condition, Trigger logic or direction logic. An
+unusable frozen record does not authorize replacing this independent routing
+lineage with symbol/time/latest-result inference.
+
+For INVALIDATION, preserve the existing Set-owned frozen record/condition/
+factual evidence, evidence-effective invalidated_at and original signal_id.
+Verify the current authoritative remainder and cancel only its unfilled
+quantity; a fully filled or otherwise terminal entry makes the signal an
+idempotent no-op. No evidence authorizes closure of filled exposure.
+
+For MONITORING_UNAVAILABLE:
+
+1. Validate `signal_id == unavailable_requirement_id`, the exact routing
+   lineage and the entry-scoped requirement key in Order Cancel Signal
+   Semantics. Persist the first accepted payload and receipt/deduplication
+   before any side effect. Identical retries return the prior receipt/progress;
+   changed content under an identity, or a second identity claiming the same
+   requirement key, is an integrity/reconciliation condition, not an update.
+2. Reconcile authoritative state of that original accepted entry first. If
+   terminal/no unfilled remainder is proven, retain the terminal revision/
+   tombstone, record the requirement as no longer applicable and issue no
+   market/native cancellation. Never close filled exposure. If routing or
+   remainder truth is unresolved, retain the request for reconciliation with
+   no guessed target, assumed zero quantity or blind cancel.
+3. If an exact active unfilled remainder is proven, admit/preserve and execute
+   the sticky cancel-required intention using existing entry cancel handling.
+   Recheck authoritative state before a native side effect; reconcile any fill/
+   cancel race. A partial fill changes quantity, not the requirement identity.
+4. `unavailable_at` remains the original Set state-transition effective time,
+   not a TRUE invalidation or Lifecycle receipt time. Preserve its initial
+   unavailable_reason_code and optional-record presence/value. Market recovery
+   cannot erase or replace this requirement. Lifecycle never asks current
+   market analysis to grant or withdraw its execution applicability.
+5. Restore the immutable receipt/payload, requirement-to-entry binding,
+   delivery/deduplication and reconciliation/cancel progress, and current
+   authoritative Lifecycle remainder revision/tombstone after restart.
+   Delivery/cancel acknowledgement is not terminal proof. Terminal dominance
+   ends applicability without deleting replay identity; a delayed message
+   cannot reactivate the entry. Missing/conflicting recovery state is an
+   integrity/reconciliation condition, never permission to remint or retarget.
+
+Receipt of the unavailable envelope is the fail-closed reconciliation request;
+it is not itself a market invalidation or authorization to cancel before
+reconciliation. Known terminal proof suppresses any new Set request, while a
+terminal race after transmission follows the idempotent no-op branch above.
+The same envelope becomes an executable intention only on positive pending
+proof, without another message family. Multiple causes for one entry join its
+existing cancel intent. Terminal state returns through the unchanged Order
+Placed/entry-lifecycle-event boundary with monotonic lifecycle_revision.
+
+The F-013 four-outcome reducer is unchanged. Neither route creates a new
+execution edge, closes filled exposure, modifies TP/SL/Manual Close, replaces
+S-004 CLOSED, or releases Portfolio capital before canonical finality.
 
 ---
 

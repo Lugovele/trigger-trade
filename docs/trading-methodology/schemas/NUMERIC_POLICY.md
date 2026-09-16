@@ -1,7 +1,7 @@
 # Canonical monetary and economic arithmetic — TT_NUMERIC_V1
 
 **Policy version:** `TT_NUMERIC_V1`  
-**Package revision:** `v1.2.14` — stable policy ID remains `TT_NUMERIC_V1`.
+**Package revision:** `v1.2.15` — stable policy ID remains `TT_NUMERIC_V1`.
 
 This policy determines numeric values before serialization. It is normative for Portfolio and Position capital/economics, Lifecycle non-funding accounting and duplicated constructed values. It does not change a formula, threshold, signal, price-selection rule, leverage-selection rule or venue quantity grid. Existing funding allocation is explicitly separate. All producers and consumers persist the policy version with the governed grant, spec, construction confirmation, authorization, cumulative logical Order Event and financial result.
 

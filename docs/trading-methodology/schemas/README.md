@@ -5,7 +5,7 @@
 `NUMERIC_POLICY.md` governs monetary/capital arithmetic, including §2A's single-unit FINAL aggregation rule. `financial_record.currency` continues to carry actual native currency; its structurally valid string is not sufficient for FINAL. SYSTEM_PROTOCOLS P7.1 requires semantic validation of each required source/allocation against the tranche's pinned accounting/settlement currency and retains a finality block for unsupported cross-currency amounts. No conversion wire object is defined.
 `SET_NUMERIC_POLICY.md` governs deterministic Set indicator computation and handoff serialization.
 
-**Package revision:** `v1.2.14`. Stable policy IDs and the contract-family versions below are independent from the package revision.
+**Package revision:** `v1.2.15`. Stable policy IDs and the contract-family versions below are independent from the package revision.
 
 Current contract versions:
 

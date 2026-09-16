@@ -1,6 +1,6 @@
 # TriggerTrade — Business Contracts
 
-**Package revision:** `v1.2.14`.
+**Package revision:** `v1.2.15`.
 
 Current governed business boundaries:
 

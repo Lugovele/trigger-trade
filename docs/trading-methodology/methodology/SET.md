@@ -1,7 +1,7 @@
 # TriggerTrade — Set Methodology
 
 **File:** `SET.md`  
-**Version:** 1.2.14  
+**Version:** 1.2.15
 **Architecture role:** `Set — Market Analysis`
 
 
@@ -92,7 +92,7 @@ and, after an approved order is actually placed:
 Order Lifecycle
     ↓ Order Placed
 Set — PENDING_ORDER_MONITORING
-    ↓ Order Cancel Signal only when invalid
+    ↓ Order Cancel Signal: INVALIDATION or MONITORING_UNAVAILABLE (§4.2)
 Order Lifecycle
 ```
 
@@ -103,7 +103,7 @@ Set ↔ API
 Market Data Request
 ```
 
-There is no KEEP signal. While the pending order remains valid, Set emits no lifecycle-control message.
+There is no KEEP signal. While the pending order remains valid and no previously established sticky cancellation requirement remains outstanding, Set emits no lifecycle-control message. Recovery does not withdraw such a requirement; see Part IV §12A.
 
 ---
 
@@ -324,7 +324,7 @@ After `Order Placed`, Set is responsible for:
 - evaluating only those frozen predicates;
 - keeping monitoring internal while all conditions remain valid;
 - emitting `Order Cancel Signal` when a hard invalidation condition becomes true;
-- treating required market data as `UNAVAILABLE` according to the future invalidation methodology and fail-safe policy.
+- treating required market data as `UNAVAILABLE` under the F-013 reducer in Part IV §12A and the reconcile-first fail-safe in Part IV §17, using `Order Cancel Signal` cause `MONITORING_UNAVAILABLE` on the same Set → Order Lifecycle boundary.
 
 Set is not responsible for:
 - determining portfolio allocation need;
@@ -430,13 +430,18 @@ They remain internal Set state tied to the originating `decision_cycle_id + set_
 
 ### 4.2 Pending-order monitoring output → Order Lifecycle
 
-Set emits no message while the order remains valid.
+Set emits no message while validity is VALID and no previously established
+sticky cancellation requirement remains outstanding. Replaying an outstanding
+requirement is not a KEEP message or a new invalidation evaluation.
 
-If a frozen hard invalidation predicate becomes true:
+The existing `ORDER_CANCEL_SIGNAL` family/version 2 has two explicit causes.
+
+For a TRUE frozen hard invalidator:
 
 ```yaml
 order_cancel_signal:
   contract_version: 2
+  cause: INVALIDATION
   signal_id: string
   decision_cycle_id: string
   set_result_id: string
@@ -444,16 +449,60 @@ order_cancel_signal:
   symbol: string
   invalidated_at: RFC3339-timestamp
   reason_code: string
+  condition_record_id: string
+  condition_id: string
+  evidence_digest: string
 ```
 
-Semantically:
+For the separate UNAVAILABLE fail-closed requirement:
+
+```yaml
+order_cancel_signal:
+  contract_version: 2
+  cause: MONITORING_UNAVAILABLE
+  signal_id: string
+  decision_cycle_id: string
+  set_result_id: string
+  tranche_id: string
+  symbol: string
+  unavailable_requirement_id: string
+  unavailable_at: RFC3339-timestamp
+  unavailable_reason_code: ACTIVATION_IDENTITY_INVALID | FROZEN_RECORD_INVALID_OR_UNRESOLVED | INVALID_CONDITION | REQUIRED_EVIDENCE_UNAVAILABLE
+```
+
+All shown fields are required for their respective cause. Identifiers and
+reason strings are nonempty; timestamps are RFC3339 date-times. In
+MONITORING_UNAVAILABLE only, `condition_record_id` is optional and must be
+omitted unless its exact immutable matched-cycle identity is independently
+known and correctly bound. It is never null or guessed; a known record ID does
+not assert that its contents are valid or that any condition is TRUE.
+`condition_id`, `evidence_digest`, `invalidated_at` and `reason_code` are
+forbidden in this variant. The three `unavailable_*` fields are forbidden in
+INVALIDATION. No nullable placeholder or implicit/default cause is permitted.
+For MONITORING_UNAVAILABLE, `signal_id == unavailable_requirement_id` is a
+mandatory semantic invariant; the two fields name the same logical identity.
+
+Semantically both causes use only:
 
 ```text
 Set → Order Lifecycle
 Order Cancel Signal
 ```
 
-Order Lifecycle owns the actual cancel request and exchange confirmation.
+Order Lifecycle owns reconciliation, the actual cancel request and exchange
+confirmation. INVALIDATION retains its original evidence-effective
+`invalidated_at`, exact frozen record/predicate/evidence and replay identity.
+MONITORING_UNAVAILABLE carries a truthful sticky requirement, not TRUE
+invalidation evidence. Receipt of that cause requests reconciliation first;
+only authoritative proof of a still-active unfilled remainder permits the
+cancel-required execution step. Known terminal proof suppresses a new request;
+a terminal race makes an already delivered request idempotently inapplicable.
+
+Part IV §12A and the Semantics section of
+[`ORDER_CANCEL_SIGNAL.md`](../business-contracts/ORDER_CANCEL_SIGNAL.md)
+define requirement identity, effective time, unavailable reasons, unresolved
+activation handling and replay. Part IV §17 retains outage behavior. Neither
+cause closes filled exposure or authorizes Portfolio release.
 
 ---
 
@@ -472,10 +521,9 @@ LONG
 SHORT
 ```
 
-Direction may be:
+For Sets governed by F-005, final direction is owned by the classifier and final resolution in Part II §§33–37. A fixed direction label or matched-branch label cannot bypass, override or reverse F-005. F-001 sign evidence, F-002 participation and F-003 volatility are not final direction decisions.
 
-- fixed by Set definition; or
-- explicitly determined by the matched Set branch.
+Outside that F-005-governed scope, existing generic deterministic Set definitions may fix direction or determine it explicitly from the matched branch; their existing conflict-resolution requirements remain. Within F-005 scope, any rule arbitrating multiple eligible Core Sets must be deterministic, Set-owned and consistent with F-005; missing/conflicting arbitration makes configuration ineligible. No first-arrival, lexical or strongest-score rule is introduced here.
 
 A Set must not rely on its human-readable name to imply direction.
 
@@ -563,6 +611,471 @@ A Set is composed only from approved Triggers.
 The Set must not hide new metric conditions inside prose or Set operators.
 
 If a new atomic market test is required, it must first be an explicitly governed, versioned Trigger. The generic Trigger-result and Trigger-event contract required by the Set engine is defined in Part I §§10–12 and §17 of this document. No external Trigger Contract is needed to implement these semantics; concrete configured market predicates remain separate from this generic contract.
+
+---
+
+## 8A. F-001 — Signed 1m endpoint price displacement
+
+### Exact formula and role
+
+Definitions:
+
+```text
+price_basis = trade-price-derived KLINES.close
+timeframe = 1 minute
+reference_price = close of the immediately preceding completed 1m candle
+observed_price = close of the current completed 1m candle
+```
+
+Working displacement:
+
+```text
+move_pct_work =
+Q36(100 * (observed_price - reference_price) / reference_price)
+```
+
+Predicate:
+
+```text
+trigger_true = abs(move_pct_work) >= theta_move_pct
+```
+
+Comparison is exact and inclusive. The numerical value `1` means one percent.
+
+### Inputs
+
+| Input | Requirement |
+|---|---|
+| Venue/product/instrument | Same bound source, product and instrument for both candles. |
+| `reference_price` | `KLINES.close` of the immediately preceding completed 1-minute candle. |
+| `observed_price` | `KLINES.close` of the current completed 1-minute candle. |
+| Candle completion evidence | Both candles completed and source-final under governed market-data selection. |
+| Evaluation slot | Current completed 1-minute slot. |
+| `theta_move_pct` | Mandatory positive pinned research parameter in percent units. |
+| Freshness policy | `F001_FRESHNESS_V1_CURRENT_COMPLETED_1M_SLOT_ONLY`. |
+| Trigger identity/config | Pinned Trigger ID/version/configuration for active Set formation epoch. |
+| Source coverage/finality | Complete selected KLINES coverage and no unresolved contradiction. |
+
+### Outputs
+
+| Output | Requirement |
+|---|---|
+| Trigger result | `TRUE`, `FALSE` or `UNAVAILABLE`. |
+| Arithmetic status | `AVAILABLE` or `UNAVAILABLE`. |
+| `move_pct_work` | Signed Q36 working percent displacement when arithmetic status is `AVAILABLE`; otherwise unavailable. |
+| Sign evidence | `UP`, `DOWN`, `FLAT` when arithmetic status is `AVAILABLE`; otherwise unavailable. |
+| Trigger-result status reason | Reason code for `UNAVAILABLE`, if applicable. |
+| Effective slot | Current completed 1-minute slot. |
+| Freshness policy/version | `F001_FRESHNESS_V1_CURRENT_COMPLETED_1M_SLOT_ONLY`. |
+| Role satisfaction | CURRENT_STATE only for the current completed 1-minute slot. |
+
+Sign evidence:
+
+```text
+UP   if move_pct_work > 0
+DOWN if move_pct_work < 0
+FLAT if move_pct_work = 0
+```
+
+F-001 does not emit LONG or SHORT.
+
+### Units
+
+Prices are exact decimal price values in source KLINES units for the same
+instrument. `move_pct_work` and `theta_move_pct` are percent units where `1`
+means one percent.
+
+### Parameters
+
+| Parameter | Class | Requirement |
+|---|---|---|
+| `theta_move_pct` | RESEARCH_PARAMETER | Mandatory, positive, pinned for active Set/Trigger configuration. |
+| Timeframe | Fixed product decision | 1 minute. |
+| Price basis | Fixed product decision | Trade-price-derived KLINES close. |
+| Freshness policy | Fixed configuration contract | Current completed 1-minute slot membership only. |
+
+The threshold value remains configurable; this rule does not select or optimize it.
+
+### Domain and preconditions
+
+F-001 can evaluate only when:
+
+1. The symbol is in active Set analysis scope for the active formation epoch.
+2. The Trigger configuration and `theta_move_pct` are pinned.
+3. Current and preceding 1-minute KLINES candles are selected from the same
+   venue/product/instrument and factual source.
+4. Both candles are completed, source-final, within the evaluation cutoff, and
+   have complete coverage.
+5. `reference_price > 0`.
+6. `observed_price >= 0`.
+7. Price values are finite exact decimals with no NaN, infinity, binary float
+   conversion or inferred fallback.
+8. No unresolved source contradiction or identity mismatch exists.
+9. The persisted freshness policy is
+   `F001_FRESHNESS_V1_CURRENT_COMPLETED_1M_SLOT_ONLY`.
+
+Missing intervals cannot be bridged by choosing an older reference.
+
+### Missing and invalid behavior
+
+| Case | Arithmetic status | `move_pct_work` / sign evidence | Trigger result |
+|---|---|---|---|
+| Missing current or reference candle | `UNAVAILABLE` | Unavailable | `UNAVAILABLE` |
+| Incomplete/still-forming candle | `UNAVAILABLE` | Unavailable | `UNAVAILABLE` |
+| Mismatched venue/product/instrument/source | `UNAVAILABLE` | Unavailable | `UNAVAILABLE` |
+| Missing source finality or incomplete coverage | `UNAVAILABLE` | Unavailable | `UNAVAILABLE` |
+| `reference_price <= 0` | `UNAVAILABLE` | Unavailable | `UNAVAILABLE` |
+| Invalid, NaN, infinite or binary-float-derived price | `UNAVAILABLE` | Unavailable | `UNAVAILABLE` |
+| Missing, zero or negative `theta_move_pct` with otherwise valid arithmetic inputs | `AVAILABLE` | Computed and retained as non-satisfying diagnostic evidence | `UNAVAILABLE` |
+| Missing, zero or negative `theta_move_pct` with invalid arithmetic inputs | `UNAVAILABLE` | Unavailable | `UNAVAILABLE` |
+| Missing/unknown freshness policy version | Depends on arithmetic inputs | Arithmetic may be retained if otherwise valid | `UNAVAILABLE` |
+| Source contradiction | `UNAVAILABLE` / reconciliation-blocked | Unavailable | `UNAVAILABLE` |
+| Valid zero observed price with valid reference and threshold | `AVAILABLE` | `-100%`, `DOWN` | Predicate result by threshold |
+
+Absent arithmetic evidence must never become fabricated zero, `FLAT`, or a
+previous value. Retained diagnostics cannot satisfy CURRENT_STATE while the
+Trigger result is `UNAVAILABLE`.
+
+### Boundaries
+
+Equality passes:
+
+```text
+abs(move_pct_work) = theta_move_pct -> TRUE
+```
+
+Below threshold fails:
+
+```text
+abs(move_pct_work) < theta_move_pct -> FALSE
+```
+
+Zero movement:
+
+```text
+move_pct_work = 0
+sign_evidence = FLAT
+trigger_true = false
+```
+
+for every valid positive threshold.
+
+Valid observed zero produces exactly `-100%` and `DOWN`; the predicate result
+depends on the pinned threshold. If that zero becomes the next reference, the
+next evaluation is `UNAVAILABLE` because `reference_price <= 0`.
+
+### Precision and rounding
+
+Evaluate subtraction, multiplication and division exactly according to
+`TT_SET_NUMERIC_V1` / N-008 principles. Apply exactly one named working
+quantizer:
+
+```text
+Q36 = 36 fractional decimal places, ROUND_HALF_EVEN
+```
+
+Q36 retains integer digits. Quantization precedes both sign evidence and
+threshold comparison.
+
+The predicate compares:
+
+```text
+abs(move_pct_work) >= theta_move_pct
+```
+
+with no epsilon, no intermediate rounding, no binary float conversion, no
+display-rounded gate and no additional threshold quantizer.
+
+### Time semantics
+
+Evaluation cadence is once per completed 1-minute candle.
+
+For slot `S`:
+
+- observed candle is the completed 1-minute candle for `S`;
+- reference candle is the immediately preceding completed 1-minute candle.
+
+The result is valid only for the current completed 1-minute slot.
+
+### State, replay and restart
+
+F-001 is a CURRENT_STATE Trigger. It is satisfied only when:
+
+```text
+trigger_result == TRUE
+AND arithmetic_status == AVAILABLE
+AND freshness_policy_version == F001_FRESHNESS_V1_CURRENT_COMPLETED_1M_SLOT_ONLY
+AND evaluation_slot == requested_current_slot
+```
+
+Freshness policy:
+
+```text
+F001_FRESHNESS_V1_CURRENT_COMPLETED_1M_SLOT_ONLY
+fresh_for_slot(evaluation_slot, requested_current_slot)
+= evaluation_slot == requested_current_slot
+```
+
+There is no additional timeout, grace period, wall-clock age, scheduler-age or
+receipt-time freshness condition.
+
+Set derives the requested slot from its governed completed-minute evaluation,
+not receipt, restart or scheduler time. Restart restores the persisted slot and
+compares it to the currently requested slot; restart does not renew freshness.
+
+### Configuration pinning
+
+F-001 material configuration includes:
+
+- Trigger ID/version;
+- price basis;
+- timeframe;
+- endpoint selection;
+- `theta_move_pct`;
+- CURRENT_STATE role;
+- freshness policy version
+  `F001_FRESHNESS_V1_CURRENT_COMPLETED_1M_SLOT_ONLY`;
+- numeric policy.
+
+Started Set formation epochs use the pinned configuration selected for that
+epoch. Later edits apply only to future epochs/cycles.
+
+F-001 is signed endpoint displacement, not an ATR-normalized return. F-003 is separate volatility context and is not an arithmetic operand of F-001. F-001 neither selects LONG/SHORT nor changes the Market Handoff match-reference price. Preserve the generic Trigger epoch, freshness, event and consumption rules in Part I §§10–12 and §17; the concrete F-001 role is CURRENT_STATE only. Retain the exact endpoint prices, candle and source identities/revisions, coverage/finality evidence, effective slot, arithmetic/Trigger statuses and reasons, Q36 output/sign, formation epoch and pinned configuration/numeric policy. Repeated identical evidence is idempotent; conflicting accepted evidence follows existing integrity handling and cannot rewrite a frozen handoff.
+
+---
+
+## 8B. F-002 — Futures relative participation confirmation
+
+### Exact formula and role
+
+Definitions:
+
+```text
+market = Bybit USDT linear perpetual futures
+volume_basis = exchange KLINES.volume in base-coin units
+timeframe = 1 minute
+c = current completed 1m candle volume
+v(1)..v(60) = immediately preceding 60 completed 1m candle volumes
+```
+
+Sort historical values ascending:
+
+```text
+v_sorted(1) <= ... <= v_sorted(60)
+```
+
+Median:
+
+```text
+M = (v_sorted(30) + v_sorted(31)) / 2
+```
+
+Rank:
+
+```text
+K = count(v(i) <= c)
+```
+
+Relative volume and rank percent:
+
+```text
+R = c / M
+P = 100 * K / 60
+```
+
+Predicate:
+
+```text
+trigger_true = (R >= 2) AND (P >= 90)
+```
+
+Equivalent valid-domain boundary:
+
+```text
+c >= v_sorted(30) + v_sorted(31)
+AND
+K >= 54
+```
+
+This equivalent boundary may be used only after establishing `M > 0`.
+
+### Inputs
+
+| Input | Requirement |
+|---|---|
+| Venue/product/instrument | Bybit USDT linear perpetual futures, same instrument and factual source across all candles. |
+| `c` | Exchange KLINES.volume in base-coin units for the current completed 1-minute candle. |
+| Historical population | Exactly 60 immediately preceding completed consecutive 1-minute KLINES.volume values. |
+| Candle identities | Persisted source identities/revisions for current and historical candles. |
+| Evaluation slot | Current completed 1-minute slot. |
+| Trigger identity/config | Pinned Trigger ID/version/configuration for the active Set formation epoch. |
+| Source coverage/finality | Complete selected KLINES coverage and no unresolved contradiction. |
+
+### Outputs
+
+| Output | Requirement |
+|---|---|
+| Trigger result | `TRUE`, `FALSE` or `UNAVAILABLE`. |
+| `M` | Trigger-local median baseline. |
+| `K` | Trigger-local integer rank count. |
+| `R` | Trigger-local relative-volume intermediate. |
+| `P` | Trigger-local empirical-rank percent intermediate. |
+| Effective time | Current completed 1-minute slot/evaluation timestamp. |
+| Role satisfaction | CURRENT_STATE only for the current completed 1-minute slot. |
+
+`M`, `K`, `R` and `P` are not exported Set metrics unless a later certified
+formula or handoff contract explicitly exposes them.
+
+### Units
+
+All volumes are exchange KLINES base-coin units for the same Bybit USDT linear
+perpetual futures instrument.
+
+Do not substitute:
+
+- quote turnover;
+- contract count;
+- raw-trade notional;
+- spot-market volume.
+
+`R` is dimensionless. `P` is percent units.
+
+### Parameters
+
+| Parameter | Approved value |
+|---|---|
+| Market | Bybit USDT linear perpetual futures |
+| Volume basis | KLINES.volume in base-coin units |
+| Timeframe | 1 minute |
+| Historical population | 60 immediately preceding completed candles |
+| Relative threshold | `R >= 2` |
+| Rank threshold | `P >= 90`, equivalently `K >= 54` |
+| Trigger role | CURRENT_STATE |
+| Ordinary 30-day/14-day baseline | NOT_APPLICABLE |
+
+These fixed predicate boundaries do not establish profitability or parameter optimality.
+
+### Domain and preconditions
+
+F-002 can evaluate only when:
+
+1. The symbol is in active Set analysis scope for the active formation epoch.
+2. The Trigger configuration is pinned.
+3. The current candle and all 60 historical candles are selected from the same
+   Bybit USDT linear perpetual futures instrument and factual source.
+4. All 61 candles are completed, consecutive, source-final, within the
+   evaluation cutoff, and have complete coverage.
+5. Every volume is a finite exact nonnegative decimal in base-coin units.
+6. `M > 0`.
+7. No unresolved source contradiction, identity mismatch or basis mismatch
+   exists.
+
+### Missing and invalid behavior
+
+| Case | Required behavior |
+|---|---|
+| Missing current candle | `UNAVAILABLE`. |
+| Fewer than 60 immediately preceding candles | `UNAVAILABLE`. |
+| Non-consecutive historical population | `UNAVAILABLE`. |
+| Incomplete/still-forming candle | `UNAVAILABLE`. |
+| Mismatched venue/product/instrument/source | `UNAVAILABLE`. |
+| Missing source finality or incomplete coverage | `UNAVAILABLE`. |
+| Invalid, negative, NaN, infinite or binary-float-derived volume | `UNAVAILABLE`. |
+| `M = 0` | `UNAVAILABLE`. |
+| Source contradiction | `UNAVAILABLE` / reconciliation-blocked; do not substitute stale data. |
+| Valid `c = 0` with `M > 0` | `FALSE`. |
+
+`UNAVAILABLE` is neither `FALSE` nor negative evidence.
+
+### Boundaries
+
+All comparisons are inclusive:
+
+```text
+R = 2 -> relative threshold passes
+P = 90 -> rank threshold passes
+K = 54 -> rank threshold passes
+```
+
+Ties count toward `K`.
+
+Both thresholds must pass for `TRUE`. If either comparison fails and all
+preconditions hold, the result is `FALSE`.
+
+### Precision and rounding
+
+Evaluate volumes as exact decimals under `TT_SET_NUMERIC_V1` / N-008
+principles. Sorting is exact. `K` is an exact integer count. `R` and `P` are
+exact rational/decimal trigger-local intermediates.
+
+No epsilon, binary float, intermediate rounding, display-rounded comparison or
+alternative threshold is permitted.
+
+The division-free boundary can be used after `M > 0` is proven:
+
+```text
+c >= v_sorted(30) + v_sorted(31)
+AND
+K >= 54
+```
+
+### Time semantics
+
+Evaluation cadence is once per completed 1-minute candle.
+
+For slot `S`:
+
+- current observation is the completed 1-minute candle for `S`;
+- historical population is the immediately preceding 60 completed consecutive
+  1-minute candles `[S-60m, S)`.
+
+The result is valid only for the current completed 1-minute slot. The next
+1-minute boundary requires a new evaluation. Receipt time, scheduler time,
+restart time and wall-clock loop time cannot substitute for the governed slot.
+
+### State, replay and restart
+
+F-002 is a CURRENT_STATE Trigger. It is satisfied only when the authoritative
+result for the current completed 1-minute slot is `TRUE` and freshness remains
+valid for that slot.
+
+Persist:
+
+- Trigger ID/version/configuration;
+- symbol and active formation epoch;
+- evaluation slot;
+- current and historical candle identities/source revisions;
+- volume basis;
+- numeric policy;
+- `M`, `K`, `R`, `P`;
+- tri-state result.
+
+Replay or restart must rehydrate accepted evaluation state and source
+identities before accepting new evaluations. Duplicate identical evaluation is
+a no-op. Conflicting source content or changed accepted values trigger
+reconciliation/integrity handling and do not silently alter downstream frozen
+handoffs.
+
+Rehydration does not renew freshness.
+
+### Configuration pinning
+
+F-002 material configuration includes:
+
+- Trigger ID/version;
+- market/product;
+- volume basis;
+- timeframe;
+- historical population count;
+- thresholds `2` and `90`;
+- CURRENT_STATE role;
+- freshness policy;
+- numeric policy.
+
+Started Set formation epochs use the pinned configuration selected for that
+epoch. Later edits apply only to future epochs/cycles.
+
+F-002 confirms relative short-horizon futures participation only. It does not select LONG/SHORT, measure absolute liquidity or replace aggressive-flow imbalance. Its trigger-local population is not the ordinary 30-day/14-day normalization population and its base volume is not the quote-turnover input used by F-004. Existing generic Trigger epochs and event-consumption rules remain unchanged.
 
 ---
 
@@ -797,33 +1310,12 @@ They are not Position Rules fields.
 
 They are not Order Lifecycle analytics.
 
-Conceptually each predicate must be deterministic and auditable:
-
-```yaml
-condition_id:
-metric_or_reference:
-operator:
-threshold_or_reference:
-timeframe:
-freshness:
-unavailable_policy:
-```
-
-Every Set version that can produce a pending LIMIT entry must define its own versioned hard invalidation conditions inside the Set specification.
-
-Canonical structure:
-
-```yaml
-market_invalidation:
-  hard_conditions:
-    - condition_id:
-      metric_or_reference:
-      operator:
-      threshold_or_reference:
-      timeframe_or_horizon:
-      freshness:
-      unavailable_policy:
-```
+The sole complete frozen-record definition is Part IV §12. Every applicable
+Set version defines its own versioned hard conditions using that shape; the
+record contains at least one valid deterministic condition with pinned
+configuration identity/version/content digest and typed evidence selectors.
+`set_result.frozen_condition_record_id` references that same
+`market_invalidation.condition_record_id`; it is not a second record identity.
 
 The specific conditions may differ by Set version, but their semantics are governed here and must be deterministic, frozen, auditable, and backtestable where applicable.
 
@@ -840,19 +1332,24 @@ INVALID → Order Cancel Signal
 
 Monitoring starts only after `Order Placed`.
 
-The `Order Placed` event must carry the same `decision_cycle_id`.
-
-Set must not activate monitoring by symbol alone, by order timestamp alone, or by "latest Set result" inference.
-
-Canonical match:
+Monitoring activates only after actual exchange acceptance/placement when:
 
 ```text
-Order Placed.decision_cycle_id
-=
-Stored Frozen Invalidation State.decision_cycle_id
+Order Placed.decision_cycle_id == frozen_condition.decision_cycle_id
+AND
+Order Placed.set_result_id == frozen_condition.set_result_id
+AND
+Order Placed.tranche_id is linked to that matched cycle
 ```
 
-If the correlation key cannot be resolved unambiguously, monitoring activation must fail closed and be surfaced as an integrity/reconciliation error rather than guessed.
+Set must not activate monitoring by symbol, order timestamp, nearest order,
+latest Set result or current configuration. Ambiguous activation identity fails
+closed and records an integrity/reconciliation condition; Set does not guess an
+order.
+
+Part IV §12A governs the exact VALID / INVALID / UNAVAILABLE / STOPPED reducer
+and its output/action precedence. The record remains frozen at MATCHED; actual
+activation is later and cannot be inferred from symbol or time.
 
 ### Pending-order monitoring stop invariant
 
@@ -1397,6 +1894,72 @@ direction = NONE
 rejection_stage = DATA_UNAVAILABLE
 ```
 
+**F-004 eligible completed days and leading initialization prefix.**
+
+F-004 uses the eligible observations inside the ordinary 30-day interval. A day
+is eligible for a metric's ordinary population only when the required factual
+source coverage, source identity, finality, pagination/snapshot proof,
+completed-candle or bucket membership, and all derived metric dependencies for
+that day are available and contradiction-free.
+
+If the instrument or required factual series has a proven inception later than
+`D - 30 UTC calendar days`, the interval before inception is treated as proven
+absence, not missing requested data. The population may contain 14 through 29
+eligible completed UTC days in that initial-history case.
+
+Partial inception days do not count for ordinary completed-day warmup. For each
+metric, the first countable ordinary UTC day is the first complete UTC calendar
+day that starts at or after the later of:
+
+```text
+instrument_or_series_inception_time
+metric_source_series_inception_time
+first_time_the_metric_can_have_all_required_derived_dependencies_available
+```
+
+rounded forward to the next UTC midnight if that later time is not already a
+UTC midnight.
+
+The leading interval before that first countable full UTC day is a proven
+initialization prefix, not a missing-data gap, when its absence follows only
+from instrument/series inception or from legitimate metric initialization
+requirements such as canonical ATR seed formation. F-004 may exclude that
+leading initialization prefix from the reference population. This exception is
+only for the leading prefix before the first countable full UTC day. It does
+not permit excluding, skipping or replacing any later unavailable observation
+inside a countable day.
+
+Canonical recursive dependencies still process their factual initialization
+prefixes. For example, 5m ATR must preserve the seed candles and ordered ATR
+ancestry through the prefix even though those pre-first-availability
+observations are not countable VNM reference outputs. The population rule
+selects eligible reference observations; it does not reset, reseed or discard
+the recursive dependency.
+
+Historical zero-close ATR_PCT observations and non-positive VNM denominators
+remain unavailable outputs. If they occur inside the leading initialization
+prefix before the first countable full UTC day, they are part of the startup
+unavailability and are not reference observations. If they occur on or after
+the first countable full UTC day, the affected metric is `UNAVAILABLE`; F-004
+may not skip the day or shorten the population around it.
+
+If the requested historical data should exist for a completed day but source
+coverage, pagination, finality, continuity, identity or required derived-value
+eligibility is missing or contradictory, that day is not silently skipped. The
+affected F-004 metric is `UNAVAILABLE` until the source condition is resolved.
+
+If fewer than 14 eligible completed UTC days are available after applying the
+rules above:
+
+```text
+required normalized metric = UNAVAILABLE
+directional classification support = unavailable to F-005
+missing_reason = DATA_UNAVAILABLE
+```
+
+No expanding window, trailing-hours substitute, alternate timezone, omitted-gap
+shortcut or current-day inclusion is permitted.
+
 ---
 
 # 7. Z-score convention
@@ -1500,6 +2063,72 @@ Turnover basis:
 
 ```text
 quote notional turnover
+```
+
+**Exact prior-bucket selection and median.**
+
+The exact selector is the thirty prior completed eligible same-clock buckets
+strictly before the current completed bucket. Let the current bucket be the
+half-open interval:
+
+```text
+[bucket_start, bucket_end)
+```
+
+with `bucket_end <= evaluation_at`. The candidate reference buckets are the
+same UTC clock bucket on the prior thirty UTC dates before `bucket_start`'s UTC
+calendar date:
+
+```text
+[bucket_start - 1 UTC day, bucket_end - 1 UTC day)
+[bucket_start - 2 UTC days, bucket_end - 2 UTC days)
+...
+[bucket_start - 30 UTC days, bucket_end - 30 UTC days)
+```
+
+The current bucket is excluded by the strict-prior rule even when `bucket_end`
+is exactly UTC midnight. Therefore, for current bucket `[D - 5m, D)` at
+`evaluation_at = D`, the reference set is the same `23:55-00:00 UTC` bucket on
+the thirty preceding UTC dates:
+
+```text
+[D - 1 day - 5m, D - 1 day)
+...
+[D - 30 days - 5m, D - 30 days)
+```
+
+This metric-specific same-clock selector may reach one bucket whose start lies
+before the ordinary `[D - 30 days, D)` day-window lower boundary at midnight.
+That is intentional for `TOD_REL_TURNOVER` because SET defines it as a
+same-clock lookback over prior completed eligible days, and the current
+observation must never be included in its own baseline.
+
+The same eligible-day rule in Part II §6 applies to same-clock references:
+
+- proven pre-inception or leading-initialization absence may yield 14 through
+  29 eligible prior same-clock observations;
+- missing or contradictory evidence for a day that should exist makes the
+  metric `UNAVAILABLE`;
+- fewer than 14 eligible prior same-clock observations makes the metric
+  `UNAVAILABLE`.
+
+F-004 must persist the selected same-clock bucket identities, their UTC
+intervals and their source coverage proof. Replaying the same cutoff must select
+the same bucket identities.
+
+For eligible references, compute the median exactly. With an even count, use
+the exact arithmetic average of the two middle sorted values. If the median
+denominator is zero or undefined:
+
+```text
+TOD_REL_TURNOVER = UNAVAILABLE
+```
+
+Otherwise:
+
+```text
+TOD_REL_TURNOVER =
+current_5m_turnover / median_prior_same_clock_5m_turnover
 ```
 
 ---
@@ -1805,12 +2434,19 @@ Wilder ATR:
 ATR_14
 ```
 
-Canonical percentage:
+Canonical percentage, only when current Q36 ATR work is available and the corresponding eligible completed 15m close is strictly positive:
 
 ```text
-ATR_PCT =
-100 × ATR_14 / Close_t
+ATR_PCT_work = Q36(100 × ATR_work / Close_t)
+ATR_15m_wire = Q18(ATR_work)
+ATR_PCT_15m_wire = Q18(ATR_PCT_work)
 ```
+
+Q36 and Q18 use HALF_EVEN under [Set numeric policy](../schemas/SET_NUMERIC_POLICY.md), §§3 and 5. `ATR_14` denotes the canonical persisted Q36 Wilder work state, not the Q18 export. The percentage is derived from work ATR, never from wire ATR; numerical `1` means one percent.
+
+Require finite nonnegative factual prices and `0 <= Low <= Close <= High`, together with the unchanged source/identity/completion/cutoff/continuity proof. The factual predecessor close may lie outside the current range. Known historical identity/content checks precede malformed-candle rejection. An ineligible candle cannot advance state, be skipped or authorize reseeding.
+
+For an otherwise eligible `Close_t = 0`, do not evaluate the ATR_PCT division: retain the ordinary exact TR, Q36 seed/recurrence update and zero predecessor for the next candle, but persist ATR_PCT `UNAVAILABLE` and emit no valid required handoff. Do not reset ATR, hold a stale percentage, substitute or clamp a value. Both Q18 exports must be strictly positive and available for a valid volatility handoff; zero or positive work rounded to zero remains ineligible without changing the work-state recurrence.
 
 ---
 
@@ -1938,6 +2574,78 @@ VOLATILITY_NORMALIZED_MOMENTUM(
 ```
 
 Use a separate same-symbol z-score baseline of completed 5m VNM observations over 30 completed UTC calendar days. The fixed UTC boundaries and 14-completed-UTC-calendar-day minimum warmup are those of [Part II §6](#6-canonical-normalization-baseline).
+
+The local 5m VNM veto requires its own ATR_PCT instance:
+
+```text
+input_timeframe = 5m
+window = 14
+smoothing = Wilder
+metric = ATR_PCT
+```
+
+This is the independent F-004-local 5m dependency. It uses the same exact-arithmetic, candle-eligibility and canonical-ancestry principles as [Set numeric policy](../schemas/SET_NUMERIC_POLICY.md), but retains a separate 5m series, anchor, seed and checkpoint. It is not the 15m F-003 output and does not become a certified 5m instance merely by referring to F-003. Its VNM observations and z-score population are the same-symbol 5m population specified here and in Part II §6.
+
+For completed 5m candle `t`:
+
+```text
+TR_t = max(
+    High_t - Low_t,
+    abs(High_t - Close_(t-1)),
+    abs(Low_t - Close_(t-1))
+)
+```
+
+Canonical 5m seed:
+
+```text
+A_14_5m = Q36((TR_1 + TR_2 + ... + TR_14) / 14)
+```
+
+Canonical 5m recursive update:
+
+```text
+A_t_5m = Q36((13 * A_(t-1)_5m + TR_t) / 14)
+```
+
+When the current 5m ATR work state is available and the corresponding completed
+5m close is positive:
+
+```text
+ATR_PCT_5m = Q36((100 * A_t_5m) / Close_t_5m)
+ATR_PCT_decimal_5m = ATR_PCT_5m / 100
+```
+
+5m candle eligibility requires:
+
+```text
+0 <= Low <= Close <= High
+```
+
+with exact source identity, completed-only status, continuity, finality,
+pagination/snapshot proof and canonical ordering. A factual predecessor close
+need not lie inside the current candle range.
+
+If a completed 5m candle is malformed, missing, incomplete, out of order,
+contradictory, not final, or lacks the factual immediate predecessor close, the
+affected 5m ATR/VNM computation is `UNAVAILABLE`. The ATR state does not
+advance through that candle, the seed does not skip it, and no stale prior 5m
+ATR_PCT may stand in for the current dependency.
+
+If an otherwise eligible completed 5m candle has `Close_t_5m = 0`, the
+`ATR_PCT_5m` quotient is not evaluated and `ATR_PCT_5m` is `UNAVAILABLE`. The
+5m TR and ATR recurrence still preserve the factual candle and ancestry, as in
+the F-003 zero-close pattern.
+
+If `ATR_PCT_5m` is unavailable or `ATR_PCT_decimal_5m <= 0`, then `VNM_5m` and
+the local momentum veto input are `UNAVAILABLE`.
+
+5m ATR state must persist seed manifest, processed candle identities, prior
+work value, source proof, numeric policy version and checkpoint digest. Restart
+may restore only an authentic matching checkpoint and canonical subsequent
+facts. Revised historical source content invalidates affected derived state and
+does not authorize automatic correction acceptance, reseeding or reconciliation
+release.
 
 ---
 
@@ -2478,9 +3186,15 @@ matched = true
 direction = NONE
 ```
 
-`NONE` therefore means that the Direction Classifier did not satisfy a directional branch. It is not a matched directional Set.
+`classifier_direction` and final Set `direction` are distinct. Classifier `NONE` means no satisfied directional criterion. Classifier LONG/SHORT satisfies only that side's criterion; a final unmatched evaluation may still have `direction = NONE` because formation or mandatory handoff validation failed.
 
-This rule aligns the Direction Classifier with the canonical Set Result semantics.
+F-005 consumes the canonical Q36 F-004 score, all eleven required inputs and their required derived diagnostics, hard gates and both sides' veto evidence. Missing, malformed, contradictory or incompatible required evidence yields classifier `NONE` / `DATA_UNAVAILABLE`, even if a numeric score exists. In particular unavailable local 5m veto evidence is not false or neutral. Hard gates retain their inclusive passing boundaries. Scores `>= +0.35` produce a LONG candidate and scores `<= -0.35` a SHORT candidate; the open interval `(-0.35,+0.35)` is the dead zone. Only that candidate's BTC, relative and local-momentum vetoes can block it; an opposite-side veto never blocks or reverses the candidate.
+
+Before `MATCHED`, the governing versioned Set expression must be authoritatively `TRUE`; the exact Core Set, constituent evidence, active formation epoch, pinned configuration, source/evaluation identities and applicable sequence, freshness, expiry, reset/re-arm and durable event-consumption conditions must be eligible. Required event evidence must be same-epoch and unconsumed. Event-dependent formation retains authoritative same-epoch `FALSE -> TRUE`, no bridging across `UNAVAILABLE`, and once-only consumption. `FALSE` or `UNAVAILABLE` cannot become a match.
+
+Mandatory Market Handoff v4 identity, frozen snapshot/reference price, direction, positive required volatility, reference geometry and applicable binding/capability validation must pass before commitment. Classifier success followed by formation failure produces `matched=false`, final `direction=NONE` and a separate Set-resolution reason. Handoff-validation failure produces the same unmatched boundary with a separate handoff-validation reason. Neither path creates committed `decision_cycle_id`, `set_result_id` or a handoff.
+
+Match state, consumption bindings, cycle/result identities, frozen contexts and handoff outbox commit together. Delivery failure after this commitment does not undo the match or mint new IDs: replay/retry restores and sends the same committed handoff. Preserve governed completed-5m analytical cadence, authoritative cutoff/match time and source selectors; receipt/restart/current time cannot replace them. Position may reject construction but cannot reinterpret or reverse the committed Set direction.
 
 ---
 
@@ -2549,7 +3263,9 @@ DATA_UNAVAILABLE
 → DIRECTIONAL_EFFICIENCY_GATE
 → ACTIVITY_GATE
 → VOLATILITY_GATE
-→ direction-specific veto
+→ BTC_VETO
+→ RELATIVE_VETO
+→ LOCAL_MOMENTUM_VETO
 → SCORE_DEAD_ZONE
 ```
 
@@ -2558,6 +3274,12 @@ If several vetoes simultaneously block the candidate direction, preserve all in:
 ```text
 all_active_vetoes[]
 ```
+
+Retain every independently known failed hard gate in the canonical order, including `DATA_UNAVAILABLE` where applicable. An individual gate that cannot be evaluated is unavailable, not failed, passed or false.
+
+`all_active_vetoes[]` contains only proven active vetoes against a trustworthy `candidate_side`, ordered BTC, relative, local momentum. Opposite-side vetoes are retained only as upstream evidence and cannot enter this candidate-filtered list. Without a trustworthy candidate, the list is empty with the explicit unavailable-score or dead-zone reason; unknown predicates are not fabricated false values. All six side-specific upstream predicates remain separately available as diagnostics.
+
+For classifier success followed by formation/handoff failure, retain classifier direction and its diagnostics but record final `direction=NONE` and the separate Set-resolution/handoff-validation reason specified in §34A. Classification primary rejection and final-resolution failure are not conflated.
 
 ---
 
@@ -2676,6 +3398,41 @@ direction_classifier:
   all_failed_gates: []
   all_active_vetoes: []
 ```
+
+**F-004 working evidence and local diagnostic boundary.** Retain the analytical cutoff; source selector identities; manifests, selected-range coverage/finality evidence; numeric policy and upstream formula versions; configuration versions, thresholds and weights; ordinary population member identities and proven initialization boundaries; same-clock bucket IDs/UTC intervals/coverage; and local 5m seed/checkpoint ancestry. Retain current metric values, z-scores, percentiles, normalized Q36 factors, gates, all six side-specific veto predicates with values/thresholds/comparison directions/availability reasons, and Q36 `DIRECTION_SCORE`.
+
+The six upstream predicates are:
+
+```text
+BTC_VETO_LONG
+BTC_VETO_SHORT
+RELATIVE_VETO_LONG
+RELATIVE_VETO_SHORT
+LOCAL_MOMENTUM_VETO_LONG
+LOCAL_MOMENTUM_VETO_SHORT
+```
+
+They are separate from F-005's candidate-filtered `all_active_vetoes[]`. An unavailable predicate remains unavailable, not false. Required missing factors never become zero, neutral, stale values or redistributed weights.
+
+The canonical score uses exact products and their exact sum before its single Q36 quantizer:
+
+```text
+DIRECTION_SCORE = Q36(
+    0.35 * STRUCTURE_SCORE
+  + 0.25 * MOMENTUM_EFFECTIVE
+  + 0.15 * RELATIVE_SCORE
+  + 0.15 * FLOW_EFFECTIVE
+  + 0.10 * BTC_CONTEXT_SCORE
+)
+```
+
+The separately retained weighted contributions are each Q36 of their named weighted factor and are diagnostic only. Their rounded sum, diagnostic Q18 exports or display rounding MUST NOT produce the score or feed a gate. Internal normalization remains Q36 under the unchanged numeric policy.
+
+All this evidence is Set-local; it adds no Market Handoff metric or direction authority to F-004. Replay uses the same cutoff, selected members, canonical source ordering and authentic checkpoints. Duplicate identities do not add observations; changed accepted content invalidates affected eligibility rather than splicing history into frozen evidence.
+
+**F-005 classifier and final-resolution evidence.** Preserve `candidate_side` (LONG, SHORT or absent when no trustworthy candidate exists), `classifier_direction`, final `matched`/`direction`, all classification availability/rejection diagnostics, separate formation/handoff-resolution reason, and all six upstream predicates. In the existing `direction_classifier` diagnostic object, `direction` describes classifier output; final match direction is recorded separately and is LONG/SHORT only for committed matched results.
+
+Pin `direction_classifier_id = TT-METH-014`, version `0.4.1`, scope `ALTCOIN_VS_BTC`, the F-004 final specification identity, Set definition/version, Market Handoff version 4 and `TT_SET_NUMERIC_V1`. Preserve the governed analytical cutoff, selector identities, exact Core Set/constituent evidence, active formation epoch, required sequence/freshness/reset/re-arm/expiry state and consumption bindings. For a committed match, persist the same cycle/result IDs, frozen contexts and handoff outbox record atomically under §34A. Unmatched records contain no newly committed match IDs; delivery replay preserves committed IDs. These owner-local diagnostics add no handoff field.
 
 ---
 
@@ -2940,18 +3697,23 @@ Both are universally required.
 
 # 10. ATR semantics
 
-Canonical:
+Canonical work state and Market Handoff values under [Set numeric policy](../schemas/SET_NUMERIC_POLICY.md), §§3 and 5:
 
 ```text
-ATR_15m = ATR(window=14, smoothing=Wilder)
+ATR_work = canonical Q36 ATR(window=14, smoothing=Wilder, input_timeframe=15m)
+ATR_15m = Q18(ATR_work)
 ```
 
-and:
+Only with available current work ATR and the corresponding eligible completed `Close_15m > 0`:
 
 ```text
-ATR_PCT_15m =
-100 × ATR_15m / Close_15m
+ATR_PCT_work = Q36(100 × ATR_work / Close_15m)
+ATR_PCT_15m = Q18(ATR_PCT_work)
 ```
+
+Do not compute the percentage from already-exported `ATR_15m`. All current candle prices and the factual predecessor close must be finite/nonnegative; require `0 <= Low <= Close <= High`. A predecessor outside the current range is permitted. Known historical identity checks precede semantic rejection; an invalid candle cannot advance ATR, be skipped or trigger reseeding.
+
+An otherwise eligible zero close still advances the prescribed TR/ATR state and remains the next predecessor, but its ATR_PCT is `UNAVAILABLE` without division. Persist the reason; no stale ratio, denominator substitution or reset is permitted. Both exported Q18 values must be strictly positive and available. Zero or a positive work value rounding to zero blocks handoff without clamping or modifying recurrence. Position consumes the exact received Q18 values, not recovered working precision.
 
 The values must be fully available as-of `matched_at`.
 
@@ -4122,25 +4884,27 @@ Canonical structure:
 
 ```yaml
 market_invalidation:
-  version:
-
-  decision_cycle_id:
-  set_result_id:
-  set_version:
-  set_family:
-  direction:
-
-  created_at:
-  source_market_snapshot_at:
-
+  version: string
+  condition_record_id: string
+  decision_cycle_id: string
+  set_result_id: string
+  set_version: string
+  set_family: string
+  direction: LONG | SHORT
+  created_at: RFC3339-timestamp
+  source_market_snapshot_at: RFC3339-timestamp
+  configuration_id: string
+  configuration_version: string
+  configuration_content_digest: string
   hard_conditions:
-    - condition_id:
-      metric_or_reference:
-      operator:
-      threshold_or_reference:
-      timeframe_or_horizon:
-      freshness:
-      unavailable_policy:
+    - condition_id: string
+      metric_or_reference: typed-identifier
+      operator: LT | LTE | GT | GTE | EQ | NEQ | CROSSED_BELOW | CROSSED_ABOVE | BROKEN | CONTRADICTED
+      threshold_or_reference: typed-threshold-or-reference
+      timeframe_or_horizon: typed-timeframe-or-horizon
+      freshness: typed-freshness-rule
+      unavailable_policy: FAIL_SAFE_CANCEL
+      evidence_selector: typed-selector
 ```
 
 Important:
@@ -4148,6 +4912,254 @@ Important:
 The Set must store **deterministic conditions**, not a prose explanation.
 
 These conditions are frozen at the original Set match and are activated only after the matching `Order Placed` event arrives.
+
+hard_conditions must contain at least one valid condition. Empty,
+missing, malformed or unsupported condition sets cannot evaluate VALID. The
+record is created/persisted with the original matched cycle and is identified
+by condition_record_id; set_result.frozen_condition_record_id points to that
+same record. Retain its digest and configuration_id, configuration_version and
+configuration_content_digest. The Set/Trigger/Core Set configuration selected
+for the formation epoch remains pinned for this matched cycle; later edits
+apply only to later cycles.
+
+Each metric/reference, operator, threshold/reference, timeframe/horizon,
+freshness rule and evidence_selector must have a deterministic typed meaning
+in the frozen Set configuration. No concrete condition list, metric-specific
+operator meaning or new threshold is selected here. Missing/malformed fields
+or unsupported operator/reference yield INVALID_CONDITION with the §12A
+unavailable/fail-closed handling. unavailable_policy is FAIL_SAFE_CANCEL, not
+an implementer-selected policy.
+
+---
+
+# 12A. Canonical pending-validity reducer — F-013
+
+F-013 governs already-placed pending LIMIT **entry remainder only**. It
+requires a matched cycle and its persisted frozen record followed by actual
+Order Placed acceptance/placement. It does not govern unmatched evaluations,
+submission attempts without exchange acceptance, definitive no-create
+failures, market orders or filled exposure after entry remainder is gone.
+
+### Activation identity
+
+Monitoring activates only after actual exchange acceptance/placement when:
+
+```text
+Order Placed.decision_cycle_id == frozen_condition.decision_cycle_id
+AND
+Order Placed.set_result_id == frozen_condition.set_result_id
+AND
+Order Placed.tranche_id is linked to that matched cycle
+```
+
+Set must not activate monitoring by symbol, order timestamp, nearest order,
+latest Set result or current configuration. Ambiguous activation identity fails
+closed and records an integrity/reconciliation condition; Set does not guess an
+order.
+
+### Per-condition evaluation
+
+Each hard condition evaluates to:
+
+```text
+TRUE
+FALSE
+UNAVAILABLE
+INVALID_CONDITION
+```
+
+Evaluation uses only the frozen predicate definition and the current factual
+measurements explicitly selected by that frozen definition. It never updates the
+original threshold, reference identity, configuration binding or condition list.
+
+For Set-derived numeric dependencies, use `TT_SET_NUMERIC_V1`, exact comparisons
+with no epsilon and eligible factual evidence only.
+
+TRUE means that the frozen **invalidation** condition holds, not that the
+pending order remains valid.
+
+Current full-Set mismatch is not itself an invalidator. Cancellation on this
+basis is permitted only when an already-frozen hard condition independently
+evaluates TRUE according to its certified semantics; a full-Set rematch is not
+required.
+
+Existence of a newer opportunity is not an F-013 invalidator and cannot be made
+one merely by freezing a newer-opportunity predicate.
+
+Arbitrary order age is not an F-013 invalidator and cannot become a timer-based
+TTL. This does not prohibit genuine frozen-condition evidence freshness or
+horizon semantics intrinsic to the certified condition itself. Unavailable
+required evidence follows the UNAVAILABLE branch, not a fabricated TRUE
+age-based predicate.
+
+Coins CLOSE stops only new formation; it does not stop this existing
+matched-cycle monitor.
+
+### Canonical outcome precedence
+
+For an active monitor, reduce evidence to exactly one outcome:
+
+```text
+1. If authoritative Order Lifecycle evidence proves no active unfilled entry
+   remainder remains:
+   pending_validity = STOPPED
+   action = NO_MARKET_SIGNAL
+
+2. Else if activation identity or frozen condition record is invalid,
+   unresolved or unsupported:
+   pending_validity = UNAVAILABLE
+   action = FAIL_CLOSED_RECONCILE_THEN_CANCEL_IF_STILL_PENDING
+
+3. Else if any frozen hard condition evaluates TRUE:
+   pending_validity = INVALID
+   action = EMIT_ORDER_CANCEL_SIGNAL
+
+4. Else if any required hard condition evaluates UNAVAILABLE or
+   INVALID_CONDITION:
+   pending_validity = UNAVAILABLE
+   action = FAIL_CLOSED_RECONCILE_THEN_CANCEL_IF_STILL_PENDING
+
+5. Else all valid required hard conditions evaluate FALSE:
+   pending_validity = VALID
+   action = NO_MESSAGE
+```
+
+Known TRUE hard invalidation takes precedence over unavailable evidence for
+another condition. Authoritative terminal remainder state takes precedence over
+market evaluation.
+
+### Signal and unavailable handling
+
+When INVALID, emit the version-2 Order Cancel Signal with cause INVALIDATION
+as defined in Part I §4.2, with condition_record_id, condition_id and evidence_digest. invalidated_at is
+the authoritative effective time of the evidence making the predicate TRUE.
+Repeated evaluation of the same frozen condition, evidence digest and active
+remainder retains the same logical signal / original signal_id on replay.
+
+When `UNAVAILABLE`, Set records the unavailable state and requests fail-closed
+handling:
+
+```text
+Set marks MONITORING_UNAVAILABLE
+→ reconcile order state first
+→ if Lifecycle proves no active unfilled remainder:
+     STOPPED, no market cancel signal
+→ if still pending:
+     emit or preserve cancel-required signal/intention for the unfilled
+     remainder
+```
+
+Market recovery must not silently erase an already required unavailable
+cancellation for the same active remainder.
+
+The UNAVAILABLE branch uses `ORDER_CANCEL_SIGNAL` cause
+`MONITORING_UNAVAILABLE` from Part I §4.2. It does not invent a TRUE predicate,
+condition ID, evidence digest or effective invalidation time. Its common
+cycle/result/tranche/symbol fields must identify the original accepted entry
+through retained explicit lineage independently of a usable frozen record.
+The canonical contract Semantics defines the following required mapping.
+
+**Establishment and identity.** Set durably records the first
+MONITORING_UNAVAILABLE transition and its original effective timestamp before
+publication. For an exactly bound accepted entry, atomically acquire-or-join
+one sticky `unavailable_requirement_id` under the semantic key
+`(F013_MONITORING_UNAVAILABLE, decision_cycle_id, set_result_id, tranche_id,
+original entry client_order_link_id)`, within that entry's existing
+account/environment lineage. The accepted client/native entry pair is retained
+from actual Order Placed and Lifecycle state, never inferred from symbol/time.
+`signal_id` is the same identity as `unavailable_requirement_id`. Partial fills,
+remainder quantities/revisions, retry count, fresh market observations,
+additional unavailable conditions and recovery do not change this key or mint
+another requirement. Concrete opaque-ID encoding remains an implementation
+detail under IDENTIFIER_LINEAGE; the durable key-to-identity mapping is unique
+and replay-stable.
+
+**Truthful effective time and reason.** `unavailable_at` is the once-persisted
+effective timestamp of the first durable MONITORING_UNAVAILABLE transition
+establishing the requirement. It is not a guessed missing-evidence timestamp,
+TRUE invalidation time, delivery time or a refreshed retry clock. A deferred
+exact-target binding retains that original transition time. Select
+`unavailable_reason_code` only after the unchanged reducer returns UNAVAILABLE.
+At first establishment, the deterministic reporting order is
+ACTIVATION_IDENTITY_INVALID, FROZEN_RECORD_INVALID_OR_UNRESOLVED,
+INVALID_CONDITION, REQUIRED_EVIDENCE_UNAVAILABLE. Retain all independently
+known failures locally; freeze the primary reason. This order distinguishes
+failure classes without changing the certified reducer or its TRUE/terminal
+precedence. Later facts do not rewrite the requirement reason or timestamp.
+
+**Reconcile-first delivery.** Set records the requirement and its outgoing
+content atomically before it can be published. If the current authoritative
+terminal tombstone is already known, return STOPPED and publish no new request.
+Otherwise this same-cause envelope carries the fail-closed request to Lifecycle
+for reconciliation. Before positive pending proof it is only a conditional
+request, not a TRUE market-cancel signal or native cancellation authority.
+Lifecycle reconciles first: terminal/no remainder makes the request no longer
+applicable without cancellation; proven active remainder admits/preserves the
+sticky cancel-required intention; unavailable remainder proof retains the
+request for reconciliation without guessing or dropping it. No second
+message family, shared-state shortcut, Set → API order call or new edge is
+needed. Order Placed/entry-lifecycle events remain the return boundary.
+
+**Invalid activation or record.** A missing/corrupt/unresolved frozen record
+cannot force synthetic condition fields. A trusted original matched record ID
+may be included only as the optional record reference; otherwise omit it. If
+actual placement and exact routing lineage are already authoritative but the
+activation-to-record binding is invalid, send the same-cause request with
+ACTIVATION_IDENTITY_INVALID. If even the target cycle/result/tranche/entry
+cannot be uniquely established, retain the original unavailable transition
+and integrity/reconciliation condition under its existing exact source/event
+identity; publish no guessed-target envelope. Only independent authoritative
+lineage resolving that same incident can attach it to the original accepted
+entry and acquire-or-join its requirement. Resolution cannot select another
+opportunity or erase the original fail-closed obligation. Terminal proof
+instead ends applicability. Missing local authority is not a fabricated order.
+
+**Sticky applicability.** Market recovery cannot retract, clear, reclassify or
+remint an established requirement. A later evaluation's VALID/NO_MESSAGE does
+not revoke the earlier durable cancellation obligation or its retries; the
+reducer itself is unchanged. Any independently required INVALIDATION signal
+retains its own cause/evidence. Lifecycle joins requests for the same entry to
+its existing cancel intent; neither cause authorizes a second entry or a
+filled-exposure close. Only authoritative terminal remainder proof ends this
+requirement's applicability.
+
+### Stop, persistence and replay
+
+Monitoring stops only when Order Lifecycle authoritatively confirms no active
+unfilled entry remainder remains because the entry is fully filled, cancelled,
+rejected, submission failed or otherwise terminal.
+
+F-013 never closes already filled exposure.
+
+An emitted cancellation does not itself prove terminal remainder state;
+monitoring remains logically pending until authoritative Lifecycle confirms
+the terminal cancel/fill outcome. Evaluation is event/condition-driven from
+relevant completed bars, level/required-market-data events, stream health or
+reconnect/recovery, without inventing a timeout or age rule.
+
+F-013 persists condition record and digest, activation identity, monitor state,
+last evidence identity/digest, emitted cancel signal identity,
+unavailable/fail-closed requirement and Lifecycle terminal/tombstone revisions.
+
+Restart restores these facts. It must not rebuild a condition from current
+configuration, latest Set result, current snapshot, nearest order or current
+market data.
+
+Persist the unavailable cancellation requirement until authoritative terminal
+remainder proof; market recovery cannot erase it. Restore its semantic key,
+unavailable_requirement_id, identical signal_id, immutable cause/content,
+unavailable_at, initial reason, optional-record presence/value, original
+transition/activation/entry binding, outbox publication/delivery state and
+current authoritative Lifecycle remainder revision/tombstone. Identical
+replays return the committed identity/content; a changed payload under the
+same identity is an integrity/reconciliation condition, not an update. An
+acknowledgement alone never proves cancellation. A terminal tombstone retains
+the requirement's deduplication binding and prevents replay/restart from
+reactivating it. Missing or conflicting recovery state is not zero/no
+requirement and must not be repaired by reminting. Filled quantity remains
+real exposure under its established TP/SL/Manual Close and S-004 finality rules.
+There is no KEEP signal, full-Set rematch requirement, reprice, chase or
+Portfolio capital-release authority in F-013.
 
 ---
 
@@ -4261,17 +5273,20 @@ If the validator loses reliable market data:
 validity = UNAVAILABLE
 ```
 
-For pending unfilled LIMIT entry:
+For pending unfilled LIMIT entry, apply the reconcile-first fail-safe:
 
 ```text
-request CANCEL
+Set records MONITORING_UNAVAILABLE
+→ request fail-closed handling and reconcile order state first
+→ if Lifecycle proves no active unfilled entry remainder:
+     STOPPED; no market cancel signal
+→ if an unfilled remainder is still pending:
+     emit or preserve cancel-required signal/intention for that remainder
 ```
 
-After reconnection:
-
-```text
-reconcile order state first
-```
+Loss of market evidence is not proof of an active or terminal native order.
+An unresolved activation/remainder identity is surfaced for reconciliation;
+Set must not guess a target order or invent TRUE-condition evidence.
 
 If the order filled during the outage:
 - do not pretend it is still pending;
@@ -4279,7 +5294,19 @@ If the order filled during the outage:
 - exchange-side TP/SL remain authoritative.
 
 If still pending:
-- cancel it;
+- retain and execute the required cancellation of only the unfilled remainder
+  through Order Lifecycle;
+- recovery of market data must not erase an already required cancellation;
+- retain the frozen condition/evidence/activation and original signal identity
+  across restart until authoritative terminal remainder proof.
+
+The four-outcome reducer and precedence in §12A apply. Its governed
+`MONITORING_UNAVAILABLE` cause carries the original unavailable_requirement_id,
+unavailable_at and unavailable_reason_code; it does not populate the TRUE
+invalidation fields. Exact unresolved-target handling, conditional request
+delivery, receipt and restart use §12A and Order Cancel Signal Semantics.
+F-013 never closes filled exposure; physical flatness or a cancel intention does not replace the
+canonical S-004 CLOSED predicate or authorize Portfolio release.
 
 ---
 

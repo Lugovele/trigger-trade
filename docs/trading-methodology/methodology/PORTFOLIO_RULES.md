@@ -1,7 +1,7 @@
 # TriggerTrade — Portfolio Rules Methodology
 
 **File:** `PORTFOLIO_RULES.md`  
-**Version:** 1.2.14  
+**Version:** 1.2.15
 **Architecture role:** `Portfolio Rules — Capital Management`
 
 
@@ -789,6 +789,87 @@ P8 binds each result to the day containing the proven permanent final closing ex
 First receipt posts result_id exactly once to its immutable day; duplicate result or tranche final identity cannot post again. A late historical result fills only that historical day and never changes current-day Daily Loss/latch, current daily_portfolio_base, or adds P&L again to API-authoritative wallet capital. Portfolio stores delivered_at separately in its receipt ledger. Current-day latch resets only at next rollover.
 
 The gate blocks new Coin OPEN and new grants/holds. It never force-closes positions, cancels existing entries/protection or creates a funding/time-based exit.
+
+A-009 uses the following exact totals, diagnostic and ordered gate
+branches. The diagnostic loss-used amount does not replace the signed predicate.
+
+For accounting day `d`:
+
+```text
+R_d = sum(net_realized_result_i)
+      for each eligible FINAL logical result i
+      with accounting_day_id_i = d
+      posted exactly once under result_id and tranche_id
+
+L_d = daily_portfolio_base_d * daily_loss_limit_pct / 100
+
+daily_loss_used_amount_d = max(-R_d, 0)
+```
+
+Gate rule:
+
+```text
+if daily_loss_limit_enabled is false:
+    daily_loss_status = DISABLED
+    daily_loss_blocks_new_exposure = false
+
+else if current_day_latch is already set:
+    daily_loss_status = LATCHED
+    daily_loss_blocks_new_exposure = true
+
+else if required day/base/configuration/recovery state is unavailable:
+    daily_loss_status = UNAVAILABLE_OR_FAIL_CLOSED
+    daily_loss_blocks_new_exposure = true
+
+else if R_current_day <= -L_current_day:
+    latch DAILY_LOSS_LIMIT_REACHED for the current accounting day
+    daily_loss_status = LIMIT_REACHED or LATCHED
+    daily_loss_blocks_new_exposure = true
+
+else:
+    daily_loss_status = OK
+    daily_loss_blocks_new_exposure = false
+```
+
+Equivalent exact comparison:
+
+```text
+100 * R_current_day <= -(daily_portfolio_base_current_day * daily_loss_limit_pct)
+```
+
+The branches above are ordered: disabled first, then the retained current-day
+latch, then unavailable required state, then the inclusive threshold comparison.
+Disabling the gate does not erase its latch; re-enabling during that same
+accounting day encounters the retained latch. A reconstructed total alone does
+not recover latch history. Preserve the existing next-day rollover rule.
+
+For an enabled evaluable comparison, require the existing ACCOUNTING_DAY_V1
+boundary identity/instants, fixed governed daily base, valid positive configured
+percentage and restored day/receipt/latch/base/commitment/critical-incident state.
+No new base-reconstruction policy or percentage ceiling is introduced. Included
+results are complete governed-currency FINAL A-002 logical results with valid
+result/tranche/day identity, posted once under both identities. An actually
+empty eligible result set with recovered receipt/day state sums to zero;
+missing receipt or recovery evidence must not be represented as an empty set.
+Conflicting result/tranche identity is an integrity conflict, not permission to
+rewrite totals. Native aggregate P&L and unrealized P&L are not additional
+summands or substitutes.
+
+When disabled, the Daily Loss gate supplies no blocking and requires no
+base/final-result evidence for that decision. This does not waive independent
+receipt, recovery, accounting or other integrity gates. The existing
+Asia/Jerusalem civil-midnight boundaries and economic closing execution day
+remain authoritative; receipt/cleanup/finalization times cannot substitute.
+Historical results remain on their immutable historical day and do not change
+today's base/latch or re-credit API-authoritative wallet capital.
+
+L_d is an exact comparison threshold, not a newly quantized cash posting.
+Finite decimal products and division by 100 retain exact digits (or exact
+rational representation); no cents/Qcapital/report rounding, binary float,
+epsilon or arbitrary finite-precision context may change the comparison.
+Keep R_current_day <= -L_current_day rather than loss_used >= L_current_day,
+including if an upstream base policy admits zero base. This gate adds no
+cancellation, exit or capital-release authority.
 
 ---
 

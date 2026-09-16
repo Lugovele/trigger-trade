@@ -522,7 +522,7 @@ portfolio_data_response:
     status: AVAILABLE | PARTIAL | UNAVAILABLE
     items:
     - symbol: string
-      status: AVAILABLE | PARTIAL | UNAVAILABLE
+      status: AVAILABLE | UNAVAILABLE
       facts:
         nullable:
           tick_size: decimal-string
@@ -551,7 +551,7 @@ portfolio_data_response:
     status: AVAILABLE | PARTIAL | UNAVAILABLE
     items:
     - symbol: string
-      status: AVAILABLE | PARTIAL | UNAVAILABLE
+      status: AVAILABLE | UNAVAILABLE
       facts:
         nullable:
           maker_fee_rate: decimal-string

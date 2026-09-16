@@ -1,7 +1,7 @@
 # Set-derived numeric computation — TT_SET_NUMERIC_V1
 
 **Policy version:** `TT_SET_NUMERIC_V1`  
-**Package revision:** `v1.2.14` — stable policy ID remains `TT_SET_NUMERIC_V1`.
+**Package revision:** `v1.2.15` — stable policy ID remains `TT_SET_NUMERIC_V1`.
 
 This is a technical computation/serialization contract for existing Set formulas, timeframes, windows and thresholds. It does not add a signal, indicator or fallback. Set owns derived state. Market Handoff v4 declares this policy; Position consumes the exact canonical handoff and must not run another indicator library to replace it. `TT_NUMERIC_V1` remains the independent monetary policy.
 
@@ -44,6 +44,20 @@ Compute existing true range exactly: max(high-low, abs(high-previous_close), abs
 
 Ordinary normalization/percentile baselines use 30 completed UTC calendar days, and their minimum data requirement is 14 completed UTC calendar days, under §1.1 and Set methodology Part II §6. Their existing lengths and formulas are unchanged. Recursive seed ancestry and those analytical population windows are distinct; the fixed UTC lookback does not replace the governed ATR seed/checkpoint ancestry. No host library default selects either.
 
+**F-003 candle eligibility and state progression.** The canonical input timeframe is 15m. In addition to the source, completion, cutoff, continuity and exact-decimal rules above, current high, low and close and the factual immediately preceding close MUST be finite and nonnegative. Each current completed candle MUST satisfy:
+
+```text
+0 <= low <= close <= high
+```
+
+The predecessor close is not required to lie within the current candle's range. Equal bounds and a zero low/close are admissible when the full ordering and all other source requirements hold. A factual price gap is not a missing interval. The current close participates in eligibility and in the next predecessor binding even though it is not an operand of the current TR expression. TR is exact; there is no separate TR quantizer before the seed mean or recurrence.
+
+A malformed or otherwise ineligible required candle makes the affected computation `UNAVAILABLE`, with its source-validity reason persisted. It MUST NOT form or advance ATR, be omitted to complete a seed, be bridged by holding prior ATR constant, be repaired or authorize a later anchor/reseed. No valid dependent Market Handoff may be emitted. Known accepted historical request/selection/page/snapshot/native-source ownership and immutable-content checks precede semantic rejection: a geometry error cannot conceal an existing identity/content contradiction. Geometry failure alone does not create a new integrity-conflict class.
+
+An otherwise eligible zero-close candle retains its exact TR, membership in the consecutive seed, and any prescribed Q36 seed/recurrence update. Persist that update and source identity once; its factual zero close remains the next candle's predecessor. Zero close alone MUST NOT discard the candle or reset/reseed ancestry. ATR_PCT is separately unavailable under §5. A zero-close candle that fails another eligibility rule is not within this exception.
+
+Zero is a valid internal ATR work state. The first work ATR can become available on the fourteenth eligible completed seed candle after proof; fourteen seed candles plus the factual initial predecessor close are required, not a full extra predecessor-candle payload. Fourteen zero TRs seed zero; the next recurrence from zero remains `Q36(TR / 14)`. Nonpositive or rounded-to-zero export eligibility never changes the recurrence. After restart, an eligible zero-close update is neither repeated nor discarded because no handoff was emitted.
+
 ## 4. Population standard deviation and sqrt
 
 For the existing population standard deviation, `n` is the exact population count and ddof=0. Compute exact mean = sum(x)/n and exact variance = sum((x-mean)^2)/n using the stored canonical source metric values. Negative variance is invalid; zero standard deviation makes the existing normalization unavailable.
@@ -55,7 +69,7 @@ Square root is correctly rounded to the work grid using integers. For variance a
 | Value crossing Market Handoff | Value policy |
 |---|---|
 | `volatility.atr_15m` | Round persisted ATR work state once HALF_EVEN to 10^-18; must be positive and available. |
-| `volatility.atr_pct_15m` | Compute existing `100 * atr_work / closed_candle_close` exactly, round to work grid, then HALF_EVEN to 10^-18; must be positive and available. Do not derive from an already wire-rounded ATR. |
+| `volatility.atr_pct_15m` | Only when the corresponding eligible completed candle close is strictly positive and ATR work is available, compute `100 * atr_work / closed_candle_close` exactly, round to Q36, then HALF_EVEN to 10^-18; the export must be positive and available. At an otherwise eligible zero close the ratio is UNAVAILABLE and the division is not evaluated; retain the separate TR/ATR update under §3. Do not derive the ratio from wire-rounded ATR. |
 | Exact factual prices/tick/lot sizes, bound reference prices | Preserve factual decimal value or the already-specified reference price/tick normalization; do not apply ATR rounding or invent another level. |
 | Integer ages, counts, ordinals | Exact integer. No decimal approximation. |
 | Direction, bindings, IDs and policy version | Exact existing discrete semantics; no numeric inference or reselection. |
@@ -65,6 +79,18 @@ No other new continuous field may cross this strict schema. A future derived num
 Use plain canonical decimal strings: no exponent, plus sign, negative zero, redundant leading integer zero or trailing fractional zeros. Object serialization uses sorted-key compact UTF-8 JSON. Position uses exactly the received wire values for its existing formulas/comparisons and compares ratios by exact rational cross multiplication. Display rounding must not feed any gate.
 
 Example: seed fourteen TR values of 1, then TR=2 gives work ATR `1.071428571428571428571428571428571429`; handoff ATR is exactly `1.071428571428571429`. At close=100 the canonical ATR percentage is the same number. Existing improvement minimum 0.10 ATR is met exactly by `0.1071428571428571429`; below fails and above passes. This selects one technical boundary representation, not a new threshold.
+
+For F-003, with available current Q36 ATR work `A_t` and the corresponding eligible completed 15m close `C_t > 0`, the boundaries are:
+
+```text
+P_t = Q36(100 * A_t / C_t)
+ATR_wire_t = Q18(A_t)
+ATR_PCT_wire_t = Q18(P_t)
+```
+
+Numerical ATR_PCT `1` means one percent. When an otherwise eligible `C_t = 0`, `P_t` and the required ATR_PCT export are `UNAVAILABLE`; persist the reason and emit no valid required volatility handoff. Do not substitute zero, a previous ratio, a minimum positive value, NaN or infinity, or evaluate the quotient. Missing/malformed source data are not this zero-close branch. A valid zero ATR with positive close yields zero internal ATR_PCT, but cannot satisfy the positive-export requirement.
+
+Both Q18 `volatility.atr_15m` and `volatility.atr_pct_15m` MUST be strictly positive and available for a valid handoff. A positive working value that rounds to zero remains ineligible; preserve its working state without clamping or reseeding. `UNAVAILABLE` is absence of an eligible value, never a numeric wire value. Position consumes exactly the received Q18 values and cannot recover hidden precision.
 
 ## 6. Implementation conformance
 

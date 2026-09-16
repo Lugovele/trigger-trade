@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://triggertrade.invalid/spec/v1.2.14/wire.schema.json",
+  "$id": "https://triggertrade.invalid/spec/v1.2.15/wire.schema.json",
   "$defs": {
     "native_scope": {
       "type": "object",
@@ -2686,17 +2686,123 @@
             "reason_code": {
               "type": "string",
               "minLength": 1
+            },
+            "condition_record_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "condition_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "evidence_digest": {
+              "type": "string",
+              "minLength": 1
+            },
+            "cause": {
+              "type": "string",
+              "enum": [
+                "INVALIDATION",
+                "MONITORING_UNAVAILABLE"
+              ]
+            },
+            "unavailable_requirement_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "unavailable_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "unavailable_reason_code": {
+              "type": "string",
+              "enum": [
+                "ACTIVATION_IDENTITY_INVALID",
+                "FROZEN_RECORD_INVALID_OR_UNRESOLVED",
+                "INVALID_CONDITION",
+                "REQUIRED_EVIDENCE_UNAVAILABLE"
+              ]
             }
           },
           "required": [
             "contract_version",
+            "cause",
             "signal_id",
             "decision_cycle_id",
             "set_result_id",
             "tranche_id",
-            "symbol",
-            "invalidated_at",
-            "reason_code"
+            "symbol"
+          ],
+          "oneOf": [
+            {
+              "properties": {
+                "cause": {
+                  "const": "INVALIDATION"
+                }
+              },
+              "required": [
+                "invalidated_at",
+                "reason_code",
+                "condition_record_id",
+                "condition_id",
+                "evidence_digest"
+              ],
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "unavailable_requirement_id"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "unavailable_at"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "unavailable_reason_code"
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "properties": {
+                "cause": {
+                  "const": "MONITORING_UNAVAILABLE"
+                }
+              },
+              "required": [
+                "unavailable_requirement_id",
+                "unavailable_at",
+                "unavailable_reason_code"
+              ],
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "invalidated_at"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "reason_code"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "condition_id"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "evidence_digest"
+                    ]
+                  }
+                ]
+              }
+            }
           ],
           "additionalProperties": false
         }
@@ -8360,7 +8466,6 @@
           "type": "string",
           "enum": [
             "AVAILABLE",
-            "PARTIAL",
             "UNAVAILABLE"
           ]
         },
@@ -8467,7 +8572,6 @@
           "type": "string",
           "enum": [
             "AVAILABLE",
-            "PARTIAL",
             "UNAVAILABLE"
           ]
         },
@@ -10796,5 +10900,5 @@
       "additionalProperties": false
     }
   },
-  "title": "TriggerTrade v1.2.14 strict wire contracts"
+  "title": "TriggerTrade v1.2.15 strict wire contracts"
 }

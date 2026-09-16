@@ -1,6 +1,6 @@
 # Native factual evidence profile — F01 / F02 / F06
 
-**Document version:** 1; package revision `v1.2.14`. This document constrains normalized evidence on existing API boundaries. It is not a new adapter implementation, new business block, or certification of native exchange behavior. Synthetic profile names in this document are deliberately not production Bybit profiles.
+**Document version:** 1; package revision `v1.2.15`. This document constrains normalized evidence on existing API boundaries. It is not a new adapter implementation, new business block, or certification of native exchange behavior. Synthetic profile names in this document are deliberately not production Bybit profiles.
 
 ## 1. Evidence, not outbound intent
 

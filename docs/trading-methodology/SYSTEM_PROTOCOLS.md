@@ -1,4 +1,4 @@
-# TriggerTrade — Canonical Cross-Document Protocols v1.2.14
+# TriggerTrade — Canonical Cross-Document Protocols v1.2.15
 
 
 This document specifies shared invariants used by the four existing business blocks. It is not a new business block, service boundary, trading strategy, or exchange-conformance certificate. Methodology sections and contracts incorporate these named protocols. They must not define competing versions.
@@ -883,3 +883,15 @@ A genuinely unrelated malformed input that cannot be uniquely associated with ac
 This invariant applies to the active domains: native observations; native manifests and native attribution/clearance resolutions; financial coverage and component coverage; financial factual-basis/source-set proofs; financial allocation resolutions; entry-acceptance integrity; native-scope reconciliation; close/Day authority and coverage proofs; historical Market Data request/selection/page/snapshot ownership; and current-protection query/proof envelopes. For mixed native observations, factual execution/quantity contradictions remain execution facts while lineage/ownership/clearance-only contradictions remain proof facts. Historical frozen handoffs and immutable financial/quantity effects are never rewritten as an integrity response.
 
 The factual-basis and financial-allocation histories, immutable financial source/alias core, source conservation and post-final receipt machinery retain their existing semantics. No external audit, sweep, test harness or historical artifact is normative for this rule.
+
+## Research isolation — S-005 diagnostic-only boundary
+
+S-005 is owned by Research and may be retained only as diagnostic context in isolated, pinned research/backtest/demo runs. It is not a canonical trading input. It MUST NOT affect Set matching, F-005 direction, Position decisions or construction (including sizing, stops and take profits), Portfolio approvals, Order Lifecycle behavior, or live or paper execution eligibility. It adds no business/API edge, wire field or live runtime dependency. Existing Set-owned volatility and BTC context remain distinct from S-005.
+
+`CTX-REGIME@0.1.0` identifies a non-normative research/demo candidate, not an active methodology version. Its formula, windows, thresholds, labels, symbol/proxy scope and numeric implementation are not canonical product truth. No canonical S-005 formula, domain, input/output contract, numeric policy or live trading semantics is defined here. Research parameters remain configurable; no candidate formula or threshold is incorporated into active trading rules.
+
+`UNKNOWN` and `INSUFFICIENT_DATA` are diagnostic outcomes only. Neither these states nor any regime label is permission, safety, eligibility or a profitability claim.
+
+Research/backtest/demo runs using S-005 MUST retain the methodology package revision, contract versions, configuration IDs and content digests, the numeric policy IDs actually used, historical selectors/source snapshots, adapter/profile assumptions and execution-simulation assumptions. Restart or replay must retain those bindings rather than substitute current configuration or evidence. These diagnostic records have no authority over the certified trading pipeline.
+
+This S-005 boundary is separate from protocol S05 — Global native quantity allocation identity, which remains unchanged.
