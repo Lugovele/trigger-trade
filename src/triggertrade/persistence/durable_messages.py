@@ -22,6 +22,14 @@ class DurableMessageConflict(PostgresPersistenceError):
     """Raised when a message identity or dedupe key is replayed with new content."""
 
 
+class TransportFrontierGap(PostgresPersistenceError):
+    """Raised when a scoped committed-prefix frontier cannot be advanced safely."""
+
+
+class TransportFrontierConflict(PostgresPersistenceError):
+    """Raised when a scoped frontier identity is replayed with different content."""
+
+
 @dataclass(frozen=True)
 class OutboxMessageRecord:
     message_id: str
@@ -57,6 +65,27 @@ class InboxMessageRecord:
     status: str
     received_at: datetime
     processed_at: datetime | None
+
+
+@dataclass(frozen=True)
+class TransportFrontierHead:
+    scope_key: str
+    committed_head: int
+
+
+@dataclass(frozen=True)
+class TransportFrontierMessage:
+    scope_key: str
+    sequence: int
+    message_id: str
+    payload_digest: str
+
+
+@dataclass(frozen=True)
+class TransportFrontierApplied:
+    scope_key: str
+    consumer: str
+    applied_sequence: int
 
 
 class DurableMessageStore:
@@ -322,6 +351,239 @@ class DurableMessageStore:
             raise PostgresPersistenceError("inbox message id not found")
         return _inbox_from_row(row)
 
+    def append_frontier_outbox(
+        self,
+        *,
+        scope_key: str,
+        message_id: str,
+        producer: str,
+        consumer: str,
+        message_type: str,
+        message_version: str,
+        payload: Mapping[str, Any],
+        aggregate_id: str | None = None,
+        causation_id: str | None = None,
+        correlation_id: str | None = None,
+        dedupe_key: str | None = None,
+        available_at: datetime | None = None,
+    ) -> tuple[OutboxMessageRecord, TransportFrontierMessage, bool]:
+        """Append an outbox message and advance the scoped committed-prefix head atomically."""
+
+        scope_key = _stable_text(scope_key, field="scope_key")
+        head = self.lock_frontier_head(scope_key=scope_key)
+        outbox, _ = self.append_outbox(
+            message_id=message_id,
+            producer=producer,
+            consumer=consumer,
+            message_type=message_type,
+            message_version=message_version,
+            payload=payload,
+            aggregate_id=aggregate_id,
+            causation_id=causation_id,
+            correlation_id=correlation_id,
+            dedupe_key=dedupe_key,
+            available_at=available_at,
+        )
+        existing = self.get_frontier_message(scope_key=scope_key, message_id=outbox.message_id)
+        if existing is not None:
+            if existing.payload_digest != outbox.payload_digest:
+                raise TransportFrontierConflict("frontier message identity already exists with different content")
+            return outbox, existing, False
+
+        sequence = head.committed_head + 1
+        with self._connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO triggertrade_transport_frontier_messages (
+                    scope_key, sequence, message_id, payload_digest
+                ) VALUES (%s, %s, %s, %s)
+                RETURNING scope_key, sequence, message_id, payload_digest
+                """,
+                (scope_key, sequence, outbox.message_id, outbox.payload_digest),
+            )
+            row = cursor.fetchone()
+            cursor.execute(
+                """
+                UPDATE triggertrade_transport_frontier_heads
+                SET committed_head = %s,
+                    updated_at = now()
+                WHERE scope_key = %s
+                """,
+                (sequence, scope_key),
+            )
+        if row is None:
+            raise PostgresPersistenceError("frontier append did not return a record")
+        return outbox, _frontier_message_from_row(row), True
+
+    def lock_frontier_head(self, *, scope_key: str) -> TransportFrontierHead:
+        scope_key = _stable_text(scope_key, field="scope_key")
+        with self._connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO triggertrade_transport_frontier_heads (scope_key, committed_head)
+                VALUES (%s, 0)
+                ON CONFLICT (scope_key) DO NOTHING
+                """,
+                (scope_key,),
+            )
+            cursor.execute(
+                """
+                SELECT scope_key, committed_head
+                FROM triggertrade_transport_frontier_heads
+                WHERE scope_key = %s
+                FOR UPDATE
+                """,
+                (scope_key,),
+            )
+            row = cursor.fetchone()
+        if row is None:
+            raise PostgresPersistenceError("frontier head could not be locked")
+        return _frontier_head_from_row(row)
+
+    def get_frontier_head(self, *, scope_key: str) -> TransportFrontierHead | None:
+        scope_key = _stable_text(scope_key, field="scope_key")
+        with self._connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT scope_key, committed_head
+                FROM triggertrade_transport_frontier_heads
+                WHERE scope_key = %s
+                """,
+                (scope_key,),
+            )
+            row = cursor.fetchone()
+        return None if row is None else _frontier_head_from_row(row)
+
+    def get_frontier_message(
+        self,
+        *,
+        scope_key: str,
+        message_id: str,
+    ) -> TransportFrontierMessage | None:
+        scope_key = _stable_text(scope_key, field="scope_key")
+        message_id = _stable_text(message_id, field="message_id")
+        with self._connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT scope_key, sequence, message_id, payload_digest
+                FROM triggertrade_transport_frontier_messages
+                WHERE scope_key = %s AND message_id = %s
+                """,
+                (scope_key, message_id),
+            )
+            row = cursor.fetchone()
+        return None if row is None else _frontier_message_from_row(row)
+
+    def list_frontier_messages(
+        self,
+        *,
+        scope_key: str,
+        after_sequence: int = 0,
+        through_sequence: int | None = None,
+    ) -> tuple[TransportFrontierMessage, ...]:
+        scope_key = _stable_text(scope_key, field="scope_key")
+        if after_sequence < 0:
+            raise TransportFrontierGap("after_sequence cannot be negative")
+        if through_sequence is not None and through_sequence < after_sequence:
+            raise TransportFrontierGap("through_sequence cannot be before after_sequence")
+        query = """
+            SELECT scope_key, sequence, message_id, payload_digest
+            FROM triggertrade_transport_frontier_messages
+            WHERE scope_key = %s AND sequence > %s
+        """
+        params: tuple[Any, ...]
+        if through_sequence is None:
+            query += " ORDER BY sequence"
+            params = (scope_key, after_sequence)
+        else:
+            query += " AND sequence <= %s ORDER BY sequence"
+            params = (scope_key, after_sequence, through_sequence)
+        with self._connection.cursor() as cursor:
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+        return tuple(_frontier_message_from_row(row) for row in rows)
+
+    def apply_frontier_prefix(
+        self,
+        *,
+        scope_key: str,
+        consumer: str,
+        through_sequence: int,
+    ) -> TransportFrontierApplied:
+        scope_key = _stable_text(scope_key, field="scope_key")
+        consumer = _stable_text(consumer, field="consumer")
+        if through_sequence < 0:
+            raise TransportFrontierGap("through_sequence cannot be negative")
+        head = self.lock_frontier_head(scope_key=scope_key)
+        if through_sequence > head.committed_head:
+            raise TransportFrontierGap("cannot apply beyond committed frontier head")
+        current = self._lock_frontier_applied(scope_key=scope_key, consumer=consumer)
+        if through_sequence <= current.applied_sequence:
+            return current
+        rows = self.list_frontier_messages(
+            scope_key=scope_key,
+            after_sequence=current.applied_sequence,
+            through_sequence=through_sequence,
+        )
+        expected = tuple(range(current.applied_sequence + 1, through_sequence + 1))
+        actual = tuple(record.sequence for record in rows)
+        if actual != expected:
+            raise TransportFrontierGap("frontier prefix has a missing committed sequence")
+        with self._connection.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE triggertrade_transport_frontier_applied
+                SET applied_sequence = %s,
+                    updated_at = now()
+                WHERE scope_key = %s AND consumer = %s
+                RETURNING scope_key, consumer, applied_sequence
+                """,
+                (through_sequence, scope_key, consumer),
+            )
+            row = cursor.fetchone()
+        if row is None:
+            raise PostgresPersistenceError("frontier applied row could not be updated")
+        return _frontier_applied_from_row(row)
+
+    def get_frontier_applied(self, *, scope_key: str, consumer: str) -> TransportFrontierApplied | None:
+        scope_key = _stable_text(scope_key, field="scope_key")
+        consumer = _stable_text(consumer, field="consumer")
+        with self._connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT scope_key, consumer, applied_sequence
+                FROM triggertrade_transport_frontier_applied
+                WHERE scope_key = %s AND consumer = %s
+                """,
+                (scope_key, consumer),
+            )
+            row = cursor.fetchone()
+        return None if row is None else _frontier_applied_from_row(row)
+
+    def _lock_frontier_applied(self, *, scope_key: str, consumer: str) -> TransportFrontierApplied:
+        with self._connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO triggertrade_transport_frontier_applied (scope_key, consumer, applied_sequence)
+                VALUES (%s, %s, 0)
+                ON CONFLICT (scope_key, consumer) DO NOTHING
+                """,
+                (scope_key, consumer),
+            )
+            cursor.execute(
+                """
+                SELECT scope_key, consumer, applied_sequence
+                FROM triggertrade_transport_frontier_applied
+                WHERE scope_key = %s AND consumer = %s
+                FOR UPDATE
+                """,
+                (scope_key, consumer),
+            )
+            row = cursor.fetchone()
+        if row is None:
+            raise PostgresPersistenceError("frontier applied row could not be locked")
+        return _frontier_applied_from_row(row)
+
 
 _OUTBOX_SELECT = """
 SELECT message_id, producer, consumer, message_type, message_version,
@@ -373,6 +635,27 @@ def _inbox_from_row(row: tuple[Any, ...]) -> InboxMessageRecord:
         status=str(row[7]),
         received_at=row[8],
         processed_at=row[9],
+    )
+
+
+def _frontier_head_from_row(row: tuple[Any, ...]) -> TransportFrontierHead:
+    return TransportFrontierHead(scope_key=str(row[0]), committed_head=int(row[1]))
+
+
+def _frontier_message_from_row(row: tuple[Any, ...]) -> TransportFrontierMessage:
+    return TransportFrontierMessage(
+        scope_key=str(row[0]),
+        sequence=int(row[1]),
+        message_id=str(row[2]),
+        payload_digest=str(row[3]),
+    )
+
+
+def _frontier_applied_from_row(row: tuple[Any, ...]) -> TransportFrontierApplied:
+    return TransportFrontierApplied(
+        scope_key=str(row[0]),
+        consumer=str(row[1]),
+        applied_sequence=int(row[2]),
     )
 
 

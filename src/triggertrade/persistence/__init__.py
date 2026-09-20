@@ -18,6 +18,11 @@ from .durable_messages import (
     DurableMessageStore,
     InboxMessageRecord,
     OutboxMessageRecord,
+    TransportFrontierApplied,
+    TransportFrontierConflict,
+    TransportFrontierGap,
+    TransportFrontierHead,
+    TransportFrontierMessage,
 )
 from .instrument_catalog_store import InstrumentCatalogStore
 from .futures_position_store import FuturesClosedPositionRecord, FuturesPositionEvent, FuturesPositionRecord, FuturesPositionStore
@@ -205,6 +210,11 @@ __all__ = [
     "OwnerStateRevisionConflict",
     "OwnerStateStore",
     "OutboxMessageRecord",
+    "TransportFrontierApplied",
+    "TransportFrontierConflict",
+    "TransportFrontierGap",
+    "TransportFrontierHead",
+    "TransportFrontierMessage",
     "PostgresConnectionFactory",
     "PostgresPersistenceError",
     "PostgresSettings",

@@ -73,6 +73,7 @@ def test_migrations_owner_state_restart_rollback_and_cas():
             "0017",
             "0018",
             "0019",
+            "0020",
         ]
         assert apply_postgres_migrations(dsn=settings.dsn, schema=settings.schema) == ()
 

@@ -61,6 +61,7 @@ def test_submit_authorization_store_persists_replays_and_publishes_outbox():
             "0017",
             "0018",
             "0019",
+            "0020",
         ]
         factory = PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)
         grant = build_grant()
@@ -109,7 +110,7 @@ def test_submit_authorization_store_rejects_changed_duplicate_and_invalid_author
         construction = constructed_result(grant)
         authorization = _authorization(grant, construction)
         changed = _authorization(grant, construction)
-        changed["submit_authorized"]["held_committed_capital"] = "99"
+        changed["submit_authorized"]["authorized_at"] = "2026-09-15T00:00:01Z"
         mismatched = _authorization(grant, construction)
         mismatched["submit_authorized"]["order_spec_id"] = "different-spec"
 

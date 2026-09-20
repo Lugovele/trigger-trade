@@ -62,6 +62,7 @@ def test_order_spec_store_persists_replays_and_publishes_outbox():
             "0017",
             "0018",
             "0019",
+            "0020",
         ]
         factory = PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)
         grant = build_grant()
@@ -102,14 +103,15 @@ def test_order_spec_store_rejects_changed_duplicate_and_invalid_digest():
         spec = valid_order_spec(grant)
         construction = constructed_result(grant, order_spec_digest_value=order_spec_digest(spec))
         changed = valid_order_spec(grant)
-        changed["order_spec"]["entry"]["price"] = "101"
+        changed["order_spec"]["spec_created_at"] = "2026-09-15T00:00:01Z"
+        changed_construction = constructed_result(grant, order_spec_digest_value=order_spec_digest(changed))
         wrong_digest = constructed_result(grant, order_spec_digest_value="b" * 64)
 
         with PostgresUnitOfWork(factory) as uow:
             store = OrderSpecStore(uow.connection)
             store.record(construction_result=construction, order_spec=spec)
             with pytest.raises(OrderSpecConflict):
-                store.record(construction_result=construction, order_spec=changed)
+                store.record(construction_result=changed_construction, order_spec=changed)
             with pytest.raises(PostgresPersistenceError, match="order_spec_digest"):
                 store.record(construction_result=wrong_digest, order_spec=spec)
     finally:

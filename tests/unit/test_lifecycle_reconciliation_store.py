@@ -101,13 +101,16 @@ def test_store_records_resolution_first_and_replays_later_observation():
             "0017",
             "0018",
             "0019",
+            "0020",
         ]
         factory = PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)
 
         with PostgresUnitOfWork(factory) as uow:
             store = LifecycleReconciliationStore(uow.connection)
             resolved = store.record_event(resolution_event())
-            stale_observation = store.record_event(native_event(event_id="native-event-after-resolution"))
+            later_observation = native_event()
+            later_observation["order_event"]["event_id"] = "native-event-after-resolution"
+            stale_observation = store.record_event(later_observation)
 
         with PostgresUnitOfWork(factory) as restarted:
             store = LifecycleReconciliationStore(restarted.connection)
