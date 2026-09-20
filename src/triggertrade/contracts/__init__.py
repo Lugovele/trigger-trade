@@ -1,4 +1,4 @@
-"""Target v1.2.14 wire contract registry and validation."""
+"""Target v1.2.15 wire contract registry and validation."""
 
 from .registry import (
     APPROVED_PACKAGE_REVISION,

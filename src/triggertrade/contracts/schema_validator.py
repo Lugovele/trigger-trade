@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+import json
 import re
 from typing import Any, Mapping
 
@@ -23,10 +25,12 @@ def validate_wire_definition(definition: str, payload: Mapping[str, Any]) -> Non
 def _validate(schema: Mapping[str, Any], value: Any, *, path: str) -> None:
     if "$ref" in schema:
         _validate(_resolve_ref(schema["$ref"]), value, path=path)
-        return
+        if len(schema) == 1:
+            return
+        schema = {key: item for key, item in schema.items() if key != "$ref"}
     if "allOf" in schema:
         for index, child in enumerate(schema["allOf"]):
-            _validate_condition(child, value, path=f"{path}.allOf[{index}]")
+            _validate(child, value, path=f"{path}.allOf[{index}]")
     if "anyOf" in schema:
         errors: list[str] = []
         for child in schema["anyOf"]:
@@ -37,6 +41,26 @@ def _validate(schema: Mapping[str, Any], value: Any, *, path: str) -> None:
             else:
                 return
         raise SchemaValidationError(f"{path} does not match any allowed schema: {'; '.join(errors)}")
+    if "oneOf" in schema:
+        matches = 0
+        errors: list[str] = []
+        for child in schema["oneOf"]:
+            try:
+                _validate(child, value, path=path)
+            except SchemaValidationError as exc:
+                errors.append(str(exc))
+            else:
+                matches += 1
+        if matches != 1:
+            raise SchemaValidationError(f"{path} must match exactly one schema, matched {matches}: {'; '.join(errors)}")
+    if "not" in schema:
+        try:
+            _validate(schema["not"], value, path=f"{path}.not")
+        except SchemaValidationError:
+            pass
+        else:
+            raise SchemaValidationError(f"{path} matches a forbidden schema")
+    _validate_condition(schema, value, path=path)
     if "const" in schema and value != schema["const"]:
         raise SchemaValidationError(f"{path} must be {schema['const']!r}, got {value!r}")
     if "enum" in schema and value not in schema["enum"]:
@@ -45,7 +69,10 @@ def _validate(schema: Mapping[str, Any], value: Any, *, path: str) -> None:
         _validate_type(schema["type"], value, path=path)
 
     schema_type = schema.get("type")
-    if schema_type == "object" or (isinstance(value, Mapping) and "properties" in schema):
+    if schema_type == "object" or (
+        isinstance(value, Mapping)
+        and {"properties", "required", "additionalProperties", "minProperties", "maxProperties"} & set(schema)
+    ):
         _validate_object(schema, value, path=path)
     elif schema_type == "array":
         _validate_array(schema, value, path=path)
@@ -58,7 +85,6 @@ def _validate(schema: Mapping[str, Any], value: Any, *, path: str) -> None:
 def _validate_condition(schema: Mapping[str, Any], value: Any, *, path: str) -> None:
     if_schema = schema.get("if")
     if if_schema is None:
-        _validate(schema, value, path=path)
         return
     try:
         _validate(if_schema, value, path=f"{path}.if")
@@ -105,7 +131,7 @@ def _validate_array(schema: Mapping[str, Any], value: Any, *, path: str) -> None
     if schema.get("uniqueItems") is True:
         seen: set[str] = set()
         for item in value:
-            marker = repr(item)
+            marker = json.dumps(item, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
             if marker in seen:
                 raise SchemaValidationError(f"{path} must contain unique items")
             seen.add(marker)
@@ -120,8 +146,12 @@ def _validate_string(schema: Mapping[str, Any], value: Any, *, path: str) -> Non
         raise SchemaValidationError(f"{path} must be a string")
     if "minLength" in schema and len(value) < schema["minLength"]:
         raise SchemaValidationError(f"{path} must not be empty")
-    if "pattern" in schema and re.fullmatch(schema["pattern"], value) is None:
+    if "maxLength" in schema and len(value) > schema["maxLength"]:
+        raise SchemaValidationError(f"{path} must have at most {schema['maxLength']} characters")
+    if "pattern" in schema and re.search(schema["pattern"], value) is None:
         raise SchemaValidationError(f"{path} does not match required pattern")
+    if schema.get("format") == "date-time" and not _is_date_time(value):
+        raise SchemaValidationError(f"{path} must be a valid date-time")
 
 
 def _validate_integer(schema: Mapping[str, Any], value: Any, *, path: str) -> None:
@@ -129,6 +159,12 @@ def _validate_integer(schema: Mapping[str, Any], value: Any, *, path: str) -> No
         raise SchemaValidationError(f"{path} must be an integer")
     if "minimum" in schema and value < schema["minimum"]:
         raise SchemaValidationError(f"{path} must be >= {schema['minimum']}")
+    if "maximum" in schema and value > schema["maximum"]:
+        raise SchemaValidationError(f"{path} must be <= {schema['maximum']}")
+    if "exclusiveMinimum" in schema and value <= schema["exclusiveMinimum"]:
+        raise SchemaValidationError(f"{path} must be > {schema['exclusiveMinimum']}")
+    if "exclusiveMaximum" in schema and value >= schema["exclusiveMaximum"]:
+        raise SchemaValidationError(f"{path} must be < {schema['exclusiveMaximum']}")
 
 
 def _validate_type(expected_type: str, value: Any, *, path: str) -> None:
@@ -152,6 +188,16 @@ def _validate_type(expected_type: str, value: Any, *, path: str) -> None:
             raise SchemaValidationError(f"{path} must be an array")
     else:
         raise SchemaValidationError(f"{path} uses unsupported schema type: {expected_type}")
+
+
+def _is_date_time(value: str) -> bool:
+    if not (value.endswith("Z") or re.search(r"[+-]\d{2}:\d{2}$", value)):
+        return False
+    try:
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return True
 
 
 def _resolve_ref(ref: str) -> Mapping[str, Any]:

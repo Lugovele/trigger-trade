@@ -1,4 +1,4 @@
-"""Strict target contract envelopes for the approved v1.2.14 wire package."""
+"""Strict target contract envelopes for the approved v1.2.15 wire package."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from triggertrade.canonical_json import CanonicalJsonError, canonical_json_diges
 from .schema_validator import SchemaValidationError, validate_wire_definition
 
 
-APPROVED_PACKAGE_REVISION = "v1.2.14"
+APPROVED_PACKAGE_REVISION = "v1.2.15"
 SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -194,6 +194,67 @@ def _validate_payload(definition: ContractDefinition, payload: Mapping[str, Any]
         validate_wire_definition(definition.definition, payload)
     except SchemaValidationError as exc:
         raise ContractError(str(exc)) from exc
+    _validate_contract_semantics(definition, root)
+
+
+def _validate_contract_semantics(definition: ContractDefinition, root: Mapping[str, Any]) -> None:
+    if definition.definition == "ORDER_CANCEL_SIGNAL" and root.get("cause") == "MONITORING_UNAVAILABLE":
+        if root.get("signal_id") != root.get("unavailable_requirement_id"):
+            raise ContractError("ORDER_CANCEL_SIGNAL signal_id must equal unavailable_requirement_id")
+    if definition.definition == "PORTFOLIO_DATA_REQUEST.request":
+        _validate_portfolio_request_symbol_scope(root)
+    if definition.definition == "PORTFOLIO_DATA_REQUEST.response":
+        for section in ("instrument_metadata", "fee_rates"):
+            if section in root:
+                _validate_portfolio_symbol_section(section, root[section])
+
+
+def _validate_portfolio_request_symbol_scope(root: Mapping[str, Any]) -> None:
+    scope = root.get("scope")
+    filters = root.get("filters")
+    if not isinstance(scope, Mapping) or not isinstance(filters, Mapping):
+        return
+    symbols = filters.get("symbols")
+    if scope.get("instrument_metadata") or scope.get("fee_rates"):
+        if not isinstance(symbols, list) or not symbols:
+            raise ContractError("PORTFOLIO_DATA_REQUEST.request symbol-scoped sections require nonempty filters.symbols")
+
+
+def _validate_portfolio_symbol_section(section: str, value: Any) -> None:
+    if not isinstance(value, Mapping):
+        raise ContractError(f"PORTFOLIO_DATA_REQUEST.response.{section} must be an object")
+    items = value.get("items")
+    if not isinstance(items, list):
+        raise ContractError(f"PORTFOLIO_DATA_REQUEST.response.{section}.items must be an array")
+    symbols: list[str] = []
+    statuses: list[str] = []
+    for index, item in enumerate(items):
+        if not isinstance(item, Mapping):
+            raise ContractError(f"PORTFOLIO_DATA_REQUEST.response.{section}.items[{index}] must be an object")
+        status = item.get("status")
+        if status not in {"AVAILABLE", "UNAVAILABLE"}:
+            raise ContractError(
+                f"PORTFOLIO_DATA_REQUEST.response.{section}.items[{index}].status must be AVAILABLE or UNAVAILABLE"
+            )
+        symbol = item.get("symbol")
+        if not isinstance(symbol, str) or not symbol:
+            raise ContractError(f"PORTFOLIO_DATA_REQUEST.response.{section}.items[{index}].symbol is required")
+        symbols.append(symbol)
+        statuses.append(status)
+    if len(set(symbols)) != len(symbols):
+        raise ContractError(f"PORTFOLIO_DATA_REQUEST.response.{section}.items must not contain duplicate symbols")
+    expected = _portfolio_aggregate_status(statuses)
+    if value.get("status") != expected:
+        raise ContractError(f"PORTFOLIO_DATA_REQUEST.response.{section}.status must be {expected}")
+
+
+def _portfolio_aggregate_status(statuses: list[str]) -> str:
+    unique = set(statuses)
+    if unique == {"AVAILABLE"}:
+        return "AVAILABLE"
+    if unique == {"UNAVAILABLE"} or not unique:
+        return "UNAVAILABLE"
+    return "PARTIAL"
 
 
 def _reject_unknown(actual: set[str], expected: set[str], name: str) -> None:
@@ -602,7 +663,8 @@ _DEFINITIONS: dict[ContractType, tuple[ContractDefinition, ...]] = {
             2,
             "ORDER_CANCEL_SIGNAL",
             "order_cancel_signal",
-            ("contract_version", "signal_id", "decision_cycle_id", "set_result_id", "tranche_id", "symbol", "invalidated_at", "reason_code"),
+            ("contract_version", "cause", "signal_id", "decision_cycle_id", "set_result_id", "tranche_id", "symbol"),
+            enum_fields={"cause": ("INVALIDATION", "MONITORING_UNAVAILABLE")},
         ),
     ),
     ContractType.PORTFOLIO_DATA_REQUEST: (
@@ -729,6 +791,16 @@ _DEFINITIONS: dict[ContractType, tuple[ContractDefinition, ...]] = {
 
 
 _OPTIONAL_ROOT_FIELDS: dict[str, set[str]] = {
+    "ORDER_CANCEL_SIGNAL": {
+        "invalidated_at",
+        "reason_code",
+        "condition_record_id",
+        "condition_id",
+        "evidence_digest",
+        "unavailable_requirement_id",
+        "unavailable_at",
+        "unavailable_reason_code",
+    },
     "PORTFOLIO_DATA_REQUEST.response": {
         "account",
         "positions",

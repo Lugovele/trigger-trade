@@ -23,7 +23,7 @@ def test_current_repository_methodology_integrity_passes():
     result = validate_repository(REPO_ROOT)
 
     assert result.ok, [issue.format() for issue in result.issues]
-    assert result.baseline_revision == "v1.2.14"
+    assert result.baseline_revision == "v1.2.15"
     assert CANONICAL_README in result.canonical_references
 
 

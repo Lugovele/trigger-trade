@@ -215,6 +215,8 @@ def _value_for_schema(schema: dict[str, object]):
             field: _value_for_schema(schema["properties"][field])
             for field in schema.get("required", [])
         }
+        if "oneOf" in schema:
+            _apply_schema_overlay(value, schema["oneOf"][0], schema.get("properties", {}))
         if not value and schema.get("minProperties", 0) > 0 and schema.get("properties"):
             first_property = next(iter(schema["properties"]))
             value[first_property] = _value_for_schema(schema["properties"][first_property])
@@ -262,3 +264,15 @@ def _value_for_schema(schema: dict[str, object]):
             return "1"
         return "value"
     raise AssertionError(f"unsupported fixture schema: {schema}")
+
+
+def _apply_schema_overlay(value: dict[str, object], schema: dict[str, object], parent_properties: dict[str, object]) -> None:
+    properties = schema.get("properties", {})
+    for field in schema.get("required", ()):
+        if field in properties:
+            value[field] = _value_for_schema(properties[field])
+        elif field in parent_properties:
+            value[field] = _value_for_schema(parent_properties[field])
+    for field, field_schema in properties.items():
+        if "const" in field_schema:
+            value[field] = field_schema["const"]
