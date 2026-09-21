@@ -107,6 +107,11 @@ from .portfolio_accounting_day_store import (
     PortfolioAccountingDayStore,
     PortfolioDayResultRecord,
 )
+from .set_indicator_checkpoint_store import (
+    SetIndicatorCheckpointConflict,
+    SetIndicatorCheckpointRecord,
+    SetIndicatorCheckpointStore,
+)
 from .portfolio_state_store import PortfolioStateConflict, PortfolioStateRecord, PortfolioStateStore
 from .portfolio_cooldown_store import (
     PortfolioCooldownConflict,
@@ -253,6 +258,9 @@ __all__ = [
     "PortfolioAccountingDayRecord",
     "PortfolioAccountingDayStore",
     "PortfolioDayResultRecord",
+    "SetIndicatorCheckpointConflict",
+    "SetIndicatorCheckpointRecord",
+    "SetIndicatorCheckpointStore",
     "PortfolioStateConflict",
     "PortfolioStateRecord",
     "PortfolioStateStore",
