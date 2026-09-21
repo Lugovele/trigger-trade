@@ -12,6 +12,7 @@ import re
 import sqlite3
 from typing import Any
 
+from triggertrade.canonical_json import canonical_json_digest, canonical_json_text
 from triggertrade.research_pins import (
     default_store_research_pin_payload,
     research_pin_digest,
@@ -123,6 +124,18 @@ class ResearchDemoRunRecord:
     blocked_reason: str | None
     pin_payload: dict[str, Any]
     pin_digest: str
+
+
+@dataclass(frozen=True)
+class ResearchDiagnosticDatasetRecord:
+    dataset_id: str
+    source_object_id: str
+    content_digest: str
+    manifest_digest: str
+    source_provenance: dict[str, Any]
+    manifest: dict[str, Any]
+    object_path: str
+    created_at: str
 
 
 _ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,160}$")
@@ -496,9 +509,89 @@ class ResearchStore:
             )
             return self._get_research(conn, research_id)  # type: ignore[return-value]
 
+    def archive_diagnostic_dataset(
+        self,
+        *,
+        dataset_id: str,
+        source_payload: dict[str, Any],
+        source_provenance: dict[str, Any],
+        manifest: dict[str, Any],
+        created_at: str | None = None,
+        _fault_after_object: bool = False,
+    ) -> tuple[ResearchDiagnosticDatasetRecord, bool]:
+        _validate_id(dataset_id, "dataset_id")
+        created_at = created_at or _now()
+        clean_source = _jsonable(source_payload)
+        clean_provenance = _diagnostic_provenance(source_provenance)
+        clean_manifest = _diagnostic_manifest(manifest)
+        content_text = canonical_json_text(clean_source)
+        content_digest = canonical_json_digest(clean_source)
+        manifest_payload = {
+            "dataset_id": dataset_id,
+            "content_digest": content_digest,
+            "source_provenance": clean_provenance,
+            "manifest": clean_manifest,
+        }
+        manifest_digest = canonical_json_digest(manifest_payload)
+        source_object_id = f"diag-src-{content_digest[:24]}"
+        object_path = self._diagnostic_object_path(content_digest)
+        self._publish_diagnostic_object(object_path, content_text)
+        if _fault_after_object:
+            raise ResearchStoreError("diagnostic manifest publication failed after source object write")
+        with self._connect() as conn:
+            existing = self._get_diagnostic_dataset(conn, dataset_id)
+            if existing is not None:
+                if existing.content_digest != content_digest or existing.manifest_digest != manifest_digest:
+                    raise ResearchStoreError("diagnostic dataset identity already exists with different content")
+                return existing, False
+            if not object_path.exists():
+                raise ResearchStoreError("diagnostic manifest cannot reference missing source object")
+            conn.execute(
+                """
+                INSERT INTO research_diagnostic_datasets (
+                    dataset_id, source_object_id, content_digest, manifest_digest,
+                    source_provenance_json, manifest_json, object_path, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    dataset_id,
+                    source_object_id,
+                    content_digest,
+                    manifest_digest,
+                    canonical_json_text(clean_provenance),
+                    canonical_json_text(clean_manifest),
+                    str(object_path),
+                    created_at,
+                ),
+            )
+            return self._get_diagnostic_dataset(conn, dataset_id), True  # type: ignore[return-value]
+
+    def get_diagnostic_dataset(self, dataset_id: str) -> ResearchDiagnosticDatasetRecord | None:
+        _validate_id(dataset_id, "dataset_id")
+        with self._connect() as conn:
+            return self._get_diagnostic_dataset(conn, dataset_id)
+
+    def list_diagnostic_datasets(self) -> tuple[ResearchDiagnosticDatasetRecord, ...]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM research_diagnostic_datasets
+                ORDER BY created_at, dataset_id
+                """
+            ).fetchall()
+        return tuple(_diagnostic_dataset_from_row(row) for row in rows)
+
     def _get_research(self, conn: sqlite3.Connection, research_id: str) -> ResearchRecord | None:
         row = conn.execute("SELECT * FROM research_entities WHERE research_id = ?", (research_id,)).fetchone()
         return None if row is None else _research_from_row(row)
+
+    def _get_diagnostic_dataset(
+        self,
+        conn: sqlite3.Connection,
+        dataset_id: str,
+    ) -> ResearchDiagnosticDatasetRecord | None:
+        row = conn.execute("SELECT * FROM research_diagnostic_datasets WHERE dataset_id = ?", (dataset_id,)).fetchone()
+        return None if row is None else _diagnostic_dataset_from_row(row)
 
     def _ensure_mutable_research(self, conn: sqlite3.Connection, research_id: str) -> ResearchRecord:
         record = self._get_research(conn, research_id)
@@ -612,6 +705,20 @@ class ResearchStore:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS research_diagnostic_datasets (
+                    dataset_id TEXT PRIMARY KEY,
+                    source_object_id TEXT NOT NULL,
+                    content_digest TEXT NOT NULL,
+                    manifest_digest TEXT NOT NULL,
+                    source_provenance_json TEXT NOT NULL,
+                    manifest_json TEXT NOT NULL,
+                    object_path TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_research_updated ON research_entities(updated_at DESC)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_research_backtests_created ON research_backtest_runs(created_at DESC)")
             conn.execute(
@@ -620,6 +727,9 @@ class ResearchStore:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_research_demo_created ON research_demo_runs(created_at DESC)")
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_research_demo_research_created ON research_demo_runs(research_id, created_at DESC)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_research_diagnostic_datasets_created ON research_diagnostic_datasets(created_at, dataset_id)"
             )
             _ensure_column(conn, "research_entities", "promoted_set_id", "TEXT")
             _ensure_column(conn, "research_entities", "promoted_set_version", "TEXT")
@@ -639,6 +749,19 @@ class ResearchStore:
         conn = sqlite3.connect(self.path)
         conn.row_factory = sqlite3.Row
         return conn
+
+    def _diagnostic_object_path(self, content_digest: str) -> Path:
+        return self.path.with_suffix("").parent / "research-diagnostic-objects" / f"{content_digest}.json"
+
+    def _publish_diagnostic_object(self, object_path: Path, content_text: str) -> None:
+        object_path.parent.mkdir(parents=True, exist_ok=True)
+        if object_path.exists():
+            if object_path.read_text(encoding="utf-8") != content_text:
+                raise ResearchStoreError("diagnostic source object exists with different content")
+            return
+        tmp_path = object_path.with_name(f".{object_path.name}.tmp")
+        tmp_path.write_text(content_text, encoding="utf-8", newline="\n")
+        tmp_path.replace(object_path)
 
 
 def _research_from_row(row: sqlite3.Row) -> ResearchRecord:
@@ -709,6 +832,19 @@ def _demo_from_row(row: sqlite3.Row) -> ResearchDemoRunRecord:
     )
 
 
+def _diagnostic_dataset_from_row(row: sqlite3.Row) -> ResearchDiagnosticDatasetRecord:
+    return ResearchDiagnosticDatasetRecord(
+        dataset_id=row["dataset_id"],
+        source_object_id=row["source_object_id"],
+        content_digest=row["content_digest"],
+        manifest_digest=row["manifest_digest"],
+        source_provenance=_json_dict(row["source_provenance_json"]),
+        manifest=_json_dict(row["manifest_json"]),
+        object_path=row["object_path"],
+        created_at=row["created_at"],
+    )
+
+
 def _research_status_after_backtest(status: ResearchBacktestStatus) -> ResearchStatus:
     if status in {ResearchBacktestStatus.COMPLETED, ResearchBacktestStatus.COMPLETED_NO_TRADES}:
         return ResearchStatus.BACKTEST_READY
@@ -772,6 +908,27 @@ def _jsonable(value: Any) -> Any:
     if value.__class__.__name__ == "Decimal":
         return str(value)
     return value
+
+
+def _diagnostic_provenance(value: dict[str, Any]) -> dict[str, Any]:
+    clean = _jsonable(value)
+    if not isinstance(clean, dict) or not clean:
+        raise ResearchStoreError("diagnostic source provenance is required")
+    if not clean.get("source_kind") or not clean.get("retrieved_at"):
+        raise ResearchStoreError("diagnostic source provenance requires source_kind and retrieved_at")
+    return clean
+
+
+def _diagnostic_manifest(value: dict[str, Any]) -> dict[str, Any]:
+    clean = _jsonable(value)
+    if not isinstance(clean, dict) or not clean:
+        raise ResearchStoreError("diagnostic manifest is required")
+    if not clean.get("dataset_kind") or not clean.get("symbols") or not clean.get("timeframe"):
+        raise ResearchStoreError("diagnostic manifest requires dataset_kind, symbols, and timeframe")
+    symbols = clean["symbols"]
+    if not isinstance(symbols, list) or not symbols or any(not isinstance(symbol, str) or not symbol for symbol in symbols):
+        raise ResearchStoreError("diagnostic manifest symbols must be a non-empty string list")
+    return clean
 
 
 def _pin_json_and_digest(pin_payload: dict[str, Any]) -> tuple[str, str]:

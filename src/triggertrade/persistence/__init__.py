@@ -2,6 +2,13 @@
 
 from .execution_store import ExecutionFill, ExecutionRecord, ExecutionStore
 from .futures_execution_store import FuturesExecutionRecord, FuturesExecutionStore
+from .factual_evidence_store import (
+    FactualEvidenceConflict,
+    FactualEvidenceRecord,
+    FactualEvidenceStore,
+    FactualPreflightChallenge,
+    FactualPreflightResult,
+)
 from .legacy_execution_boundary import (
     LEGACY_EXECUTION_EVIDENCE_ROLE,
     TARGET_LIFECYCLE_TRUTH_ROLE,
@@ -107,6 +114,7 @@ from .research_store import (
     ResearchDecision,
     ResearchDemoRunRecord,
     ResearchDemoStatus,
+    ResearchDiagnosticDatasetRecord,
     ResearchRecord,
     ResearchStatus,
     ResearchStore,
@@ -156,6 +164,11 @@ __all__ = [
     "ExecutionFill",
     "ExecutionRecord",
     "ExecutionStore",
+    "FactualEvidenceConflict",
+    "FactualEvidenceRecord",
+    "FactualEvidenceStore",
+    "FactualPreflightChallenge",
+    "FactualPreflightResult",
     "CapitalGrantConflict",
     "CapitalGrantRecord",
     "CapitalGrantStore",
@@ -253,6 +266,7 @@ __all__ = [
     "ResearchDecision",
     "ResearchDemoRunRecord",
     "ResearchDemoStatus",
+    "ResearchDiagnosticDatasetRecord",
     "ResearchRecord",
     "ResearchStatus",
     "ResearchStore",

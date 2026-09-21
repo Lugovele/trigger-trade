@@ -115,6 +115,28 @@ def build_order_management_hard_response(
     return _parse({"order_management_response": body}, definition="ORDER_MANAGEMENT.response.hard")
 
 
+def build_order_management_financial_response(
+    *,
+    request_id: str,
+    response_id: str,
+    as_of: datetime | str,
+    result: str,
+    financial_facts: Mapping[str, Any],
+    exchange_error: Mapping[str, Any] | None = None,
+) -> TargetContract:
+    body = {
+        "contract_version": 4,
+        "request_id": _text(request_id, field="request_id"),
+        "response_id": _text(response_id, field="response_id"),
+        "operation": "GET_FINANCIAL_FACTS",
+        "as_of": _timestamp(as_of),
+        "result": result,
+        "financial_facts": _copy(financial_facts, field="financial_facts"),
+        "exchange_error": None if exchange_error is None else _copy(exchange_error, field="exchange_error"),
+    }
+    return _parse({"order_management_response": body}, definition="ORDER_MANAGEMENT.response.financial")
+
+
 def build_hard_execution_facts(
     *,
     instrument: Mapping[str, Any],
@@ -133,6 +155,188 @@ def build_hard_execution_facts(
         "facts_complete": _bool(facts_complete, field="facts_complete"),
         "checked_at": _timestamp(checked_at),
         "source_ref": _text(source_ref, field="source_ref"),
+    }
+
+
+def coverage_certificate(
+    *,
+    status: str,
+    coverage_from: datetime | str,
+    coverage_to: datetime | str,
+    missing_ranges: Sequence[Mapping[str, Any]] = (),
+    pagination_complete: bool,
+    next_cursor: str | None,
+    source_watermark_at: datetime | str | None,
+    source_finality_confirmed: bool,
+    source_endpoints: Sequence[str],
+    reason_code: str | None = None,
+) -> dict[str, Any]:
+    if status not in {"COMPLETE", "PARTIAL", "UNAVAILABLE"}:
+        raise OrderManagementGatewayError("coverage status must be COMPLETE, PARTIAL, or UNAVAILABLE")
+    if not isinstance(pagination_complete, bool) or not isinstance(source_finality_confirmed, bool):
+        raise OrderManagementGatewayError("coverage flags must be boolean")
+    if status == "COMPLETE":
+        if missing_ranges or not pagination_complete or next_cursor is not None or not source_finality_confirmed:
+            raise OrderManagementGatewayError("COMPLETE coverage requires no missing ranges, exhausted pagination, and source finality")
+    if status == "UNAVAILABLE" and reason_code is None:
+        raise OrderManagementGatewayError("UNAVAILABLE coverage requires reason_code")
+    return {
+        "status": status,
+        "coverage_from": _timestamp(coverage_from),
+        "coverage_to": _timestamp(coverage_to),
+        "missing_ranges": [_time_range(item) for item in missing_ranges],
+        "pagination_complete": pagination_complete,
+        "next_cursor": _optional_text(next_cursor, field="next_cursor"),
+        "source_watermark_at": None if source_watermark_at is None else _timestamp(source_watermark_at),
+        "source_finality_confirmed": source_finality_confirmed,
+        "source_endpoints": [_text(item, field="source_endpoint") for item in source_endpoints],
+        "reason_code": _optional_text(reason_code, field="reason_code"),
+    }
+
+
+def component_coverage_certificate(
+    *,
+    component: str,
+    applicable: bool,
+    not_applicable_evidence: str | None,
+    coverage: Mapping[str, Any],
+) -> dict[str, Any]:
+    if component not in {"EXECUTIONS", "TRADING_FEE", "FUNDING", "OTHER_EXCHANGE_COST"}:
+        raise OrderManagementGatewayError("unsupported financial coverage component")
+    if not isinstance(applicable, bool):
+        raise OrderManagementGatewayError("applicable must be boolean")
+    if not applicable and not not_applicable_evidence:
+        raise OrderManagementGatewayError("not-applicable component coverage requires evidence")
+    return {
+        "component": component,
+        "applicable": applicable,
+        "not_applicable_evidence": _optional_text(not_applicable_evidence, field="not_applicable_evidence"),
+        "coverage": _copy(coverage, field="coverage"),
+    }
+
+
+def normalize_magnitude_with_direction(*, magnitude: Decimal | str | int, direction: str) -> str:
+    amount = _decimal_value(magnitude, field="magnitude")
+    if amount < 0:
+        raise OrderManagementGatewayError("magnitude cannot be negative")
+    if direction not in {"DEBIT", "CREDIT", "ZERO"}:
+        raise OrderManagementGatewayError("economic_direction must be DEBIT, CREDIT, or ZERO")
+    if amount == 0:
+        if direction != "ZERO":
+            raise OrderManagementGatewayError("zero magnitude requires ZERO direction")
+        return "0"
+    if direction == "ZERO":
+        raise OrderManagementGatewayError("nonzero magnitude cannot use ZERO direction")
+    return _decimal_to_text(amount if direction == "CREDIT" else -amount)
+
+
+def financial_record(
+    *,
+    cashflow_id: str,
+    component_type: str,
+    currency: str,
+    source_amount: Decimal | str | int,
+    source_sign_convention: str,
+    economic_direction: str,
+    effective_at: datetime | str,
+    recorded_at: datetime | str,
+    source_endpoint: str,
+    source_record_id: str,
+    source_field: str,
+    amount_quantum: Decimal | str | int,
+    normalization_profile_version: str,
+    transaction_id: str | None = None,
+    execution_id: str | None = None,
+    symbol: str | None = None,
+    native_side: str | None = None,
+    position_idx: int | None = None,
+    client_order_link_id: str | None = None,
+    exchange_order_id: str | None = None,
+    parent_exchange_order_id: str | None = None,
+    child_id: str | None = None,
+    fee_classification: str = "NOT_APPLICABLE",
+    funding_classification: str = "NOT_APPLICABLE",
+    cost_classification: str = "NOT_APPLICABLE",
+    aliases: Sequence[Mapping[str, Any]] = (),
+    settlement_price: Decimal | str | int | None = None,
+    settlement_price_basis: str | None = None,
+    settlement_price_as_of: datetime | str | None = None,
+    settlement_source_ref: str | None = None,
+    pnl_scope: str = "NOT_APPLICABLE",
+    period_scope: str = "NOT_APPLICABLE",
+) -> dict[str, Any]:
+    signed_amount = _signed_amount(
+        source_amount=source_amount,
+        source_sign_convention=source_sign_convention,
+        economic_direction=economic_direction,
+    )
+    return {
+        "cashflow_id": _text(cashflow_id, field="cashflow_id"),
+        "transaction_id": _optional_text(transaction_id, field="transaction_id"),
+        "execution_id": _optional_text(execution_id, field="execution_id"),
+        "component_type": _enum(
+            component_type,
+            {"TRADING_FEE", "FUNDING", "REALIZED_TRADING_PNL", "OTHER_EXCHANGE_COST", "DEPOSIT", "WITHDRAWAL"},
+            field="component_type",
+        ),
+        "currency": _text(currency, field="currency"),
+        "signed_amount": signed_amount,
+        "amount_quantum": _unsigned_decimal_text(amount_quantum, field="amount_quantum"),
+        "effective_at": _timestamp(effective_at),
+        "recorded_at": _timestamp(recorded_at),
+        "symbol": _optional_text(symbol, field="symbol"),
+        "native_side": None if native_side is None else _side(native_side),
+        "position_idx": None if position_idx is None else _int(position_idx, field="position_idx"),
+        "client_order_link_id": _optional_text(client_order_link_id, field="client_order_link_id"),
+        "exchange_order_id": _optional_text(exchange_order_id, field="exchange_order_id"),
+        "parent_exchange_order_id": _optional_text(parent_exchange_order_id, field="parent_exchange_order_id"),
+        "child_id": _optional_text(child_id, field="child_id"),
+        "fee_classification": _enum(fee_classification, {"FEE", "REBATE", "NOT_APPLICABLE"}, field="fee_classification"),
+        "funding_classification": _enum(
+            funding_classification,
+            {"PAYMENT", "RECEIPT", "NOT_APPLICABLE"},
+            field="funding_classification",
+        ),
+        "cost_classification": _enum(cost_classification, {"COST", "REFUND", "NOT_APPLICABLE"}, field="cost_classification"),
+        "source_endpoint": _text(source_endpoint, field="source_endpoint"),
+        "source_record_id": _text(source_record_id, field="source_record_id"),
+        "source_field": _text(source_field, field="source_field"),
+        "source_amount": _decimal_text(source_amount, field="source_amount"),
+        "source_sign_convention": _enum(
+            source_sign_convention,
+            {"COST_POSITIVE", "CREDIT_POSITIVE", "MAGNITUDE_WITH_DIRECTION"},
+            field="source_sign_convention",
+        ),
+        "economic_direction": _enum(economic_direction, {"DEBIT", "CREDIT", "ZERO"}, field="economic_direction"),
+        "normalization_profile_version": _text(normalization_profile_version, field="normalization_profile_version"),
+        "aliases": [_financial_alias(alias) for alias in aliases],
+        "settlement_price": None if settlement_price is None else _unsigned_decimal_text(settlement_price, field="settlement_price"),
+        "settlement_price_basis": _optional_text(settlement_price_basis, field="settlement_price_basis"),
+        "settlement_price_as_of": None if settlement_price_as_of is None else _timestamp(settlement_price_as_of),
+        "settlement_source_ref": _optional_text(settlement_source_ref, field="settlement_source_ref"),
+        "pnl_scope": _enum(pnl_scope, {"GROSS", "NET", "NOT_APPLICABLE"}, field="pnl_scope"),
+        "period_scope": _enum(period_scope, {"EVENT", "INTERVAL", "LIFETIME", "NOT_APPLICABLE"}, field="period_scope"),
+    }
+
+
+def financial_facts(
+    *,
+    native_scope: Mapping[str, Any],
+    requested_from: datetime | str,
+    requested_to: datetime | str,
+    coverage: Mapping[str, Any],
+    component_coverage: Sequence[Mapping[str, Any]],
+    executions: Sequence[Mapping[str, Any]] = (),
+    cashflows: Sequence[Mapping[str, Any]] = (),
+) -> dict[str, Any]:
+    return {
+        "native_scope": _copy(native_scope, field="native_scope"),
+        "requested_from": _timestamp(requested_from),
+        "requested_to": _timestamp(requested_to),
+        "coverage": _copy(coverage, field="coverage"),
+        "component_coverage": [_copy(item, field="component_coverage") for item in component_coverage],
+        "executions": [_copy(item, field="executions") for item in executions],
+        "cashflows": [_copy(item, field="cashflows") for item in cashflows],
     }
 
 
@@ -380,6 +584,49 @@ def _optional_decimal(value: object, *, field: str) -> str | None:
     return _decimal_text(value, field=field)
 
 
+def _unsigned_decimal_text(value: object, *, field: str) -> str:
+    decimal = _decimal_value(value, field=field)
+    if decimal < 0:
+        raise OrderManagementGatewayError(f"{field} must be nonnegative")
+    return _decimal_to_text(decimal)
+
+
+def _decimal_value(value: object, *, field: str) -> Decimal:
+    if isinstance(value, float):
+        raise OrderManagementGatewayError(f"{field} must be an exact decimal string")
+    if value in {None, ""}:
+        raise OrderManagementGatewayError(f"{field} is required")
+    try:
+        decimal = Decimal(str(value))
+    except InvalidOperation as exc:
+        raise OrderManagementGatewayError(f"{field} must be an exact decimal string") from exc
+    if not decimal.is_finite():
+        raise OrderManagementGatewayError(f"{field} must be finite")
+    return decimal
+
+
+def _decimal_to_text(value: Decimal) -> str:
+    return format(value.normalize(), "f") if value != 0 else "0"
+
+
+def _signed_amount(
+    *,
+    source_amount: Decimal | str | int,
+    source_sign_convention: str,
+    economic_direction: str,
+) -> str:
+    amount = _decimal_value(source_amount, field="source_amount")
+    if source_sign_convention == "MAGNITUDE_WITH_DIRECTION":
+        return normalize_magnitude_with_direction(magnitude=amount, direction=economic_direction)
+    if economic_direction not in {"DEBIT", "CREDIT", "ZERO"}:
+        raise OrderManagementGatewayError("economic_direction must be DEBIT, CREDIT, or ZERO")
+    if source_sign_convention == "COST_POSITIVE":
+        return _decimal_to_text(-amount)
+    if source_sign_convention == "CREDIT_POSITIVE":
+        return _decimal_to_text(amount)
+    raise OrderManagementGatewayError("unsupported source_sign_convention")
+
+
 def _nonnegative_difference(left: str, right: str) -> str:
     result = Decimal(left) - Decimal(right)
     if result < 0:
@@ -474,3 +721,23 @@ def _source_record_id(raw: Mapping[str, Any], *, fallback_fields: Sequence[str])
     if resolved:
         return ":".join(resolved)
     raise OrderManagementGatewayError("source record identity is required")
+
+
+def _time_range(value: Mapping[str, Any]) -> dict[str, str]:
+    return {"from": _timestamp(value["from"]), "to": _timestamp(value["to"])}
+
+
+def _financial_alias(value: Mapping[str, Any]) -> dict[str, str]:
+    alias = _copy(value, field="alias")
+    return {
+        "source_endpoint": _text(alias.get("source_endpoint"), field="source_endpoint"),
+        "source_record_id": _text(alias.get("source_record_id"), field="source_record_id"),
+        "source_field": _text(alias.get("source_field"), field="source_field"),
+    }
+
+
+def _enum(value: str, allowed: set[str], *, field: str) -> str:
+    text = _text(value, field=field)
+    if text not in allowed:
+        raise OrderManagementGatewayError(f"{field} must be one of {', '.join(sorted(allowed))}")
+    return text

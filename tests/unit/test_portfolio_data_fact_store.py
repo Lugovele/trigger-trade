@@ -62,6 +62,7 @@ def test_portfolio_data_facts_persist_replay_and_fail_on_conflict():
             "0018",
             "0019",
             "0020",
+            "0021",
         ]
         assert apply_postgres_migrations(dsn=settings.dsn, schema=settings.schema) == ()
         factory = PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)
