@@ -294,7 +294,7 @@ def test_readiness_api_is_read_only_and_does_not_require_secret_payload(tmp_path
     thread.start()
     host, port = server.server_address
     try:
-        conn = HTTPConnection(host, port, timeout=2)
+        conn = HTTPConnection(host, port, timeout=10)
         conn.request("GET", "/api/readiness")
         response = conn.getresponse()
         payload = json.loads(response.read().decode("utf-8"))

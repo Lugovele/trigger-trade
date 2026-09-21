@@ -64,6 +64,7 @@ def test_coins_scope_store_publishes_outbox_and_set_applies_newer_revisions_only
             "0019",
             "0020",
             "0021",
+            "0022",
         ]
         factory = PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)
         open_payload = build_coins_contract(

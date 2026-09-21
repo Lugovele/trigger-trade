@@ -59,6 +59,7 @@ def test_position_config_pin_store_persists_replays_and_recovers_binding():
             "0019",
             "0020",
             "0021",
+            "0022",
         ]
         factory = PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)
 

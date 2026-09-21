@@ -37,7 +37,7 @@ def test_factual_evidence_store_persists_replays_and_recovers_accepted_content()
     settings = _settings()
     try:
         applied = apply_postgres_migrations(dsn=settings.dsn, schema=settings.schema)
-        assert applied[-1].version == "0021"
+        assert applied[-1].version == "0022"
         factory = PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)
         payload = _payload(price="25000.1")
         raw = {"native_id": "raw-1", "lastPrice": "25000.10"}
