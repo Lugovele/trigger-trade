@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
+from hashlib import sha256
 import json
 from typing import Any
 
@@ -20,7 +21,7 @@ from triggertrade.lifecycle_submission import (
 )
 
 from .lifecycle_start_gate_store import LifecycleStartGateRecord
-from .postgres import PostgresPersistenceError
+from .postgres import OwnerStateConflict, OwnerStateStore, PostgresPersistenceError
 
 
 class LifecycleSubmissionConflict(PostgresPersistenceError):
@@ -58,11 +59,22 @@ class LifecycleSubmissionRecord:
     exchange_status: str | None
 
 
+@dataclass(frozen=True)
+class LifecycleSubmissionObservationRecord:
+    observation_id: str
+    submission_intent_id: str
+    observation_kind: str
+    observation_class: str
+    payload: dict[str, Any]
+    payload_digest: str
+
+
 class LifecycleSubmissionStore:
     """Persist create-intent/client-order authority before exchange side effects."""
 
     def __init__(self, connection) -> None:
         self._connection = connection
+        self._observations = OwnerStateStore(connection)
 
     def prepare(
         self,
@@ -184,6 +196,25 @@ class LifecycleSubmissionStore:
         record = self._get_required(submission_intent_id)
         if record.last_dispatch_cutpoint_id != dispatch_cutpoint_id:
             raise LifecycleSubmissionConflict("uncertain dispatch cutpoint must match the active submit attempt")
+        if record.lifecycle_state not in {SUBMITTING, SUBMISSION_UNCERTAIN}:
+            raise LifecycleSubmissionConflict("submission intent is not dispatchable")
+        expected = self._record_observation(
+            submission=_with_uncertain(
+                record,
+                uncertain_at=uncertain_at,
+                error_code=error_code,
+            ),
+            observation_id=f"uncertain:{dispatch_cutpoint_id}",
+            observation_kind="DISPATCH_UNCERTAIN",
+            observation_class="RECOVERY_REQUIRED",
+            details={
+                "dispatch_cutpoint_id": dispatch_cutpoint_id,
+                "uncertain_at": uncertain_at,
+                "error_code": error_code,
+            },
+        )
+        if record.lifecycle_state == SUBMISSION_UNCERTAIN:
+            return record
         with self._connection.cursor() as cursor:
             cursor.execute(
                 _UPDATE_STATE
@@ -213,7 +244,10 @@ class LifecycleSubmissionStore:
             if current.lifecycle_state == SUBMITTED:
                 raise LifecycleSubmissionConflict("submitted lifecycle intent cannot become uncertain")
             raise PostgresPersistenceError(f"lifecycle submission intent not found: {submission_intent_id}")
-        return _record_from_row(row)
+        record = _record_from_row(row)
+        if record.lifecycle_state != expected.payload["lifecycle_submission_observation"]["lifecycle_state"]:
+            raise LifecycleSubmissionConflict("lifecycle submission observation replay changed state")
+        return record
 
     def mark_submitted(
         self,
@@ -254,7 +288,19 @@ class LifecycleSubmissionStore:
             )
             row = cursor.fetchone()
         if row is not None:
-            return _record_from_row(row)
+            record = _record_from_row(row)
+            self._record_observation(
+                submission=record,
+                observation_id=f"submitted:{exchange_order_id}",
+                observation_kind="NATIVE_CREATE_ACCEPTED",
+                observation_class="NEW_ACCEPTANCE",
+                details={
+                    "exchange_order_id": exchange_order_id,
+                    "exchange_status": exchange_status,
+                    "last_dispatch_cutpoint_id": record.last_dispatch_cutpoint_id,
+                },
+            )
+            return record
         existing = self._get_required(submission_intent_id)
         if existing.lifecycle_state == SUBMITTED:
             if existing.exchange_order_id == exchange_order_id and existing.exchange_status == exchange_status:
@@ -282,6 +328,47 @@ class LifecycleSubmissionStore:
             )
             rows = cursor.fetchall()
         return tuple(_record_from_row(row) for row in rows)
+
+    def list_observations(self, *, submission_intent_id: str) -> tuple[LifecycleSubmissionObservationRecord, ...]:
+        with self._connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT state_id, payload_json::text, payload_digest
+                FROM triggertrade_owner_state_records
+                WHERE owner = 'Lifecycle'
+                  AND state_type = 'lifecycle_submission_observation'
+                  AND payload_json -> 'lifecycle_submission_observation' ->> 'submission_intent_id' = %s
+                ORDER BY payload_json -> 'lifecycle_submission_observation' ->> 'observation_id'
+                """,
+                (_text(submission_intent_id, field="submission_intent_id"),),
+            )
+            rows = cursor.fetchall()
+        return tuple(_observation_from_row(row) for row in rows)
+
+    def record_arrival_observation(
+        self,
+        *,
+        submission_intent_id: str,
+        arrival_id: str,
+        observation_kind: str,
+        observation_class: str,
+        details: dict[str, Any],
+    ) -> LifecycleSubmissionObservationRecord:
+        if observation_class not in {
+            "DUPLICATE_ARRIVAL",
+            "OUT_OF_ORDER_ARRIVAL",
+            "RECOVERY_OBSERVATION",
+            "MANUAL_OBSERVATION",
+        }:
+            raise PostgresPersistenceError("unsupported lifecycle arrival observation class")
+        submission = self._get_required(submission_intent_id)
+        return self._record_observation(
+            submission=submission,
+            observation_id=f"arrival:{_text(arrival_id, field='arrival_id')}",
+            observation_kind=observation_kind,
+            observation_class=observation_class,
+            details=details,
+        )
 
     def _mark_dispatch(
         self,
@@ -335,9 +422,32 @@ class LifecycleSubmissionStore:
         if row is None:
             existing = self._get_required(submission_intent_id)
             if existing.last_dispatch_cutpoint_id == dispatch_cutpoint_id and existing.lifecycle_state == lifecycle_state:
+                self._record_observation(
+                    submission=existing,
+                    observation_id=f"dispatch:{dispatch_cutpoint_id}",
+                    observation_kind="DISPATCH_CUTPOINT",
+                    observation_class="NEW_ATTEMPT",
+                    details={
+                        "dispatch_cutpoint_id": dispatch_cutpoint_id,
+                        "started_at": started_at,
+                        "target_client_order_id": existing.target_client_order_id,
+                    },
+                )
                 return existing
             raise LifecycleSubmissionConflict("submission intent is not dispatchable")
-        return _record_from_row(row)
+        record = _record_from_row(row)
+        self._record_observation(
+            submission=record,
+            observation_id=f"dispatch:{dispatch_cutpoint_id}",
+            observation_kind="DISPATCH_CUTPOINT",
+            observation_class="NEW_ATTEMPT",
+            details={
+                "dispatch_cutpoint_id": dispatch_cutpoint_id,
+                "started_at": started_at,
+                "target_client_order_id": record.target_client_order_id,
+            },
+        )
+        return record
 
     def _get_required(self, submission_intent_id: str) -> LifecycleSubmissionRecord:
         record = self.get_by_submission_intent_id(submission_intent_id=submission_intent_id)
@@ -350,6 +460,43 @@ class LifecycleSubmissionStore:
             cursor.execute(_SELECT_SUBMISSION + f" WHERE {field} = %s", (value,))
             row = cursor.fetchone()
         return None if row is None else _record_from_row(row)
+
+    def _record_observation(
+        self,
+        *,
+        submission: LifecycleSubmissionRecord,
+        observation_id: str,
+        observation_kind: str,
+        observation_class: str,
+        details: dict[str, Any],
+    ) -> LifecycleSubmissionObservationRecord:
+        observation_id = _text(observation_id, field="observation_id")
+        payload = {
+            "lifecycle_submission_observation": {
+                "observation_version": 1,
+                "observation_id": observation_id,
+                "submission_intent_id": submission.submission_intent_id,
+                "observation_kind": _text(observation_kind, field="observation_kind"),
+                "observation_class": _text(observation_class, field="observation_class"),
+                "lifecycle_state": submission.lifecycle_state,
+                "dispatch_attempts": submission.dispatch_attempts,
+                "last_dispatch_cutpoint_id": submission.last_dispatch_cutpoint_id,
+                "target_client_order_id": submission.target_client_order_id,
+                "exchange_order_id": submission.exchange_order_id,
+                "exchange_status": submission.exchange_status,
+                "details": details,
+            }
+        }
+        try:
+            state, _ = self._observations.put_if_absent(
+                owner="Lifecycle",
+                state_type="lifecycle_submission_observation",
+                state_id=_observation_state_id(submission.submission_intent_id, observation_id),
+                payload=payload,
+            )
+        except OwnerStateConflict as exc:
+            raise LifecycleSubmissionConflict("lifecycle submission observation already exists with different content") from exc
+        return _observation_from_state(state.payload, state.payload_digest)
 
 
 _SELECT_SUBMISSION = """
@@ -376,6 +523,73 @@ def _start_gate_body(record: LifecycleStartGateRecord) -> dict[str, Any]:
     payload = dict(record.payload["lifecycle_start_gate"])
     payload["start_gate_id"] = record.start_gate_id
     return payload
+
+
+def _observation_state_id(submission_intent_id: str, observation_id: str) -> str:
+    payload = (
+        f"{_text(submission_intent_id, field='submission_intent_id')}\x1f"
+        f"{_text(observation_id, field='observation_id')}"
+    )
+    return f"lifecycle-observation-{sha256(payload.encode('utf-8')).hexdigest()}"
+
+
+def _observation_from_row(row: tuple[Any, ...]) -> LifecycleSubmissionObservationRecord:
+    return _observation_from_state(json.loads(str(row[1]), parse_float=Decimal), str(row[2]))
+
+
+def _observation_from_state(payload: dict[str, Any], payload_digest: str) -> LifecycleSubmissionObservationRecord:
+    body = payload["lifecycle_submission_observation"]
+    return LifecycleSubmissionObservationRecord(
+        observation_id=str(body["observation_id"]),
+        submission_intent_id=str(body["submission_intent_id"]),
+        observation_kind=str(body["observation_kind"]),
+        observation_class=str(body["observation_class"]),
+        payload=payload,
+        payload_digest=payload_digest,
+    )
+
+
+def _text(value: object, *, field: str) -> str:
+    if not isinstance(value, str) or not value or "\x00" in value:
+        raise PostgresPersistenceError(f"{field} is required")
+    return value
+
+
+def _with_uncertain(
+    record: LifecycleSubmissionRecord,
+    *,
+    uncertain_at: str,
+    error_code: str,
+) -> LifecycleSubmissionRecord:
+    return LifecycleSubmissionRecord(
+        submission_intent_id=record.submission_intent_id,
+        start_gate_id=record.start_gate_id,
+        order_spec_id=record.order_spec_id,
+        authorization_id=record.authorization_id,
+        capital_grant_id=record.capital_grant_id,
+        decision_cycle_id=record.decision_cycle_id,
+        set_result_id=record.set_result_id,
+        position_decision_id=record.position_decision_id,
+        construction_result_id=record.construction_result_id,
+        position_plan_id=record.position_plan_id,
+        tranche_id=record.tranche_id,
+        symbol=record.symbol,
+        direction=record.direction,
+        target_client_order_id=record.target_client_order_id,
+        lifecycle_state=SUBMISSION_UNCERTAIN,
+        order_spec_digest=record.order_spec_digest,
+        submit_authorized_digest=record.submit_authorized_digest,
+        start_gate_digest=record.start_gate_digest,
+        payload=record.payload,
+        payload_digest=record.payload_digest,
+        dispatch_attempts=record.dispatch_attempts,
+        last_dispatch_cutpoint_id=record.last_dispatch_cutpoint_id,
+        last_dispatch_started_at=record.last_dispatch_started_at,
+        last_uncertain_at=uncertain_at,
+        last_error_code=error_code,
+        exchange_order_id=record.exchange_order_id,
+        exchange_status=record.exchange_status,
+    )
 
 
 def _record_from_row(row: tuple[Any, ...]) -> LifecycleSubmissionRecord:

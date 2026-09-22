@@ -65,6 +65,7 @@ from .lifecycle_set_sync_store import (
 )
 from .lifecycle_submission_store import (
     LifecycleSubmissionConflict,
+    LifecycleSubmissionObservationRecord,
     LifecycleSubmissionRecord,
     LifecycleSubmissionStore,
 )
@@ -239,6 +240,7 @@ __all__ = [
     "LifecycleSetSyncRecord",
     "LifecycleSetSyncStore",
     "LifecycleSubmissionConflict",
+    "LifecycleSubmissionObservationRecord",
     "LifecycleSubmissionRecord",
     "LifecycleSubmissionStore",
     "MarketDataFactConflict",
