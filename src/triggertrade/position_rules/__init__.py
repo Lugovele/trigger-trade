@@ -12,8 +12,19 @@ from .handler import (
     PositionOpportunityResult,
     build_initial_position_decision,
 )
+from .construction import (
+    ConstructionStatus,
+    PositionConstructionCommand,
+    PositionConstructionEvaluation,
+    PositionConstructionEvaluationError,
+    evaluate_position_construction,
+)
 
 __all__ = [
+    "ConstructionStatus",
+    "PositionConstructionCommand",
+    "PositionConstructionEvaluation",
+    "PositionConstructionEvaluationError",
     "PositionOpportunityCommand",
     "PositionOpportunityError",
     "PositionOpportunityEvaluation",
@@ -21,5 +32,6 @@ __all__ = [
     "PositionOpportunityResult",
     "PositionPriceResult",
     "build_initial_position_decision",
+    "evaluate_position_construction",
     "evaluate_initial_position_opportunity",
 ]
