@@ -7,7 +7,8 @@ import json
 from typing import Any, Mapping
 
 from triggertrade.canonical_json import canonical_json_digest
-from triggertrade.contracts import ContractError, parse_contract
+from triggertrade.contracts import ContractError
+from triggertrade.contracts.bindings import ContractBindingError, validate_contract_edge
 from triggertrade.rules.trading import TradingRulesVersion, draft_to_json
 
 
@@ -69,8 +70,14 @@ def build_position_config_pin(
     """
 
     try:
-        parsed_handoff = parse_contract("MARKET_HANDOFF", market_handoff)
-    except ContractError as exc:
+        parsed_handoff = validate_contract_edge(
+            producer="Set",
+            consumer="Position",
+            contract_type="MARKET_HANDOFF",
+            payload=market_handoff,
+            definition="MARKET_HANDOFF",
+        )
+    except (ContractError, ContractBindingError) as exc:
         raise PositionConfigPinError(str(exc)) from exc
     handoff_payload = parsed_handoff.to_payload()
     body = handoff_payload["market_handoff"]

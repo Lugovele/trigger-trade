@@ -95,6 +95,11 @@ from .position_config_pin_store import (
     PositionConfigPinRecord,
     PositionConfigPinStore,
 )
+from .position_opportunity_store import (
+    PositionOpportunityConflict,
+    PositionOpportunityRecord,
+    PositionOpportunityStore,
+)
 from .portfolio_data_facts import (
     PortfolioDataFactConflict,
     PortfolioDataFactStore,
@@ -250,6 +255,9 @@ __all__ = [
     "PositionConfigPinConflict",
     "PositionConfigPinRecord",
     "PositionConfigPinStore",
+    "PositionOpportunityConflict",
+    "PositionOpportunityRecord",
+    "PositionOpportunityStore",
     "PortfolioDataFactConflict",
     "PortfolioDataFactStore",
     "PortfolioDataRequestRecord",
