@@ -122,6 +122,11 @@ from .portfolio_current_booking_workflow import (
     PortfolioCurrentBookingRecord,
     PortfolioCurrentBookingWorkflow,
 )
+from .portfolio_final_receipt_store import (
+    PortfolioFinalReceiptConflict,
+    PortfolioFinalReceiptRecord,
+    PortfolioFinalReceiptStore,
+)
 from .portfolio_accounting_day_store import (
     PortfolioAccountingDayConflict,
     PortfolioAccountingDayRecord,
@@ -288,6 +293,9 @@ __all__ = [
     "PortfolioCurrentBookingConflict",
     "PortfolioCurrentBookingRecord",
     "PortfolioCurrentBookingWorkflow",
+    "PortfolioFinalReceiptConflict",
+    "PortfolioFinalReceiptRecord",
+    "PortfolioFinalReceiptStore",
     "PortfolioAccountingDayConflict",
     "PortfolioAccountingDayRecord",
     "PortfolioAccountingDayStore",
