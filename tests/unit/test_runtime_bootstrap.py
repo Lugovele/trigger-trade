@@ -135,14 +135,15 @@ def test_dashboard_startup_bootstraps_registry_before_read_only_render(tmp_path)
         server.server_close()
 
     model = server.read_model
-    sets_section = _html_section(html, 'id="sets"', 'id="trigger-catalog"')
+    sets_section = _html_section(html, 'id="config-sets"', 'id="config-rules"')
     assert "No Trigger Sets registered yet." not in sets_section
     assert "No rule registry records yet." not in html
     assert "No recommendations registered yet." not in html
     assert any(row.set_id == "triggertrade-core-candidate" and row.version == "v2-test" for row in model.list_trigger_sets())
     assert any(row.rule_id == "TRG-002" and row.version == "0.1.0" for row in model.list_rules())
     assert any(row.recommendation_id == "REC-TRG-VOLUME-001" for row in model.list_recommendations())
-    assert "Portfolio" in html
+    assert "Overview" in html
+    assert "Trading Configuration" in html
     assert "Research" in html
 
 

@@ -1599,3 +1599,583 @@ boot();
 </script>
 </body>
 </html>"""
+
+
+def _reference_body(html_source: str) -> str:
+    match = re.search(r"<body[^>]*>(.*)</body>", html_source, flags=re.IGNORECASE | re.DOTALL)
+    return match.group(1) if match else html_source
+
+
+def _reference_head(html_source: str) -> str:
+    match = re.search(r"<head[^>]*>(.*)</head>", html_source, flags=re.IGNORECASE | re.DOTALL)
+    return match.group(1) if match else ""
+
+
+def _without_reference_scripts(body: str) -> str:
+    return re.sub(r"<script\b[^>]*>.*?</script>", "", body, flags=re.IGNORECASE | re.DOTALL)
+
+
+def _reference_styles(html_source: str) -> str:
+    return "\n".join(re.findall(r"<style\b[^>]*>.*?</style>", html_source, flags=re.IGNORECASE | re.DOTALL))
+
+
+def _scoped_mobile_reference_styles(html_source: str) -> str:
+    styles = re.findall(r"<style\b[^>]*>(.*?)</style>", html_source, flags=re.IGNORECASE | re.DOTALL)
+    if not styles:
+        return ""
+
+    def scope_selector(selector: str) -> str:
+        selector = selector.strip()
+        if selector in {":root", "body"}:
+            return "#tt-mobile-reference"
+        if selector == "*":
+            return "#tt-mobile-reference *"
+        return "#tt-mobile-reference " + selector
+
+    scoped_rules: list[str] = []
+    for style in styles:
+        for chunk in style.split("}"):
+            if "{" not in chunk:
+                continue
+            selectors, declarations = chunk.split("{", 1)
+            scoped = ",".join(scope_selector(selector) for selector in selectors.split(",") if selector.strip())
+            if scoped:
+                scoped_rules.append(scoped + "{" + declarations + "}")
+    return "<style id=\"triggertrade-mobile-reference-css\">\n@media(max-width:760px){\n" + "\n".join(scoped_rules) + "\n}\n</style>"
+
+
+def _reference_backend_script(payload: str) -> str:
+    script = r"""
+<script id="triggertrade-reference-backend-wiring">
+(function(){
+  const state = __STATE__;
+  const desktop = document.getElementById("tt-desktop-reference");
+  const mobile = document.getElementById("tt-mobile-reference");
+  const pageMap = {overview:"overview",config:"configuration",research:"research","research-detail":"research"};
+  let posView = "placed", currentResearchId = null, currentResearch = null, currentCompare = null;
+  let coinDraftVersion = null, coinDraft = [];
+  const h = (v) => String(v ?? "—").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+  const money = (v) => v === null || v === undefined || v === "" ? "—" : "$" + String(v);
+  const count = (v) => v === null || v === undefined ? "—" : String(v);
+  const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : null; };
+  const signedMoney = (v) => { const n = num(v); if(n === null) return "—"; return (n >= 0 ? "+$" : "-$") + Math.abs(n).toFixed(2); };
+  const pct = (v) => { const n = num(v); if(n === null) return "—"; return (n >= 0 ? "+" : "-") + Math.abs(n).toFixed(2) + "%"; };
+  const pnlClass = (v) => String(v ?? "").startsWith("-") ? "negative" : (num(v) > 0 || String(v ?? "").startsWith("+") ? "positive" : "neutral");
+  const dur = (s) => { const n = Number(s); if(!Number.isFinite(n)) return "—"; if(n < 3600) return Math.floor(n / 60) + "m"; return Math.floor(n / 3600) + "h " + Math.floor((n % 3600) / 60) + "m"; };
+  const badge = (v) => `<span class="badge ${String(v||"").toLowerCase().replace(/[^a-z0-9]+/g,"-") || "none"}">${h(v || "NONE")}</span>`;
+  const sideBadge = (v) => badge(v || "—");
+  const q = (sel, root=document) => root.querySelector(sel);
+  const qa = (sel, root=document) => Array.from(root.querySelectorAll(sel));
+
+  function canSubmit(){ return !!state.canSubmitOperatorControl; }
+  function normalizeCoinAllocation(v){
+    if(v === null || v === undefined) return "";
+    return String(v).replace("%", "").trim();
+  }
+  function coinPayload(){
+    return coinDraft.map(c => ({
+      symbol: c.symbol,
+      enabled: c.enabled !== false,
+      max_allocation_pct: normalizeCoinAllocation(c.max_allocation_pct)
+    }));
+  }
+  function catalogSymbols(){
+    return (state.rules.coins || state.rules.catalog_coins || state.rules.supported_symbols || []).map(c => String(c.symbol || c).trim().toUpperCase()).filter(Boolean);
+  }
+  function postForm(id, fill){
+    const form = document.getElementById(id);
+    if(!canSubmit() || !form) return;
+    if(fill) fill(form);
+    form.submit();
+  }
+  window.confirmPauseEntries = function(){
+    const paused = state.operatorState === "TRADING_PAUSED";
+    const text = paused ? "Resume new entries?" : "Pause new entries?";
+    if(confirm(text)) postForm(paused ? "operatorResumeForm" : "operatorPauseForm");
+  };
+  window.confirmCloseAll = function(){
+    if(confirm("Close all currently open positions?")) postForm("operatorCloseAllForm");
+  };
+  window.closePosition = function(id, symbol){
+    if(confirm("Close " + symbol + "?")) postForm("operatorCloseOneForm", (form) => {
+      form.querySelector('[name="position_id"]').value = id || "";
+      form.querySelector('[name="symbol"]').value = symbol || "";
+    });
+  };
+  document.addEventListener("click", (event) => {
+    const button = event.target.closest(".js-close-position");
+    if(!button) return;
+    event.stopPropagation();
+    closePosition(button.dataset.positionId || "", button.dataset.symbol || "");
+  });
+
+  function showPage(page){
+    const normalized = page === "config" ? "configuration" : page;
+    const pageId = normalized === "research-detail" ? "page-research-detail" : "page-" + normalized;
+    const activeTab = normalized === "research-detail" ? "research" : normalized;
+    qa(".page", desktop).forEach(node => node.classList.toggle("active", node.id === pageId));
+    qa(".top-tab", desktop).forEach(node => node.classList.toggle("active", node.dataset.page === activeTab));
+    if(normalized !== "overview") document.body.classList.remove("tt-mobile-overview-active");
+    else document.body.classList.add("tt-mobile-overview-active");
+    history.replaceState(null, "", normalized === "overview" ? "/overview" : normalized === "configuration" ? "/trading-configuration" : normalized === "research-detail" && currentResearchId ? "/research/" + encodeURIComponent(currentResearchId) : "/" + normalized);
+  }
+  window.openPage = showPage;
+  qa(".top-tab", desktop).forEach(node => node.addEventListener("click", () => showPage(node.dataset.page)));
+  qa(".nav button", mobile).forEach(node => node.addEventListener("click", () => showPage(pageMap[node.textContent.trim().toLowerCase()] || "overview")));
+
+  function applyOperatorState(){
+    const paused = state.operatorState === "TRADING_PAUSED";
+    const label = !state.operatorStateAvailable ? "State unavailable" : paused ? "Entries paused" : "Entries enabled";
+    qa("#operatorStateBadge").forEach(node => { node.textContent = label; node.className = "badge " + (!state.operatorStateAvailable ? "closed" : paused ? "pending" : "active"); });
+    qa("#botDot,.brand-dot").forEach(node => { node.style.background = paused ? "#9a6700" : state.operatorStateAvailable ? "#16824b" : "#98a2b3"; });
+    qa(".btn.warning").forEach(node => { if(node.textContent.includes("Pause") || node.textContent.includes("Resume")) node.textContent = paused ? "Resume Entries" : "Pause Entries"; });
+  }
+
+  function setupKpis(){
+    const snap = state.portfolio.snapshot || {};
+    const desktopValues = [
+      ["Total Equity", money(snap.total_equity)],
+      ["Available", money(snap.available_capital)],
+      ["In Positions", money(snap.in_positions)],
+      ["Realized P&L Today", signedMoney(snap.realized_pnl_today)],
+      ["Unrealized P&L", signedMoney(snap.unrealized_pnl)],
+      ["Open Positions", count(snap.open_positions_count)]
+    ];
+    const mobileValues = [
+      ["Total Equity", money(snap.total_equity)],
+      ["Available", money(snap.available_capital)],
+      ["Realized P&L Today", signedMoney(snap.realized_pnl_today)],
+      ["Unrealized P&L", signedMoney(snap.unrealized_pnl)],
+      ["In Positions", money(snap.in_positions)],
+      ["Open Positions", count(snap.open_positions_count)]
+    ];
+    const desktopGrid = q(".overview-kpis", desktop);
+    if(desktopGrid){
+      desktopGrid.innerHTML = desktopValues.map(([label, value]) => `<div class="kpi"><div class="kpi-label">${h(label)}</div><div class="kpi-value ${pnlClass(value)}">${h(value)}</div></div>`).join("");
+    }
+    qa(".kpi", mobile).forEach((node, index) => {
+      const pair = mobileValues[index] || ["", "—"];
+      const value = q(".value", node);
+      if(value){ value.textContent = pair[1]; value.classList.toggle("good", String(pair[1]).startsWith("+")); value.classList.toggle("bad", String(pair[1]).startsWith("-")); }
+    });
+  }
+
+  function positionRows(){
+    const open = (state.portfolio.open_positions || []).map(r => ({kind:"open", time:r.opened_at || "—", coin:r.symbol, side:r.side, status:"OPENED", qty:[r.qty,r.qty_unit].filter(Boolean).join(" "), value:r.value, entry:r.entry_price, current:r.current_price, tp:[pct(r.take_profit_pct),money(r.take_profit_price)].join(" · "), sl:[pct(r.stop_loss_pct),money(r.stop_loss_price)].join(" · "), pnl:[pct(r.unrealized_pnl_pct),signedMoney(r.unrealized_pnl_amount)].join(" · "), set:r.set_version || "legacy/unknown", age:dur(r.age_seconds), reason:"—", id:r.position_id}));
+    const history = (state.portfolio.closed_positions || []).map(r => ({kind:"history", time:r.closed_at || "—", coin:r.symbol, side:r.side, status:"CLOSED", qty:[r.qty,r.qty_unit].filter(Boolean).join(" "), value:r.value, entry:r.entry_price, current:r.exit_price, tp:[pct(r.planned_tp_pct),money(r.planned_tp_price)].join(" · "), sl:[pct(r.planned_sl_pct),money(r.planned_sl_price)].join(" · "), pnl:[pct(r.realized_pnl_pct),signedMoney(r.realized_pnl_amount)].join(" · "), set:r.set_version || "legacy/unknown", age:dur(r.duration_seconds), reason:String(r.close_reason || "—").replace(/_/g," "), id:r.position_id}));
+    return {placed: [], open, history};
+  }
+  function selected(root, id){ return q("#" + id, root)?.value || ""; }
+  function filtered(rows, root){
+    const coin = selected(root, root === mobile ? "fcoin" : "filter-coin");
+    const side = selected(root, root === mobile ? "fside" : "filter-side");
+    const status = selected(root, root === mobile ? "fstatus" : "filter-status");
+    const set = selected(root, root === mobile ? "fset" : "filter-set");
+    return rows.filter(r => (!coin || coin === "All" || r.coin === coin) && (!side || side === "All" || r.side === side) && (!status || status === "All" || r.status === status) && (!set || set === "All" || r.set === set));
+  }
+  function setupFilters(){
+    const rows = [...positionRows().open, ...positionRows().history];
+    const coins = ["All", ...new Set(rows.map(r => r.coin).filter(Boolean))];
+    const sets = ["All", ...new Set(rows.map(r => r.set).filter(Boolean))];
+    [["filter-coin", coins, "Coin"], ["filter-set", sets, "Set"]].forEach(([id, values, label]) => { const node = q("#"+id, desktop); if(node) node.innerHTML = `<option value="">${label}: All</option>` + values.filter(v=>v!=="All").map(v=>`<option>${h(v)}</option>`).join(""); });
+    [["fcoin", coins], ["fset", sets]].forEach(([id, values]) => { const node = q("#"+id, mobile); if(node) node.innerHTML = values.map(v=>`<option>${h(v)}</option>`).join(""); });
+  }
+  function renderPositions(){
+    const all = positionRows();
+    const desktopRows = filtered(all[posView] || [], desktop);
+    const body = q("#positions-body", desktop);
+    const historyTools = q("#history-tools", desktop);
+    const historyNote = q("#history-note", desktop) || q("#history-note", mobile);
+    if(historyTools) historyTools.classList.toggle("show", posView === "history");
+    if(historyNote) historyNote.style.display = posView === "history" ? "" : "none";
+    qa(".positions-tab", desktop).forEach(b => b.classList.toggle("active", b.dataset.view === posView || b.dataset.pos === posView));
+    qa(".seg button", mobile).forEach(b => b.classList.toggle("active", b.id && b.id.indexOf(posView) === 0));
+    if(body){
+      body.innerHTML = desktopRows.length ? desktopRows.map(r => `<tr><td>${h(r.time)}</td><td><b>${h(r.coin)}</b></td><td>${sideBadge(r.side)}</td><td>${badge(r.status)}</td><td>${h(r.qty)}</td><td>${money(r.value)}</td><td>${money(r.entry)}</td><td>${money(r.current)}</td><td>${h(r.tp)}</td><td>${h(r.sl)}</td><td class="${pnlClass(r.pnl)}">${h(r.pnl)}</td><td>${h(r.set)}</td><td>${h(r.age)}</td><td>${h(r.reason)}</td><td>${r.kind === "open" ? `<button class="row-action danger js-close-position" data-position-id="${h(r.id)}" data-symbol="${h(r.coin)}">Close</button>` : r.kind === "placed" ? '<button class="row-action">Cancel</button>' : "—"}</td></tr>`).join("") : '<tr><td colspan="15" class="empty">No records.</td></tr>';
+    }
+    const mobileRows = filtered(all[posView] || [], mobile);
+    const list = q("#list", mobile);
+    if(list){
+      list.innerHTML = mobileRows.length ? mobileRows.map(r => `<article class="card" onclick="this.classList.toggle('expanded')"><div class="card-top"><div class="coin-row"><span class="coin">${h(r.coin)}</span><span class="side">${h(r.side)}</span></div>${badge(r.status)}</div><div class="grid"><div><div class="fl">Entry</div><div class="fv">${money(r.entry)}</div></div><div><div class="fl">${r.status === "CLOSED" ? "Exit" : "Current"}</div><div class="fv">${money(r.current)}</div></div><div><div class="fl">Take Profit</div><div class="fv">${h(r.tp)}</div></div><div><div class="fl">Stop Loss</div><div class="fv">${h(r.sl)}</div></div>${r.pnl !== "—" ? `<div><div class="fl">P&amp;L</div><div class="fv ${pnlClass(r.pnl)}">${h(r.pnl)}</div></div>` : ""}${r.reason !== "—" ? `<div class="reason"><div class="fl">Reason</div><div class="fv">${h(r.reason)}</div></div>` : ""}</div><div class="meta"><span>${h(r.set)}</span><span>${h(r.age)}</span></div><div class="details"><div><div class="fl">Time</div><div class="fv">${h(r.time)}</div></div><div><div class="fl">Quantity</div><div class="fv">${h(r.qty)}</div></div><div><div class="fl">Value</div><div class="fv">${money(r.value)}</div></div><div><div class="fl">Status</div><div class="fv">${h(r.status)}</div></div></div>${r.kind === "open" ? `<button class="row-action danger js-close-position" data-position-id="${h(r.id)}" data-symbol="${h(r.coin)}">Close Position</button>` : ""}</article>`).join("") : '<div class="empty">No records.</div>';
+    }
+    const countNode = q("#count", mobile);
+    if(countNode){
+      const activeFilters = ["fcoin","fside","fstatus","fset"].filter(id => {
+        const value = q("#" + id, mobile)?.value || "";
+        return value && value !== "All";
+      }).length;
+      countNode.textContent = String(activeFilters);
+      countNode.style.display = activeFilters ? "inline-flex" : "none";
+    }
+  }
+  window.setPositionsView = window.setView = function(view){ posView = view; renderPositions(); };
+  window.openFilters = function(){ q("#filters-bg", mobile)?.classList.add("show"); };
+  window.openActions = function(){ q("#actions-bg", mobile)?.classList.add("show"); };
+  window.backdrop = function(eventOrId, maybeId){
+    const id = maybeId || eventOrId;
+    if(typeof eventOrId === "object" && eventOrId?.target?.id !== id) return;
+    q("#"+id, mobile)?.classList.remove("show");
+  };
+  window.applyFilters = function(){ window.backdrop("filters-bg"); renderPositions(); };
+  window.resetFilters = function(){ qa("select", mobile).forEach(s => s.selectedIndex = 0); renderPositions(); };
+  window.action = function(name){ window.backdrop("actions-bg"); if(name === "pause") confirmPauseEntries(); if(name === "close") confirmCloseAll(); };
+  qa(".positions-tab", desktop).forEach(b => b.addEventListener("click", () => setPositionsView(b.dataset.view || b.dataset.pos)));
+  qa(".positions-tools-row select", desktop).forEach(s => s.addEventListener("change", renderPositions));
+
+  const metricDocs = [
+    {id:"F-003", key:"atr", name:"ATR / ATR_PCT", timeframe:"15m", type:"Formula", meaning:"ATR measures the size of recent market movement. ATR_PCT expresses that movement as a percentage of the current completed candle Close, so volatility can be compared across coins with very different prices.", source:"The system requests completed 15-minute candles from the exchange market-data API. For every candle it uses High, Low and Close. It also uses the Close of the immediately preceding completed candle. Incomplete/current forming candles are not used.", variables:[["High","Highest traded price inside the completed 15m candle."],["Low","Lowest traded price inside the completed 15m candle."],["Close","Final price of the completed 15m candle."],["Previous Close","Close of the immediately preceding completed 15m candle."],["TR","True Range for one completed candle."],["ATR","Wilder-smoothed True Range over 14 completed candles."],["ATR_PCT","ATR expressed as a percentage of Close."]], steps:["For the latest completed 15m candle, read High, Low and Close from exchange market data and read Previous Close from the preceding completed candle.","Calculate three distances: High - Low, |High - Previous Close|, and |Low - Previous Close|.","True Range is the largest of those three values.","Repeat the True Range calculation for the required completed-candle sequence and apply the 14-period Wilder ATR smoothing.","Calculate ATR_PCT = ATR / current completed Close * 100."], formula:"TR = max(High - Low, |High - Previous Close|, |Low - Previous Close|)\n\nATR = Wilder-smoothed TR over 14 completed candles\n\nATR_PCT = ATR / Close * 100", example:"Example candle: High = 104, Low = 98, Previous Close = 100.\n\nHigh - Low = 6\n|104 - 100| = 4\n|98 - 100| = 2\n\nTR = max(6, 4, 2) = 6.\n\nThe resulting TR then enters the 14-period Wilder ATR calculation. If ATR = 5 and current Close = 100, then ATR_PCT = 5 / 100 * 100 = 5%.", unavailable:"The metric must not be produced from malformed or incomplete required candle data. Required prices must be valid numeric values, High must not be below Low, and ATR_PCT cannot be calculated when the required Close denominator is invalid."},
+    {id:"F-001", key:"priceMove", name:"Price Move", timeframe:"1m", type:"Formula", meaning:"Price Move measures how far the completed market price moved relative to the exact reference price required by the TriggerTrade methodology.", source:"The required completed price observations come from exchange market-data API responses. The calculation does not invent a price when a required source observation is unavailable.", variables:[["Current Price","The current completed price observation required by the formula."],["Reference Price","The methodology-defined earlier reference price."],["Price Move","Relative movement between Current Price and Reference Price."]], steps:["Obtain the required completed Current Price from exchange market data.","Resolve the exact Reference Price required by the methodology.","Subtract Reference Price from Current Price.","Divide the difference by Reference Price.","Convert to percentage form when the consuming Trigger uses percentage representation."], formula:"Price Move = (Current Price - Reference Price) / Reference Price\n\nPrice Move % = Price Move * 100", example:"Reference Price = 100.00 and Current Price = 103.00.\n\nPrice Move = (103 - 100) / 100 = 0.03 = +3.00%.\n\nIf Current Price = 97.00, Price Move = -3.00%.", unavailable:"If either required price is unavailable or the required reference denominator is invalid, the metric is unavailable. It is not silently converted to zero."},
+    {id:"F-002", key:"turnover", name:"Relative Turnover", timeframe:"5m", type:"Formula", meaning:"Relative Turnover measures current completed-period trading activity relative to the methodology-defined historical reference activity.", source:"Turnover observations are taken from completed exchange market-data intervals. Both the current observation and the required reference observations must exist.", variables:[["Current Turnover","Turnover of the completed interval being evaluated."],["Reference Turnover","Historical reference turnover calculated from the required comparison observations."],["Relative Turnover","Current Turnover divided by Reference Turnover."]], steps:["Read the completed current-period turnover from exchange market data.","Read the completed historical turnover observations required for the reference.","Calculate the methodology-defined Reference Turnover.","Divide Current Turnover by Reference Turnover.","Pass the resulting ratio to consuming Trigger logic."], formula:"Relative Turnover = Current Turnover / Reference Turnover", example:"Current Turnover = 2,000,000 USDT.\nReference Turnover = 1,000,000 USDT.\n\nRelative Turnover = 2.0.\n\nThat means current turnover is twice the reference level.", unavailable:"If the required current or reference observations are unavailable, or the reference denominator is invalid, the result is unavailable."}
+  ];
+  function renderMetrics(){
+    const body = q("#metrics-body", desktop);
+    if(body) body.innerHTML = metricDocs.map(m => `<tr class="catalog-row" data-metric="${m.key}"><td>${h(m.name)}</td><td>${h(m.timeframe)}</td></tr>`).join("");
+    qa("[data-metric]", desktop).forEach(row => row.onclick = () => showMetric(row.dataset.metric));
+    showMetric(metricDocs[0].id);
+  }
+  window.showMetric = function(id){
+    const m = metricDocs.find(x => x.key === id || x.id === id) || metricDocs[0];
+    const detail = q("#metric-details", desktop) || q("#metricDetail", desktop);
+    if(detail) detail.innerHTML = `<div class="details-header"><div class="details-id">${h(m.id)}</div><div class="details-title">${h(m.name)}</div><div class="details-meta"><span class="meta-pill">Methodology v1.2.15</span><span class="meta-pill">${h(m.timeframe)}</span><span class="meta-pill">${h(m.type)}</span></div></div><div class="details-section"><div class="section-title">What this metric means</div><div class="body-text">${h(m.meaning)}</div></div><div class="details-section"><div class="section-title">Data from exchange</div><div class="formula">${h(m.source)}</div></div><div class="details-section"><div class="section-title">Variables</div><table class="variable-table"><tbody>${m.variables.map(v => `<tr><td><b>${h(v[0])}</b></td><td>${h(v[1])}</td></tr>`).join("")}</tbody></table></div><div class="details-section"><div class="section-title">How it is calculated</div><div class="step-list">${m.steps.map((step,index) => `<div class="calc-step"><div class="step-number">${index+1}</div><div class="step-body">${h(step)}</div></div>`).join("")}</div></div><div class="details-section"><div class="section-title">Formula</div><div class="formula" style="white-space:pre-line">${h(m.formula)}</div></div><div class="details-section"><div class="section-title">Example</div><div class="formula" style="white-space:pre-line">${h(m.example)}</div></div><div class="details-section"><div class="section-title">Unavailable when</div><div class="body-text">${h(m.unavailable)}</div></div>`;
+  };
+  function renderTriggers(){
+    const rows = state.registry.triggers || [];
+    const sets = state.registry.sets || [];
+    const body = q("#triggers-body", desktop);
+    if(body) body.innerHTML = rows.length ? rows.map(t => `<tr class="catalog-row" data-trigger-id="${h(t.trigger_id)}" data-trigger-version="${h(t.version)}"><td>${h(t.display_name || t.trigger_id)}</td><td>${h(t.version)}</td><td>—</td><td>${h(t.what_it_checks || "—")}</td><td>${h(sets.filter(s => (s.trigger_versions||[]).some(v => v.trigger_id === t.trigger_id && v.version === t.version)).map(s => s.set_id + " " + s.version).join(", ") || "—")}</td><td>${badge(t.immutable ? "ACTIVE" : "RESEARCH")}</td></tr>`).join("") : '<tr><td colspan="6" class="empty">No Trigger versions available.</td></tr>';
+    qa("[data-trigger-id]", desktop).forEach(row => row.onclick = () => showTrigger(row.dataset.triggerId, row.dataset.triggerVersion));
+    if(rows[0]) showTrigger(rows[0].trigger_id, rows[0].version);
+  }
+  window.showTrigger = function(id, version){
+    const t = (state.registry.selected_trigger && state.registry.selected_trigger.trigger_id === id && state.registry.selected_trigger.version === version) ? state.registry.selected_trigger : (state.registry.triggers || []).find(x => x.trigger_id === id && x.version === version);
+    const detail = q("#trigger-details", desktop) || q("#triggerDetail", desktop);
+    if(detail) detail.innerHTML = `<div class="details-header"><div class="details-id">${h(id)} · ${h(version)}</div><div class="details-title">${h(t?.display_name || id || "Trigger")}</div></div><div class="details-section"><div class="panel-title">Exact Condition</div><div class="formula">${h(t?.formula_text || t?.what_it_checks || "Unavailable")}</div></div><div class="details-section"><div class="panel-title">Deterministic Evaluation Sequence</div><div class="body-text">${h(t?.how_it_works || "Backend trigger detail unavailable.")}</div></div><div class="details-section"><div class="panel-title">Version History</div><div class="formula">${h((t?.version_history || []).map(v => `${v.version} · ${v.change_summary || ""}`).join("\n") || "—")}</div></div>`;
+  };
+  function renderSets(){
+    const rows = state.registry.sets || [];
+    const body = q("#sets-body", desktop);
+    if(body) body.innerHTML = rows.length ? rows.map(s => `<tr class="catalog-row" data-set-id="${h(s.set_id)}" data-set-version="${h(s.version)}"><td>${h(s.display_name || s.set_id)}</td><td>${h(s.version)}</td><td>${h([s.symbol, s.timeframe].filter(Boolean).join(" · ") || "—")}</td><td>${h((s.trigger_versions || []).map(t => t.trigger_id + " " + t.version).join(", ") || "—")}</td><td>${badge(s.status || "UNKNOWN")}</td></tr>`).join("") : '<tr><td colspan="5" class="empty">No Set versions available.</td></tr>';
+    qa("[data-set-id]", desktop).forEach(row => row.onclick = () => showSet(row.dataset.setId, row.dataset.setVersion));
+    if(rows[0]) showSet(rows[0].set_id, rows[0].version);
+  }
+  window.showSet = function(id, version){
+    const s = (state.registry.sets || []).find(x => x.set_id === id && x.version === version);
+    const members = s?.trigger_versions || [];
+    const detail = q("#set-details", desktop) || q("#setDetail", desktop);
+    if(detail) detail.innerHTML = `<div class="details-header"><div class="details-id">${h(id)} · ${h(version)} · ${h(s?.status || "UNKNOWN")}</div><div class="details-title">${h(s?.display_name || id || "Set")}</div></div><div class="details-section"><div class="set-logic"><div class="set-logic-row"><div class="logic-keyword">IF</div><div class="logic-condition">${h(members.map(t => t.trigger_id + " " + t.version + " evaluates TRUE").join(" AND ") || "No trigger versions recorded")}</div></div><div class="set-logic-row"><div class="logic-keyword">THEN</div><div class="logic-condition">Emit deterministic Set signal for the configured market; strategies convert signals into trade intents.</div></div></div></div>`;
+  };
+  qa(".config-tab", desktop).forEach(b => b.onclick = () => { qa(".config-tab", desktop).forEach(x => x.classList.toggle("active", x.dataset.config === b.dataset.config)); qa(".config-view", desktop).forEach(x => x.classList.toggle("active", x.id === "config-" + b.dataset.config)); });
+
+  function renderRules(){
+    const c = state.rules.current;
+    const body = q("#config-rules .rules-stack", desktop) || q("#rules-body", desktop) || q("#rulesBody", desktop);
+    if(!body) return;
+    if(!c) return;
+    if(coinDraftVersion !== c.rules_version_id){
+      coinDraftVersion = c.rules_version_id;
+      coinDraft = (c.coins || []).map(x => ({
+        symbol: String(x.symbol || "").toUpperCase(),
+        enabled: x.enabled !== false,
+        max_allocation_pct: normalizeCoinAllocation(x.max_allocation_pct)
+      })).filter(x => x.symbol);
+    }
+    const pr = c.position_rules || {}, po = c.portfolio_rules || {};
+    const values = new Map([
+      ["Position Size", pr.position_size_pct],
+      ["Minimum Take Profit", pr.minimum_take_profit_pct],
+      ["Minimum Risk / Reward", pr.minimum_risk_reward],
+      ["Minimum Net Edge", pr.minimum_net_edge_pct],
+      ["Max Capital in Positions", po.max_capital_in_positions_pct],
+      ["Max Open Positions", po.max_open_positions],
+      ["Max Positions per Coin", po.max_positions_per_coin],
+      ["Daily Loss Limit", po.daily_loss_limit_pct]
+    ]);
+    qa(".rule-row", body).forEach(row => {
+      const label = q(".rule-name", row)?.textContent?.trim();
+      const input = q("input", row);
+      if(label && input && values.has(label)) input.value = values.get(label) ?? "";
+    });
+    const leverageSelect = qa(".rule-row", body).find(row => q(".rule-name", row)?.textContent?.trim() === "Leverage")?.querySelector("select");
+    if(leverageSelect && pr.leverage) leverageSelect.value = String(pr.leverage).endsWith("x") ? String(pr.leverage) : String(pr.leverage) + "x";
+    const directionSelect = qa(".rule-row", body).find(row => q(".rule-name", row)?.textContent?.trim() === "Direction")?.querySelector("select");
+    if(directionSelect && po.direction_mode){
+      const normalized = String(po.direction_mode).replace("_", " ").replace("ONLY", "only");
+      Array.from(directionSelect.options).forEach(option => { if(option.textContent.toUpperCase().replace("+", "").includes(normalized.toUpperCase().replace("_", " "))) directionSelect.value = option.value; });
+    }
+    const coinGrid = q("#coin-grid", body);
+    if(coinGrid){
+      coinGrid.innerHTML = coinDraft.length ? `<div class="coin-list">${coinDraft.map(x => `<div class="coin-row" data-symbol="${h(x.symbol)}"><div class="coin-symbol">${h(x.symbol)}</div><input class="coin-allocation-input js-coin-allocation" data-symbol="${h(x.symbol)}" type="number" step="0.01" inputmode="decimal" value="${h(x.max_allocation_pct)}"><span class="coin-percent">%</span><button class="coin-remove js-remove-coin" type="button" data-symbol="${h(x.symbol)}" aria-label="Remove ${h(x.symbol)}">×</button></div>`).join("")}</div>` : '<div class="empty">No records.</div>';
+      qa(".js-coin-allocation", coinGrid).forEach(input => input.addEventListener("input", () => {
+        const item = coinDraft.find(x => x.symbol === input.dataset.symbol);
+        if(item) item.max_allocation_pct = input.value;
+      }));
+      qa(".js-remove-coin", coinGrid).forEach(button => button.addEventListener("click", () => {
+        coinDraft = coinDraft.filter(x => x.symbol !== button.dataset.symbol);
+        renderRules();
+      }));
+    }
+    const history = q(".history-panel", body);
+    if(history){
+      history.innerHTML = '<div class="history-title">Version History</div>' + ((state.rules.history || []).map(v => `<div class="history-row"><button class="link">${h(v.display_version)}</button><span class="badge inactive">Inactive</span><div>${h(v.change_summary || "Previous configuration")}</div><div>${h(v.created_at || "—")}</div></div>`).join("") || '<div class="history-row"><button class="link">—</button><span class="badge inactive">Unavailable</span><div>No version history.</div><div>—</div></div>');
+    }
+    q(".coins-footer .btn", body)?.addEventListener("click", window.addCoinToRules);
+    q(".save-btn", body)?.addEventListener("click", window.saveRulesVersion);
+  }
+  window.addCoinToRules = function(){
+    const symbols = catalogSymbols();
+    const raw = prompt("Coin symbol");
+    if(!raw) return;
+    const symbol = raw.trim().toUpperCase();
+    if(!symbol) return;
+    if(!symbols.length){
+      alert("Supported instrument catalog is unavailable.");
+      return;
+    }
+    if(!symbols.includes(symbol)){
+      alert("Symbol is not available in the supported instrument catalog.");
+      return;
+    }
+    if(coinDraft.some(c => c.symbol === symbol)) return;
+    coinDraft = [...coinDraft, {symbol, enabled:true, max_allocation_pct:""}];
+    renderRules();
+  };
+  window.saveRulesVersion = async function(){
+    if(!canSubmit()) return;
+    const current = state.rules.current;
+    if(!current) return;
+    const payload = {
+      expected_rules_version_id: current.rules_version_id || "",
+      expected_display_version: current.display_version || "",
+      position_rules: current.position_rules || {},
+      portfolio_rules: current.portfolio_rules || {},
+      coins: coinPayload()
+    };
+    const response = await fetch("/api/rules/versions", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload)});
+    if(response.ok){
+      const data = await response.json();
+      state.rules.current = data.rules || state.rules.current;
+      state.rules.history = data.history || state.rules.history;
+      renderRules();
+    }
+  };
+
+  function renderResearchSummary(){
+    const body = q("#research-summary-body", desktop) || q("#researchBody", desktop);
+    const rows = state.research.summaries || [];
+    if(!body) return;
+    body.innerHTML = rows.length ? rows.map(r => `<tr class="research-row" data-research-id="${h(r.research_id)}"><td><div class="research-id">${h(r.research_id)}</div></td><td>${h(r.set_id)}<div class="panel-meta">${h(r.set_version)}</div></td><td>${h(r.rules_display_version)}<div class="panel-meta">${h(r.rules_version_id)}</div></td><td>${h(r.selected_demo_run_id ? "Complete" : "Pending")}</td><td>${h(r.selected_demo_profit_factor ?? "—")}</td><td>${h(r.compare_to_active || "—")}</td><td>—</td><td>${badge(r.decision || r.status || "NONE")}</td></tr>`).join("") : '<tr><td colspan="8" class="empty">No Research records.</td></tr>';
+    qa("[data-research-id]", desktop).forEach(row => row.onclick = () => openResearchById(row.dataset.researchId));
+  }
+  window.openResearchById = async function(id){
+    currentResearchId = id;
+    showPage("research-detail");
+    const res = await fetch(`/api/research/${encodeURIComponent(id)}`);
+    currentResearch = await res.json();
+    renderResearchDetail();
+    await loadCompare();
+  };
+  function runRows(rows){ return rows.length ? rows.map(r => `<tr><td>${h(r.run_id || r.backtest_run_id)}</td><td>${h((r.period_start || r.started_at || "—") + " -> " + (r.period_end || r.stopped_at || "—"))}</td><td>${h(r.metrics?.closed_trades ?? "—")}</td><td>${h(r.metrics?.net_pnl ?? "—")}</td><td>${h(r.metrics?.profit_factor ?? "—")}</td><td>${h(r.status || "—")}</td></tr>`).join("") : '<tr><td colspan="6" class="empty">No runs.</td></tr>'; }
+  function renderResearchDetail(){
+    const r = currentResearch?.research || {};
+    const title = q("#research-detail-title", desktop) || q("#researchTitle", desktop);
+    if(title) title.textContent = r.research_id ? `${r.research_id} · ${r.set_id} ${r.set_version} · Rules ${r.rules_display_version || r.rules_version_id}` : "Research";
+    const bt = q("#backtest-body", desktop) || q("#backtestBody", desktop);
+    const dm = q("#demo-body", desktop) || q("#demoBody", desktop);
+    if(bt) bt.innerHTML = runRows(currentResearch?.backtests || []);
+    if(dm) dm.innerHTML = runRows(currentResearch?.demos || []);
+    const decision = q("#decision-state", desktop) || q("#decisionStateInline", desktop);
+    if(decision){ decision.textContent = r.decision || "NONE"; decision.className = "badge " + String(r.decision || "none").toLowerCase(); }
+  }
+  async function loadCompare(){
+    if(!currentResearchId) return;
+    const res = await fetch(`/api/research/${encodeURIComponent(currentResearchId)}/compare`);
+    currentCompare = await res.json();
+    renderCompare();
+  }
+  function renderCompare(){
+    const table = q("#compare-table", desktop) || q("#compareTable", desktop);
+    if(!table) return;
+    if(!currentCompare?.available){ table.innerHTML = `<tbody><tr><td class="empty">${h(currentCompare?.reason || "Compare unavailable")}</td></tr></tbody>`; return; }
+    const rows = [["Closed trades","closed_trades"],["Net P/L","net_pnl"],["Expectancy","expectancy"],["Profit Factor","profit_factor"],["Max Drawdown","max_drawdown"]];
+    table.innerHTML = `<thead><tr><th>Metric</th><th>Active</th><th>Demo</th><th>Difference</th></tr></thead><tbody>${rows.map(([label,key]) => `<tr><td>${h(label)}</td><td class="base-cell">${h(currentCompare.active_benchmark?.[key] ?? "—")}</td><td class="neutral-cell">${h(currentCompare.research_demo?.[key] ?? "—")}</td><td>${h(currentCompare.difference?.[key] ?? "—")}</td></tr>`).join("")}</tbody>`;
+  }
+  window.runBacktest = async function(period){ if(!currentResearchId) return; const days = period === "90D" ? 90 : period === "30D" ? 30 : 7; const end = new Date(), start = new Date(end.getTime() - days * 86400000); await fetch(`/api/research/${encodeURIComponent(currentResearchId)}/backtests`, {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({research_start:start.toISOString(),research_end:end.toISOString()})}); await openResearchById(currentResearchId); };
+  window.runDemo = async function(){ if(!currentResearchId) return; await fetch(`/api/research/${encodeURIComponent(currentResearchId)}/demo/start`, {method:"POST",headers:{"Content-Type":"application/json"},body:"{}"}); await openResearchById(currentResearchId); };
+  window.setDecision = async function(value){ if(!currentResearchId || !canSubmit()) return; const url = value === "REJECT" ? `/api/research/${encodeURIComponent(currentResearchId)}/archive` : `/api/research/${encodeURIComponent(currentResearchId)}/decision/make-active`; await fetch(url, {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({idempotency_key:"ui-"+Date.now()})}); await openResearchById(currentResearchId); };
+  window.exportResearch = function(){ const blob = new Blob([JSON.stringify({research:currentResearch, compare:currentCompare}, null, 2)], {type:"application/json"}); const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `${currentResearchId || "research"}-research.json`; a.click(); };
+  window.openNewResearch = function(){ q("#new-research-modal", desktop)?.classList.add("show"); };
+  window.closeNewResearch = function(){ q("#new-research-modal", desktop)?.classList.remove("show"); };
+
+  setupFilters(); applyOperatorState(); setupKpis(); renderPositions(); renderMetrics(); renderTriggers(); renderSets(); renderRules(); renderResearchSummary();
+  showPage(state.page === "config" ? "configuration" : state.page || "overview");
+})();
+</script>
+"""
+    return script.replace("__STATE__", payload)
+
+
+def render_product_dashboard(
+    *,
+    initial_page: str = "overview",
+    operator_state: Any = None,
+    operator_control_token: str = "",
+    operator_command_submit_enabled: bool = False,
+    portfolio: dict[str, Any] | None = None,
+    registry: dict[str, Any] | None = None,
+    rules: dict[str, Any] | None = None,
+    messages: dict[str, Any] | None = None,
+    research: dict[str, Any] | None = None,
+) -> str:
+    """Render the approved reference UI with backend state injected underneath."""
+
+    from triggertrade.dashboard.reference_ui import DESKTOP_REFERENCE_HTML, MOBILE_OVERVIEW_REFERENCE_HTML
+
+    page_map = {
+        "portfolio": "overview",
+        "overview": "overview",
+        "sets": "config",
+        "trigger-catalog": "config",
+        "trigger-detail": "config",
+        "rules": "config",
+        "rules-version": "config",
+        "config": "config",
+        "research": "research",
+        "research-detail": "research-detail",
+        "messages": "research",
+    }
+    raw_state = getattr(operator_state, "state", None) if operator_state is not None else None
+    state_available = raw_state in {"TRADING_ENABLED", "TRADING_PAUSED"}
+    payload = json.dumps(
+        {
+            "page": page_map.get(initial_page, "overview"),
+            "operatorState": raw_state if state_available else "UNKNOWN",
+            "operatorStateAvailable": state_available,
+            "canSubmitOperatorControl": bool(operator_command_submit_enabled),
+            "portfolio": _safe_payload(portfolio or {}),
+            "registry": _safe_payload(registry or {}),
+            "rules": _safe_payload(rules or {}),
+            "research": _safe_payload(research or {"summaries": ()}),
+        },
+        ensure_ascii=False,
+    ).replace("</", "<\\/")
+    desktop_head = _reference_head(DESKTOP_REFERENCE_HTML)
+    desktop_body = _without_reference_scripts(_reference_body(DESKTOP_REFERENCE_HTML))
+    mobile_styles = _scoped_mobile_reference_styles(MOBILE_OVERVIEW_REFERENCE_HTML)
+    mobile_body = _without_reference_scripts(_reference_body(MOBILE_OVERVIEW_REFERENCE_HTML))
+    responsive_css = """
+<style id="triggertrade-reference-composition">
+#tt-desktop-reference{display:contents}
+#tt-mobile-reference{display:none}
+#config-rules .rules-stack{
+  display:grid;
+  grid-template-columns:minmax(0,3fr) minmax(0,2fr);
+  gap:12px 14px;
+  align-items:start;
+}
+#config-rules .rules-stack>.rules-section:nth-child(1){
+  grid-column:1;
+  grid-row:1 / span 2;
+}
+#config-rules .rules-stack>.rules-section:nth-child(2){
+  grid-column:2;
+  grid-row:1;
+}
+#config-rules .rules-stack>.rules-section:nth-child(3){
+  grid-column:2;
+  grid-row:2;
+}
+#config-rules .rules-stack>.rules-save{
+  grid-column:1 / -1;
+  display:flex;
+  justify-content:flex-end;
+  margin:10px 0;
+}
+#config-rules .rules-stack>.history-panel{
+  grid-column:1 / -1;
+  margin-top:0;
+}
+#config-rules .coins-grid{
+  display:block;
+  padding:6px 14px 8px;
+}
+#config-rules .coin-list{
+  display:flex;
+  flex-direction:column;
+}
+#config-rules .coin-row{
+  min-height:44px;
+  display:flex;
+  align-items:center;
+  gap:8px;
+  padding:6px 0;
+  border-bottom:1px solid #eef1f4;
+}
+#config-rules .coin-row:last-child{
+  border-bottom:0;
+}
+#config-rules .coin-symbol{
+  flex:1;
+  min-width:0;
+  font-size:10px;
+  font-weight:800;
+}
+#config-rules .coin-allocation-input{
+  width:84px;
+  text-align:right;
+}
+#config-rules .coin-percent{
+  color:#667085;
+  font-size:10px;
+}
+#config-rules .coin-remove{
+  width:28px;
+  height:28px;
+  min-height:28px;
+  padding:0;
+  border:1px solid var(--line2);
+  border-radius:8px;
+  background:#fff;
+  color:#667085;
+  font-size:16px;
+  line-height:1;
+}
+#config-rules .coins-footer{
+  display:flex;
+  justify-content:flex-end;
+  padding:0 14px 12px;
+}
+@media(max-width:760px){
+  body.tt-mobile-overview-active{background:#f5f7fb}
+  body.tt-mobile-overview-active #tt-desktop-reference{display:none}
+  body.tt-mobile-overview-active #tt-mobile-reference{display:block}
+  #config-rules .rules-stack{
+    grid-template-columns:1fr;
+  }
+  #config-rules .rules-stack>.rules-section:nth-child(1),
+  #config-rules .rules-stack>.rules-section:nth-child(2),
+  #config-rules .rules-stack>.rules-section:nth-child(3),
+  #config-rules .rules-stack>.rules-save,
+  #config-rules .rules-stack>.history-panel{
+    grid-column:1;
+    grid-row:auto;
+  }
+}
+</style>
+"""
+    forms = _operator_forms_html()
+    return (
+        "<!doctype html>\n<html lang=\"en\">\n<head>\n"
+        + desktop_head
+        + "\n"
+        + mobile_styles
+        + responsive_css
+        + "\n</head>\n<body class=\"tt-mobile-overview-active\">\n"
+        + "<div id=\"tt-desktop-reference\">"
+        + desktop_body
+        + "</div>\n<div id=\"tt-mobile-reference\">"
+        + mobile_body
+        + "</div>\n"
+        + forms
+        + _reference_backend_script(payload)
+        + "\n</body>\n</html>"
+    )
