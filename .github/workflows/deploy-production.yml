@@ -1,0 +1,135 @@
+﻿name: Deploy TriggerTrade Production
+
+on:
+  push:
+    branches:
+      - main
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: triggertrade-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build and deploy TriggerTrade
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Azure login with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build image in Azure Container Registry
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          IMAGE_TAG="${GITHUB_SHA}"
+          IMAGE="triggertradeacr-dcfmhtd6fmaubtac.azurecr.io/triggertrade-web:${IMAGE_TAG}"
+
+          echo "Building ${IMAGE}"
+
+          az acr build \
+            --registry triggertradeacr \
+            --image "triggertrade-web:${IMAGE_TAG}" \
+            .
+
+          echo "IMAGE=${IMAGE}" >> "$GITHUB_ENV"
+
+      - name: Deploy web
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          az containerapp update \
+            --name triggertrade-web \
+            --resource-group triggertrade-rg \
+            --image "$IMAGE"
+
+      - name: Deploy trading worker
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          az containerapp update \
+            --name triggertrade-trading-worker \
+            --resource-group triggertrade-rg \
+            --image "$IMAGE"
+
+      - name: Deploy scheduler
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          az containerapp update \
+            --name triggertrade-scheduler \
+            --resource-group triggertrade-rg \
+            --image "$IMAGE"
+
+      - name: Verify deployed images
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=== WEB ==="
+          az containerapp show \
+            --name triggertrade-web \
+            --resource-group triggertrade-rg \
+            --query "properties.template.containers[0].image" \
+            -o tsv
+
+          echo "=== TRADING WORKER ==="
+          az containerapp show \
+            --name triggertrade-trading-worker \
+            --resource-group triggertrade-rg \
+            --query "properties.template.containers[0].image" \
+            -o tsv
+
+          echo "=== SCHEDULER ==="
+          az containerapp show \
+            --name triggertrade-scheduler \
+            --resource-group triggertrade-rg \
+            --query "properties.template.containers[0].image" \
+            -o tsv
+
+      - name: Show active revisions
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=== WEB REVISION ==="
+          az containerapp revision list \
+            --name triggertrade-web \
+            --resource-group triggertrade-rg \
+            --query "[?properties.active==\`true\`].{revision:name,image:properties.template.containers[0].image}" \
+            -o table
+
+          echo "=== WORKER REVISION ==="
+          az containerapp revision list \
+            --name triggertrade-trading-worker \
+            --resource-group triggertrade-rg \
+            --query "[?properties.active==\`true\`].{revision:name,image:properties.template.containers[0].image}" \
+            -o table
+
+          echo "=== SCHEDULER REVISION ==="
+          az containerapp revision list \
+            --name triggertrade-scheduler \
+            --resource-group triggertrade-rg \
+            --query "[?properties.active==\`true\`].{revision:name,image:properties.template.containers[0].image}" \
+            -o table
+
+      - name: Azure logout
+        if: always()
+        run: az logout
