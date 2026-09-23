@@ -6,11 +6,13 @@ from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from decimal import Decimal
 import json
+from pathlib import Path
 import re
 import sqlite3
 from typing import Any, Callable
 
-from triggertrade.analytics import TradePerformanceFact, compute_futures_performance
+from triggertrade.analytics import TradePerformanceFact, assemble_entry_report, assemble_take_profit_report, compute_futures_performance
+from triggertrade.canonical_json import canonical_json_digest
 from triggertrade.backtest import BacktestPlan, BacktestResult, HistoricalCandle, run_backtest
 from triggertrade.backtest.models import (
     BACKTEST_COST_MODEL_VERSION,
@@ -32,6 +34,7 @@ from triggertrade.persistence.research_store import (
     ResearchDecision,
     ResearchDemoRunRecord,
     ResearchDemoStatus,
+    ResearchDiagnosticReportRecord,
     ResearchRecord,
     ResearchStatus,
     ResearchStore,
@@ -816,6 +819,56 @@ class ResearchService:
             difference=_difference(research_metrics, active_metrics),
         )
 
+    def publish_entry_diagnostic_report(
+        self,
+        *,
+        report_id: str,
+        dataset_id: str,
+        report_config: dict[str, Any] | None = None,
+        created_at: str | None = None,
+    ) -> ResearchDiagnosticReportRecord:
+        dataset = self._required_diagnostic_dataset(dataset_id)
+        source_payload = _load_diagnostic_source_payload(dataset.object_path, expected_digest=dataset.content_digest)
+        assembled = assemble_entry_report(
+            dataset=dataset,
+            source_payload=source_payload,
+            report_config=report_config,
+        )
+        record, _inserted = self._store.archive_diagnostic_report(
+            report_id=report_id,
+            report_kind=assembled.report_kind,
+            dataset_id=dataset.dataset_id,
+            report_definition=assembled.report_definition,
+            report_payload=assembled.report_payload,
+            created_at=created_at,
+        )
+        return record
+
+    def publish_take_profit_diagnostic_report(
+        self,
+        *,
+        report_id: str,
+        dataset_id: str,
+        report_config: dict[str, Any] | None = None,
+        created_at: str | None = None,
+    ) -> ResearchDiagnosticReportRecord:
+        dataset = self._required_diagnostic_dataset(dataset_id)
+        source_payload = _load_diagnostic_source_payload(dataset.object_path, expected_digest=dataset.content_digest)
+        assembled = assemble_take_profit_report(
+            dataset=dataset,
+            source_payload=source_payload,
+            report_config=report_config,
+        )
+        record, _inserted = self._store.archive_diagnostic_report(
+            report_id=report_id,
+            report_kind=assembled.report_kind,
+            dataset_id=dataset.dataset_id,
+            report_definition=assembled.report_definition,
+            report_payload=assembled.report_payload,
+            created_at=created_at,
+        )
+        return record
+
     def _blocked_backtest(
         self,
         research: ResearchRecord,
@@ -917,6 +970,15 @@ class ResearchService:
             raise ResearchServiceError(str(exc)) from exc
         if record is None:
             raise ResearchServiceError("research id not found")
+        return record
+
+    def _required_diagnostic_dataset(self, dataset_id: str):
+        try:
+            record = self._store.get_diagnostic_dataset(dataset_id)
+        except ResearchStoreError as exc:
+            raise ResearchServiceError(str(exc)) from exc
+        if record is None:
+            raise ResearchServiceError("diagnostic dataset not found")
         return record
 
     def _exact_trigger_set(self, set_id: str, set_version: str) -> TriggerSetVersion:
@@ -1248,6 +1310,21 @@ def _clean_command_text(value: str, field: str) -> str:
     if _SECRET_VALUE_RE.search(text):
         raise ResearchServiceError(f"research promotion command {field} must not contain secrets")
     return text
+
+
+def _load_diagnostic_source_payload(object_path: str, *, expected_digest: str) -> dict[str, Any]:
+    path = Path(object_path)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise ResearchServiceError("diagnostic source object is unavailable") from exc
+    except json.JSONDecodeError as exc:
+        raise ResearchServiceError("diagnostic source object is malformed") from exc
+    if not isinstance(data, dict):
+        raise ResearchServiceError("diagnostic source object must contain a JSON object")
+    if canonical_json_digest(data) != expected_digest:
+        raise ResearchServiceError("diagnostic source object digest mismatch")
+    return data
 
 
 def _backtest_metrics(result: BacktestResult) -> dict[str, Any]:

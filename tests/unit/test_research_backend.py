@@ -9,6 +9,7 @@ import pytest
 
 from triggertrade.backtest import BACKTEST_EVIDENCE_SOURCE, BacktestPlan, BacktestResult, BacktestStatus
 from triggertrade.canonical_json import canonical_json_digest
+from triggertrade.analytics import ENTRY_REPORT_ITEMS, ENTRY_SOURCE_ROWS, TAKE_PROFIT_REPORT_ITEMS, TAKE_PROFIT_SOURCE_ROWS
 from triggertrade.persistence import (
     MessageStore,
     ResearchStore,
@@ -769,6 +770,133 @@ def test_research_compare_available_for_selected_demo_and_active_overlap(tmp_pat
     assert compare.difference["net_pnl"] == str(Decimal("0.7") - active.net_pnl)
 
 
+def test_research_service_publishes_complete_read_only_entry_and_tp_reports(tmp_path):
+    db, _rules = _research_db(tmp_path)
+    store = ResearchStore(db)
+    dataset, _ = store.archive_diagnostic_dataset(
+        dataset_id="diag-report-source-1",
+        source_payload=_diagnostic_report_source_payload(),
+        source_provenance={
+            "source_kind": "SUPPLIED_DIAGNOSTIC_DATASET",
+            "retrieved_at": "2026-09-15T00:00:00Z",
+        },
+        manifest={
+            "dataset_kind": "B12_RESEARCH_REPORT_SOURCE",
+            "symbols": ["BTCUSDT"],
+            "timeframe": "1m",
+        },
+    )
+    service = _service(db)
+
+    entry = service.publish_entry_diagnostic_report(
+        report_id="entry-report-service-1",
+        dataset_id=dataset.dataset_id,
+        report_config={
+            "report_definition_version": "ENTRY_REPORT_V1",
+            "distance_bands": [{"lower": "0.10", "upper": "0.50"}],
+        },
+        created_at="2026-09-15T00:01:00Z",
+    )
+    tp = service.publish_take_profit_diagnostic_report(
+        report_id="tp-report-service-1",
+        dataset_id=dataset.dataset_id,
+        report_config={
+            "report_definition_version": "TP_REPORT_V1",
+            "minimum_distance_alternatives": ["1.25"],
+            "maximum_distance_alternatives": ["3.00"],
+        },
+        created_at="2026-09-15T00:02:00Z",
+    )
+    replay = service.publish_entry_diagnostic_report(
+        report_id="entry-report-service-1",
+        dataset_id=dataset.dataset_id,
+        report_config={
+            "report_definition_version": "ENTRY_REPORT_V1",
+            "distance_bands": [{"lower": "0.10", "upper": "0.50"}],
+        },
+        created_at="2026-09-15T00:03:00Z",
+    )
+
+    assert replay == entry
+    assert tuple(entry.report_definition["items"]) == ENTRY_REPORT_ITEMS
+    assert tuple(entry.report_definition["source_rows"]) == ENTRY_SOURCE_ROWS
+    assert tuple(tp.report_definition["items"]) == TAKE_PROFIT_REPORT_ITEMS
+    assert tuple(tp.report_definition["source_rows"]) == TAKE_PROFIT_SOURCE_ROWS
+    assert set(entry.report_payload["availability"]) == set(ENTRY_REPORT_ITEMS)
+    assert set(tp.report_payload["availability"]) == set(TAKE_PROFIT_REPORT_ITEMS)
+    assert entry.report_payload["outputs"]["ENTRY-RPT-04"]["ratio"] == {"numerator": "100", "denominator": "51"}
+    assert entry.report_payload["outputs"]["ENTRY-RPT-13"]["mean"] == {
+        "numerator": str(10 * 10**18),
+        "denominator": str(2 * 10**18),
+    }
+    assert entry.report_payload["outputs"]["ENTRY-RPT-14"]["path_extrema"] == {
+        "adverse_numerator": str(2 * 10**18),
+        "favorable_numerator": str(12 * 10**18),
+        "denominator": str(10**18),
+    }
+    assert tp.report_payload["outputs"]["TP-RPT-14"]["report_config"]["minimum_distance_alternatives"] == ["1.25"]
+    assert tp.report_payload["outputs"]["TP-RPT-14"]["sensitivity"] == {
+        "status": "AVAILABLE",
+        "axis": "minimum_distance",
+        "results": [{"alternative": "1.25", "selected_count": "1", "candidate_count": "2"}],
+    }
+    assert tp.report_payload["outputs"]["TP-RPT-15"]["sensitivity"] == {
+        "status": "AVAILABLE",
+        "axis": "maximum_distance",
+        "results": [{"alternative": "3.00", "selected_count": "0", "candidate_count": "1"}],
+    }
+    assert entry.report_payload["canonical_feedback"] is False
+    assert tp.report_payload["canonical_feedback"] is False
+    assert entry.dataset_manifest_digest == dataset.manifest_digest
+    assert tp.dataset_manifest_digest == dataset.manifest_digest
+    assert ResearchStore(db).list_diagnostic_reports() == (entry, tp)
+
+
+def test_research_service_report_assembly_rejects_incomplete_or_mutated_sources(tmp_path):
+    db, _rules = _research_db(tmp_path)
+    source = _diagnostic_report_source_payload()
+    source["entry_report"]["source_rows"].pop("E19")
+    dataset, _ = ResearchStore(db).archive_diagnostic_dataset(
+        dataset_id="diag-report-source-incomplete",
+        source_payload=source,
+        source_provenance={
+            "source_kind": "SUPPLIED_DIAGNOSTIC_DATASET",
+            "retrieved_at": "2026-09-15T00:00:00Z",
+        },
+        manifest={
+            "dataset_kind": "B12_RESEARCH_REPORT_SOURCE",
+            "symbols": ["BTCUSDT"],
+            "timeframe": "1m",
+        },
+    )
+
+    with pytest.raises(ValueError, match="missing required entries"):
+        _service(db).publish_entry_diagnostic_report(
+            report_id="entry-report-incomplete",
+            dataset_id=dataset.dataset_id,
+        )
+
+
+def test_research_service_report_assembly_rejects_binary_float_source_values(tmp_path):
+    db, _rules = _research_db(tmp_path)
+    source = _diagnostic_report_source_payload()
+    source["entry_report"]["source_rows"]["E18"]["path"]["anchor_price"] = 100.0
+    with pytest.raises(Exception, match="binary floats"):
+        ResearchStore(db).archive_diagnostic_dataset(
+            dataset_id="diag-report-source-float",
+            source_payload=source,
+            source_provenance={
+                "source_kind": "SUPPLIED_DIAGNOSTIC_DATASET",
+                "retrieved_at": "2026-09-15T00:00:00Z",
+            },
+            manifest={
+                "dataset_kind": "B12_RESEARCH_REPORT_SOURCE",
+                "symbols": ["BTCUSDT"],
+                "timeframe": "1m",
+            },
+        )
+
+
 def test_research_archive_preserves_evidence(tmp_path):
     db, rules = _research_db(tmp_path)
     service = _service(db, with_backtest_runtime=True)
@@ -847,6 +975,62 @@ def _service(
         promotion_governance_store=promotion_governance_store,
         legacy_sqlite_promotion_enabled=legacy_sqlite_promotion_enabled,
     )
+
+
+def _diagnostic_report_source_payload():
+    entry_rows = {
+        row: {
+            "status": "AVAILABLE",
+            "member_ids": [f"{row.lower()}-member"],
+            "report_items": [ENTRY_REPORT_ITEMS[index % len(ENTRY_REPORT_ITEMS)]],
+            "basis": {"source": row},
+        }
+        for index, row in enumerate(ENTRY_SOURCE_ROWS)
+    }
+    tp_rows = {
+        row: {
+            "status": "AVAILABLE",
+            "member_ids": [f"{row.lower()}-member"],
+            "report_items": [TAKE_PROFIT_REPORT_ITEMS[index % len(TAKE_PROFIT_REPORT_ITEMS)]],
+            "basis": {"source": row},
+        }
+        for index, row in enumerate(TAKE_PROFIT_SOURCE_ROWS)
+    }
+    entry_rows["E19"]["report_items"].append("ENTRY-RPT-15")
+    entry_rows["E07"]["report_items"].append("ENTRY-RPT-04")
+    entry_rows["E07"]["ratio"] = {"numerator": "100", "denominator": "51"}
+    entry_rows["E17"]["report_items"].append("ENTRY-RPT-13")
+    entry_rows["E17"]["values"] = ["18.9", "-8.9"]
+    entry_rows["E18"]["report_items"].append("ENTRY-RPT-14")
+    entry_rows["E18"]["path"] = {"direction": "LONG", "anchor_price": "100", "prices": ["100", "98", "105", "110", "112", "109"]}
+    entry_rows["E19"]["report_items"].append("ENTRY-RPT-14")
+    entry_rows["E19"]["path"] = {"direction": "SHORT", "anchor_price": "100", "prices": ["100", "102", "95", "90", "88", "91"]}
+    tp_rows["T16"]["report_items"].append("TP-RPT-14")
+    tp_rows["T16"]["baseline_distances"] = ["1.0", "1.5"]
+    tp_rows["T17"]["report_items"].append("TP-RPT-15")
+    tp_rows["T17"]["baseline_distances"] = ["3.5"]
+    return {
+        "entry_report": {
+            "source_rows": entry_rows,
+            "outputs": {
+                item: {
+                    "status": "AVAILABLE" if index % 2 == 0 else "UNAVAILABLE",
+                    "basis": {"source_rows": [ENTRY_SOURCE_ROWS[index % len(ENTRY_SOURCE_ROWS)]]},
+                }
+                for index, item in enumerate(ENTRY_REPORT_ITEMS)
+            },
+        },
+        "take_profit_report": {
+            "source_rows": tp_rows,
+            "outputs": {
+                item: {
+                    "status": "AVAILABLE" if index % 2 == 0 else "INCOMPLETE",
+                    "basis": {"source_rows": [TAKE_PROFIT_SOURCE_ROWS[index % len(TAKE_PROFIT_SOURCE_ROWS)]]},
+                }
+                for index, item in enumerate(TAKE_PROFIT_REPORT_ITEMS)
+            },
+        },
+    }
 
 
 class _FakePromotionGovernanceStore:

@@ -10,6 +10,7 @@ import pytest
 
 from triggertrade.backtest.data import BybitHistoricalDataSource, HistoricalDataError, validate_historical_candles
 from triggertrade.backtest.models import HistoricalCandle
+from triggertrade.analytics import ENTRY_REPORT_ITEMS, TAKE_PROFIT_REPORT_ITEMS
 from triggertrade.persistence import ResearchStore, ResearchStoreError
 
 
@@ -98,6 +99,112 @@ def test_research_diagnostic_archive_accepts_provenance_complete_non_btc_dataset
     assert record.source_provenance["source_kind"] == "SUPPLIED_DIAGNOSTIC_DATASET"
 
 
+def test_research_diagnostic_report_is_immutable_pinned_and_read_only():
+    with _research_store() as (_root, store):
+        dataset, _ = store.archive_diagnostic_dataset(
+            dataset_id="diag-BTCUSDT-1m-1",
+            source_payload={"candles": [_candle_row("BTCUSDT")]},
+            source_provenance=_provenance(),
+            manifest=_manifest("BTCUSDT"),
+        )
+        definition = _report_definition("ENTRY_REPORT", dataset.dataset_id)
+        payload = _report_payload("ENTRY_REPORT", dataset)
+
+        report, inserted = store.archive_diagnostic_report(
+            report_id="entry-report-b12-1",
+            report_kind="ENTRY_REPORT",
+            dataset_id=dataset.dataset_id,
+            report_definition=definition,
+            report_payload=payload,
+            created_at=START.isoformat().replace("+00:00", "Z"),
+        )
+        replayed, replay_inserted = store.archive_diagnostic_report(
+            report_id="entry-report-b12-1",
+            report_kind="ENTRY_REPORT",
+            dataset_id=dataset.dataset_id,
+            report_definition=definition,
+            report_payload=payload,
+            created_at=START.isoformat().replace("+00:00", "Z"),
+        )
+
+        assert inserted is True
+        assert replay_inserted is False
+        assert replayed == report
+        assert report.dataset_manifest_digest == dataset.manifest_digest
+        assert report.report_definition["methodology_revision"] == "v1.2.15"
+        assert report.report_payload["canonical_feedback"] is False
+        assert store.get_diagnostic_report("entry-report-b12-1") == report
+        assert store.list_diagnostic_reports() == (report,)
+
+
+def test_research_diagnostic_report_rejects_conflict_missing_dataset_and_feedback():
+    with _research_store() as (_root, store):
+        dataset, _ = store.archive_diagnostic_dataset(
+            dataset_id="diag-BTCUSDT-1m-1",
+            source_payload={"candles": [_candle_row("BTCUSDT")]},
+            source_provenance=_provenance(),
+            manifest=_manifest("BTCUSDT"),
+        )
+        definition = _report_definition("TAKE_PROFIT_REPORT", dataset.dataset_id)
+        payload = _report_payload("TAKE_PROFIT_REPORT", dataset)
+        store.archive_diagnostic_report(
+            report_id="tp-report-b12-1",
+            report_kind="TAKE_PROFIT_REPORT",
+            dataset_id=dataset.dataset_id,
+            report_definition=definition,
+            report_payload=payload,
+        )
+
+        with pytest.raises(ResearchStoreError, match="different content"):
+            store.archive_diagnostic_report(
+                report_id="tp-report-b12-1",
+                report_kind="TAKE_PROFIT_REPORT",
+                dataset_id=dataset.dataset_id,
+                report_definition=definition,
+                report_payload={**payload, "availability": {**payload["availability"], "TP-RPT-01": "UNAVAILABLE"}},
+            )
+        with pytest.raises(ResearchStoreError, match="archived dataset"):
+            store.archive_diagnostic_report(
+                report_id="entry-report-missing-dataset",
+                report_kind="ENTRY_REPORT",
+                dataset_id="missing-dataset",
+                report_definition=_report_definition("ENTRY_REPORT", "missing-dataset"),
+                report_payload={**_report_payload("ENTRY_REPORT", dataset), "source_dataset_id": "missing-dataset"},
+            )
+        with pytest.raises(ResearchStoreError, match="canonical_feedback false"):
+            store.archive_diagnostic_report(
+                report_id="entry-report-feedback",
+                report_kind="ENTRY_REPORT",
+                dataset_id=dataset.dataset_id,
+                report_definition=_report_definition("ENTRY_REPORT", dataset.dataset_id),
+                report_payload={**_report_payload("ENTRY_REPORT", dataset), "canonical_feedback": True},
+            )
+        with pytest.raises(ResearchStoreError, match="pin methodology v1.2.15"):
+            store.archive_diagnostic_report(
+                report_id="entry-report-stale-methodology",
+                report_kind="ENTRY_REPORT",
+                dataset_id=dataset.dataset_id,
+                report_definition={**_report_definition("ENTRY_REPORT", dataset.dataset_id), "methodology_revision": "v1.2.14"},
+                report_payload=_report_payload("ENTRY_REPORT", dataset),
+            )
+        with pytest.raises(ResearchStoreError, match="definition kind"):
+            store.archive_diagnostic_report(
+                report_id="entry-report-wrong-kind",
+                report_kind="ENTRY_REPORT",
+                dataset_id=dataset.dataset_id,
+                report_definition=_report_definition("TAKE_PROFIT_REPORT", dataset.dataset_id),
+                report_payload=_report_payload("ENTRY_REPORT", dataset),
+            )
+        with pytest.raises(ResearchStoreError, match="source dataset"):
+            store.archive_diagnostic_report(
+                report_id="entry-report-wrong-dataset",
+                report_kind="ENTRY_REPORT",
+                dataset_id=dataset.dataset_id,
+                report_definition=_report_definition("ENTRY_REPORT", "other-dataset"),
+                report_payload=_report_payload("ENTRY_REPORT", dataset),
+            )
+
+
 def test_current_historical_downloader_remains_limited_to_bybit_linear_btcusdt_1m():
     source = BybitHistoricalDataSource(_NoNetworkClient(), retry_sleep_seconds=0, cache=None)
 
@@ -181,4 +288,33 @@ def _manifest(symbol: str) -> dict[str, object]:
         "period_start": START.isoformat().replace("+00:00", "Z"),
         "period_end": END.isoformat().replace("+00:00", "Z"),
         "intrabar_first_touch_ordering": "UNAVAILABLE",
+    }
+
+
+def _report_definition(report_kind: str, dataset_id: str) -> dict[str, object]:
+    items = ENTRY_REPORT_ITEMS if report_kind == "ENTRY_REPORT" else TAKE_PROFIT_REPORT_ITEMS
+    return {
+        "methodology_revision": "v1.2.15",
+        "report_kind": report_kind,
+        "source_dataset_id": dataset_id,
+        "items": list(items),
+        "calculation_policy": "read_only_diagnostic_no_canonical_feedback",
+    }
+
+
+def _report_payload(report_kind: str, dataset) -> dict[str, object]:
+    items = ENTRY_REPORT_ITEMS if report_kind == "ENTRY_REPORT" else TAKE_PROFIT_REPORT_ITEMS
+    return {
+        "canonical_feedback": False,
+        "report_kind": report_kind,
+        "source_dataset_id": dataset.dataset_id,
+        "members": [
+            {
+                "dataset_id": dataset.dataset_id,
+                "content_digest": dataset.content_digest,
+                "manifest_digest": dataset.manifest_digest,
+            }
+        ],
+        "availability": {item: ("AVAILABLE" if index == 0 else "UNAVAILABLE") for index, item in enumerate(items)},
+        "outputs": {item: {"status": "AVAILABLE" if index == 0 else "UNAVAILABLE"} for index, item in enumerate(items)},
     }

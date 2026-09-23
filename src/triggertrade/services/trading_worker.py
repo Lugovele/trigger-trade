@@ -12,6 +12,7 @@ from triggertrade.persistence import RuntimeHeartbeat
 from triggertrade.persistence.durable_messages import OutboxMessageRecord
 from triggertrade.persistence.postgres import PostgresConnectionFactory, PostgresUnitOfWork
 from triggertrade.persistence.postgres_runtime_store import PostgresRuntimeStore
+from triggertrade.services.owner_dispatch import OwnerDispatchBlocked, OwnerDispatchResult
 
 
 TRADING_WORKER_COMPONENT = "trading-worker"
@@ -36,16 +37,7 @@ class DurableMessageClient(Protocol):
         lock_seconds: int = 60,
     ) -> tuple[OutboxMessageRecord, ...]: ...
 
-    def record_inbox(
-        self,
-        *,
-        consumer: str,
-        message_id: str,
-        producer: str,
-        message_type: str,
-        message_version: str,
-        payload,
-    ): ...
+    def dispatch_claimed(self, message: OutboxMessageRecord) -> OwnerDispatchResult: ...
 
 
 @dataclass(frozen=True)
@@ -115,18 +107,31 @@ class TargetTradingWorker:
             )
             claimed += len(messages)
             for message in messages:
-                detail = f"handler_not_certified:{consumer}:{message.message_type}"
+                try:
+                    dispatch_result = client.dispatch_claimed(message)
+                except OwnerDispatchBlocked as exc:
+                    detail = str(exc)
+                    self._record_heartbeat(
+                        "BLOCKED",
+                        detail,
+                        metadata={
+                            "message_id": message.message_id,
+                            "consumer": consumer,
+                            "message_type": message.message_type,
+                        },
+                    )
+                    return TradingWorkerCycleResult(claimed=claimed, blocked=True, detail=detail)
                 self._record_heartbeat(
-                    "BLOCKED",
-                    detail,
+                    "RUNNING",
+                    dispatch_result.detail,
                     metadata={
                         "message_id": message.message_id,
                         "consumer": consumer,
                         "message_type": message.message_type,
+                        "processed": str(dispatch_result.processed).lower(),
                     },
                 )
-                return TradingWorkerCycleResult(claimed=claimed, blocked=True, detail=detail)
-        detail = "idle" if claimed == 0 else "claimed_without_handler"
+        detail = "idle" if claimed == 0 else f"processed:{claimed}"
         self._record_heartbeat("RUNNING", detail, metadata={"claimed": str(claimed)})
         return TradingWorkerCycleResult(claimed=claimed, blocked=False, detail=detail)
 
@@ -147,12 +152,14 @@ def build_target_trading_worker(
     factory: PostgresConnectionFactory,
     runtime_store: PostgresRuntimeStore,
     worker_id: str | None = None,
+    consumers: Iterable[str] = TRADING_WORKER_CONSUMERS,
     poll_seconds: float = 5.0,
 ) -> TargetTradingWorker:
     return TargetTradingWorker(
         runtime_store=runtime_store,
         message_client_factory=lambda: _PostgresMessageClient(factory),
         worker_id=worker_id,
+        consumers=consumers,
         poll_seconds=poll_seconds,
     )
 
@@ -167,11 +174,11 @@ class _PostgresMessageClient:
         with PostgresUnitOfWork(self._factory) as uow:
             return DurableMessageStore(uow.connection).claim_outbox(**kwargs)
 
-    def record_inbox(self, **kwargs):
-        from triggertrade.persistence import DurableMessageStore
+    def dispatch_claimed(self, message: OutboxMessageRecord) -> OwnerDispatchResult:
+        from triggertrade.services.owner_dispatch import CanonicalOwnerDispatcher
 
         with PostgresUnitOfWork(self._factory) as uow:
-            return DurableMessageStore(uow.connection).record_inbox(**kwargs)
+            return CanonicalOwnerDispatcher(uow.connection).dispatch(message)
 
 
 def _worker_id(value: str | None) -> str:

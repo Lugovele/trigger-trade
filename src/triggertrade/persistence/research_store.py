@@ -138,6 +138,19 @@ class ResearchDiagnosticDatasetRecord:
     created_at: str
 
 
+@dataclass(frozen=True)
+class ResearchDiagnosticReportRecord:
+    report_id: str
+    report_kind: str
+    dataset_id: str
+    report_digest: str
+    definition_digest: str
+    dataset_manifest_digest: str
+    report_definition: dict[str, Any]
+    report_payload: dict[str, Any]
+    created_at: str
+
+
 _ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,160}$")
 _DISALLOWED_SELECTORS = {"current", "latest", "active", "..", ".", ""}
 
@@ -581,6 +594,94 @@ class ResearchStore:
             ).fetchall()
         return tuple(_diagnostic_dataset_from_row(row) for row in rows)
 
+    def archive_diagnostic_report(
+        self,
+        *,
+        report_id: str,
+        report_kind: str,
+        dataset_id: str,
+        report_definition: dict[str, Any],
+        report_payload: dict[str, Any],
+        created_at: str | None = None,
+    ) -> tuple[ResearchDiagnosticReportRecord, bool]:
+        _validate_id(report_id, "report_id")
+        _validate_id(dataset_id, "dataset_id")
+        kind = _clean_text(report_kind, "report_kind", 80)
+        if kind not in {"ENTRY_REPORT", "TAKE_PROFIT_REPORT", "ENTRY_SENSITIVITY", "TAKE_PROFIT_SENSITIVITY"}:
+            raise ResearchStoreError("diagnostic report kind is unsupported")
+        clean_definition = _diagnostic_report_definition(report_definition)
+        if clean_definition.get("report_kind") != kind:
+            raise ResearchStoreError("diagnostic report definition kind must match report kind")
+        if clean_definition.get("source_dataset_id") != dataset_id:
+            raise ResearchStoreError("diagnostic report definition source dataset must match dataset id")
+        clean_payload = _diagnostic_report_payload(report_payload)
+        if clean_payload.get("report_kind") != kind:
+            raise ResearchStoreError("diagnostic report payload kind must match report kind")
+        if clean_payload.get("source_dataset_id") != dataset_id:
+            raise ResearchStoreError("diagnostic report payload source dataset must match dataset id")
+        definition_digest = canonical_json_digest(clean_definition)
+        report_digest = canonical_json_digest(
+            {
+                "report_kind": kind,
+                "dataset_id": dataset_id,
+                "definition_digest": definition_digest,
+                "report_payload": clean_payload,
+            }
+        )
+        created_at = created_at or _now()
+        with self._connect() as conn:
+            dataset = self._get_diagnostic_dataset(conn, dataset_id)
+            if dataset is None:
+                raise ResearchStoreError("diagnostic report requires an archived dataset")
+            if not Path(dataset.object_path).exists():
+                raise ResearchStoreError("diagnostic report cannot reference missing source object")
+            existing = self._get_diagnostic_report(conn, report_id)
+            if existing is not None:
+                if (
+                    existing.report_digest != report_digest
+                    or existing.definition_digest != definition_digest
+                    or existing.dataset_id != dataset_id
+                    or existing.report_kind != kind
+                ):
+                    raise ResearchStoreError("diagnostic report identity already exists with different content")
+                return existing, False
+            conn.execute(
+                """
+                INSERT INTO research_diagnostic_reports (
+                    report_id, report_kind, dataset_id, report_digest,
+                    definition_digest, dataset_manifest_digest,
+                    report_definition_json, report_payload_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    report_id,
+                    kind,
+                    dataset_id,
+                    report_digest,
+                    definition_digest,
+                    dataset.manifest_digest,
+                    canonical_json_text(clean_definition),
+                    canonical_json_text(clean_payload),
+                    created_at,
+                ),
+            )
+            return self._get_diagnostic_report(conn, report_id), True  # type: ignore[return-value]
+
+    def get_diagnostic_report(self, report_id: str) -> ResearchDiagnosticReportRecord | None:
+        _validate_id(report_id, "report_id")
+        with self._connect() as conn:
+            return self._get_diagnostic_report(conn, report_id)
+
+    def list_diagnostic_reports(self) -> tuple[ResearchDiagnosticReportRecord, ...]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM research_diagnostic_reports
+                ORDER BY created_at, report_id
+                """
+            ).fetchall()
+        return tuple(_diagnostic_report_from_row(row) for row in rows)
+
     def _get_research(self, conn: sqlite3.Connection, research_id: str) -> ResearchRecord | None:
         row = conn.execute("SELECT * FROM research_entities WHERE research_id = ?", (research_id,)).fetchone()
         return None if row is None else _research_from_row(row)
@@ -592,6 +693,14 @@ class ResearchStore:
     ) -> ResearchDiagnosticDatasetRecord | None:
         row = conn.execute("SELECT * FROM research_diagnostic_datasets WHERE dataset_id = ?", (dataset_id,)).fetchone()
         return None if row is None else _diagnostic_dataset_from_row(row)
+
+    def _get_diagnostic_report(
+        self,
+        conn: sqlite3.Connection,
+        report_id: str,
+    ) -> ResearchDiagnosticReportRecord | None:
+        row = conn.execute("SELECT * FROM research_diagnostic_reports WHERE report_id = ?", (report_id,)).fetchone()
+        return None if row is None else _diagnostic_report_from_row(row)
 
     def _ensure_mutable_research(self, conn: sqlite3.Connection, research_id: str) -> ResearchRecord:
         record = self._get_research(conn, research_id)
@@ -719,6 +828,22 @@ class ResearchStore:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS research_diagnostic_reports (
+                    report_id TEXT PRIMARY KEY,
+                    report_kind TEXT NOT NULL,
+                    dataset_id TEXT NOT NULL,
+                    report_digest TEXT NOT NULL,
+                    definition_digest TEXT NOT NULL,
+                    dataset_manifest_digest TEXT NOT NULL,
+                    report_definition_json TEXT NOT NULL,
+                    report_payload_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (dataset_id) REFERENCES research_diagnostic_datasets(dataset_id)
+                )
+                """
+            )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_research_updated ON research_entities(updated_at DESC)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_research_backtests_created ON research_backtest_runs(created_at DESC)")
             conn.execute(
@@ -730,6 +855,9 @@ class ResearchStore:
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_research_diagnostic_datasets_created ON research_diagnostic_datasets(created_at, dataset_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_research_diagnostic_reports_created ON research_diagnostic_reports(created_at, report_id)"
             )
             _ensure_column(conn, "research_entities", "promoted_set_id", "TEXT")
             _ensure_column(conn, "research_entities", "promoted_set_version", "TEXT")
@@ -845,6 +973,20 @@ def _diagnostic_dataset_from_row(row: sqlite3.Row) -> ResearchDiagnosticDatasetR
     )
 
 
+def _diagnostic_report_from_row(row: sqlite3.Row) -> ResearchDiagnosticReportRecord:
+    return ResearchDiagnosticReportRecord(
+        report_id=row["report_id"],
+        report_kind=row["report_kind"],
+        dataset_id=row["dataset_id"],
+        report_digest=row["report_digest"],
+        definition_digest=row["definition_digest"],
+        dataset_manifest_digest=row["dataset_manifest_digest"],
+        report_definition=json.loads(row["report_definition_json"]),
+        report_payload=json.loads(row["report_payload_json"]),
+        created_at=row["created_at"],
+    )
+
+
 def _research_status_after_backtest(status: ResearchBacktestStatus) -> ResearchStatus:
     if status in {ResearchBacktestStatus.COMPLETED, ResearchBacktestStatus.COMPLETED_NO_TRADES}:
         return ResearchStatus.BACKTEST_READY
@@ -928,6 +1070,36 @@ def _diagnostic_manifest(value: dict[str, Any]) -> dict[str, Any]:
     symbols = clean["symbols"]
     if not isinstance(symbols, list) or not symbols or any(not isinstance(symbol, str) or not symbol for symbol in symbols):
         raise ResearchStoreError("diagnostic manifest symbols must be a non-empty string list")
+    return clean
+
+
+def _diagnostic_report_definition(value: dict[str, Any]) -> dict[str, Any]:
+    clean = _jsonable(value)
+    if not isinstance(clean, dict) or not clean:
+        raise ResearchStoreError("diagnostic report definition is required")
+    required = ("methodology_revision", "report_kind", "source_dataset_id", "items")
+    missing = [field for field in required if field not in clean]
+    if missing:
+        raise ResearchStoreError(f"diagnostic report definition missing required fields: {', '.join(missing)}")
+    if clean.get("methodology_revision") != "v1.2.15":
+        raise ResearchStoreError("diagnostic report definition must pin methodology v1.2.15")
+    if not isinstance(clean.get("items"), list) or not clean["items"]:
+        raise ResearchStoreError("diagnostic report definition items must be non-empty")
+    if any(not isinstance(item, str) or not item for item in clean["items"]):
+        raise ResearchStoreError("diagnostic report definition items must be strings")
+    return clean
+
+
+def _diagnostic_report_payload(value: dict[str, Any]) -> dict[str, Any]:
+    clean = _jsonable(value)
+    if not isinstance(clean, dict) or not clean:
+        raise ResearchStoreError("diagnostic report payload is required")
+    if clean.get("canonical_feedback") is not False:
+        raise ResearchStoreError("diagnostic report payload must declare canonical_feedback false")
+    if "members" not in clean or not isinstance(clean["members"], list):
+        raise ResearchStoreError("diagnostic report payload requires members")
+    if "availability" not in clean or not isinstance(clean["availability"], dict):
+        raise ResearchStoreError("diagnostic report payload requires availability")
     return clean
 
 

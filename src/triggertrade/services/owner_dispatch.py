@@ -1,0 +1,118 @@
+"""Canonical owner-message dispatch for payload-complete B12 routes."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from hashlib import sha256
+from typing import Any
+
+from triggertrade.persistence import (
+    DurableMessageStore,
+    LifecycleStartGateStore,
+    OrderSpecStore,
+    PortfolioFinalReceiptStore,
+    SubmitAuthorizationStore,
+)
+from triggertrade.persistence.durable_messages import OutboxMessageRecord
+from triggertrade.persistence.postgres import PostgresPersistenceError
+
+
+class OwnerDispatchBlocked(PostgresPersistenceError):
+    """Raised when a canonical owner route must remain fail-closed."""
+
+
+@dataclass(frozen=True)
+class OwnerDispatchResult:
+    processed: bool
+    detail: str
+
+
+class CanonicalOwnerDispatcher:
+    """Dispatch only routes whose downstream owner effect is source-complete."""
+
+    def __init__(self, connection) -> None:
+        self._connection = connection
+        self._messages = DurableMessageStore(connection)
+
+    def dispatch(self, message: OutboxMessageRecord) -> OwnerDispatchResult:
+        inbox, _ = self._messages.record_inbox(
+            consumer=message.consumer,
+            message_id=message.message_id,
+            producer=message.producer,
+            message_type=message.message_type,
+            message_version=message.message_version,
+            payload=message.payload,
+        )
+        if inbox.status == "PROCESSED":
+            self._messages.mark_outbox_consumed(message_id=message.message_id)
+            return OwnerDispatchResult(processed=False, detail="inbox_replay_already_processed")
+
+        detail = self._dispatch_payload_complete_route(message)
+        self._messages.mark_inbox_processed(consumer=message.consumer, message_id=message.message_id)
+        self._messages.mark_outbox_consumed(message_id=message.message_id)
+        return OwnerDispatchResult(processed=True, detail=detail)
+
+    def _dispatch_payload_complete_route(self, message: OutboxMessageRecord) -> str:
+        route = (message.producer, message.consumer, message.message_type, message.message_version)
+        if route == ("Position", "Lifecycle", "ORDER_SPEC", "5"):
+            return self._try_lifecycle_start_from_order_spec(message.payload)
+        if route == ("Portfolio", "Lifecycle", "SUBMIT_AUTHORIZED", "5"):
+            return self._try_lifecycle_start_from_authorization(message.payload)
+        if route == ("Lifecycle", "Portfolio", "ORDER_EVENT", "7"):
+            return self._accept_portfolio_final_receipt(message)
+        raise OwnerDispatchBlocked(
+            f"handler_not_certified:{message.consumer}:{message.message_type}:{message.message_version}"
+        )
+
+    def _try_lifecycle_start_from_order_spec(self, order_spec_payload: dict[str, Any]) -> str:
+        order_spec_id = _body_text(order_spec_payload, "order_spec", "order_spec_id")
+        authorization = SubmitAuthorizationStore(self._connection).get_by_order_spec_id(order_spec_id=order_spec_id)
+        if authorization is None:
+            raise OwnerDispatchBlocked("dependency_unavailable:Lifecycle:SUBMIT_AUTHORIZED")
+        LifecycleStartGateStore(self._connection).accept(
+            start_gate_id=_start_gate_id(order_spec_id, authorization.authorization_id),
+            order_spec=order_spec_payload,
+            submit_authorized=authorization.payload,
+        )
+        return "processed:Lifecycle:ORDER_SPEC:start_gate"
+
+    def _try_lifecycle_start_from_authorization(self, authorization_payload: dict[str, Any]) -> str:
+        order_spec_id = _body_text(authorization_payload, "submit_authorized", "order_spec_id")
+        spec = OrderSpecStore(self._connection).get_by_order_spec_id(order_spec_id=order_spec_id)
+        if spec is None:
+            raise OwnerDispatchBlocked("dependency_unavailable:Lifecycle:ORDER_SPEC")
+        authorization_id = _body_text(authorization_payload, "submit_authorized", "authorization_id")
+        LifecycleStartGateStore(self._connection).accept(
+            start_gate_id=_start_gate_id(order_spec_id, authorization_id),
+            order_spec=spec.payload,
+            submit_authorized=authorization_payload,
+        )
+        return "processed:Lifecycle:SUBMIT_AUTHORIZED:start_gate"
+
+    def _accept_portfolio_final_receipt(self, message: OutboxMessageRecord) -> str:
+        PortfolioFinalReceiptStore(self._connection).accept_order_event(
+            order_event_payload=message.payload,
+            delivered_at=_timestamp_text(message.created_at),
+        )
+        return "processed:Portfolio:ORDER_EVENT:final_receipt"
+
+
+def _body_text(payload: dict[str, Any], root: str, field: str) -> str:
+    body = payload.get(root)
+    if not isinstance(body, dict):
+        raise OwnerDispatchBlocked(f"invalid_payload:{root}")
+    value = body.get(field)
+    if not isinstance(value, str) or not value or "\x00" in value:
+        raise OwnerDispatchBlocked(f"invalid_payload:{root}.{field}")
+    return value
+
+
+def _start_gate_id(order_spec_id: str, authorization_id: str) -> str:
+    source = f"{order_spec_id}\x1f{authorization_id}"
+    return f"start-gate-{sha256(source.encode('utf-8')).hexdigest()[:32]}"
+
+
+def _timestamp_text(value: datetime) -> str:
+    resolved = value.astimezone(UTC) if value.tzinfo is not None else value.replace(tzinfo=UTC)
+    return resolved.isoformat().replace("+00:00", "Z")
