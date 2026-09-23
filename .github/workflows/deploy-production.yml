@@ -31,7 +31,13 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Build image in Azure Container Registry
+      - name: Login to Azure Container Registry
+        shell: bash
+        run: |
+          set -euo pipefail
+          az acr login --name triggertradeacr
+
+      - name: Build Docker image
         shell: bash
         run: |
           set -euo pipefail
@@ -41,12 +47,19 @@ jobs:
 
           echo "Building ${IMAGE}"
 
-          az acr build \
-            --registry triggertradeacr \
-            --image "triggertrade-web:${IMAGE_TAG}" \
+          docker build \
+            --tag "${IMAGE}" \
             .
 
           echo "IMAGE=${IMAGE}" >> "$GITHUB_ENV"
+
+      - name: Push Docker image
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Pushing ${IMAGE}"
+          docker push "${IMAGE}"
 
       - name: Deploy web
         shell: bash
@@ -104,32 +117,6 @@ jobs:
             --query "properties.template.containers[0].image" \
             -o tsv
 
-      - name: Show active revisions
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "=== WEB REVISION ==="
-          az containerapp revision list \
-            --name triggertrade-web \
-            --resource-group triggertrade-rg \
-            --query "[?properties.active==\`true\`].{revision:name,image:properties.template.containers[0].image}" \
-            -o table
-
-          echo "=== WORKER REVISION ==="
-          az containerapp revision list \
-            --name triggertrade-trading-worker \
-            --resource-group triggertrade-rg \
-            --query "[?properties.active==\`true\`].{revision:name,image:properties.template.containers[0].image}" \
-            -o table
-
-          echo "=== SCHEDULER REVISION ==="
-          az containerapp revision list \
-            --name triggertrade-scheduler \
-            --resource-group triggertrade-rg \
-            --query "[?properties.active==\`true\`].{revision:name,image:properties.template.containers[0].image}" \
-            -o table
-
       - name: Azure logout
         if: always()
-        run: az logout
+        run: az logout || true
