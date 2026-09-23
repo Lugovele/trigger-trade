@@ -157,13 +157,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
             )
             return
         product_pages = {
-            "/": "portfolio",
-            "/portfolio": "portfolio",
-            "/sets": "sets",
-            "/trigger-catalog": "trigger-catalog",
-            "/trigger-detail": "trigger-detail",
-            "/rules": "rules",
-            "/rules-version": "rules-version",
+            "/": "overview",
+            "/overview": "overview",
+            "/portfolio": "overview",
+            "/trading-configuration": "config",
+            "/metrics": "config",
+            "/sets": "config",
+            "/trigger-catalog": "config",
+            "/trigger-detail": "config",
+            "/rules": "config",
+            "/rules-version": "config",
             "/research": "research",
             "/research-detail": "research-detail",
             "/messages": "messages",

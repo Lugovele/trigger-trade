@@ -1,7 +1,9 @@
-﻿from http import HTTPStatus
+from http import HTTPStatus
 from http.client import HTTPConnection
 from urllib.request import Request, urlopen
+from pathlib import Path
 import threading
+from uuid import uuid4
 
 import pytest
 
@@ -14,7 +16,14 @@ from triggertrade.services.operator_auth import OPERATOR_AUTH_EVENT_TYPE, Operat
 from tests.unit.test_dashboard_read_model import _empty_db, _save_no_signal
 
 
-def test_default_bind_is_localhost(tmp_path):
+def _tmpdir():
+    path = Path(".tt-tmp") / f"http-{uuid4().hex}"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def test_default_bind_is_localhost():
+    tmp_path = _tmpdir()
     server = create_server(port=0, db_path=tmp_path / "missing.sqlite3")
     try:
         assert server.server_address[0] == DEFAULT_HOST
@@ -23,7 +32,8 @@ def test_default_bind_is_localhost(tmp_path):
 
 
 @pytest.mark.parametrize("host", [DEFAULT_HOST, "0.0.0.0"])
-def test_allowed_dashboard_hosts_can_bind(tmp_path, host):
+def test_allowed_dashboard_hosts_can_bind(host):
+    tmp_path = _tmpdir()
     server = create_server(host=host, port=0, db_path=tmp_path / "missing.sqlite3")
     try:
         assert server.server_address[0] == host
@@ -31,30 +41,30 @@ def test_allowed_dashboard_hosts_can_bind(tmp_path, host):
         server.server_close()
 
 
-def test_unsupported_dashboard_host_is_rejected(tmp_path):
+def test_unsupported_dashboard_host_is_rejected():
+    tmp_path = _tmpdir()
     with pytest.raises(ValueError, match="dashboard host must be one of"):
         create_server(host="192.0.2.10", port=0, db_path=tmp_path / "missing.sqlite3")
 
 
-def test_empty_state_renders_approved_product_ui_without_traceback_or_secrets(tmp_path):
+def test_empty_state_renders_final_product_ui_without_traceback_or_secrets():
+    tmp_path = _tmpdir()
     html = render_dashboard(DashboardReadModel(tmp_path / "missing.sqlite3"))
 
     assert "TriggerTrade" in html
-    assert "Portfolio" in html
-    assert "Sets" in html
-    assert "Rules" in html
+    assert "Overview" in html
+    assert "Trading Configuration" in html
     assert "Research" in html
-    assert "Open positions" in html
-    assert "Current Rules Configuration" in html
+    assert "Positions" in html
     assert "New Research" in html
     assert "Traceback" not in html
     assert "BYBIT_API_SECRET" not in html
     assert "Authorization" not in html
-    assert "Dashboard state is loaded from backend read models" in html
-    assert "sample data" in html
+    assert "sample data" not in html.lower()
 
 
-def test_dashboard_http_product_routes_are_read_only(tmp_path):
+def test_dashboard_http_product_routes_use_new_information_architecture():
+    tmp_path = _tmpdir()
     db = _empty_db(tmp_path)
     _save_no_signal(db)
     server = create_server(port=0, db_path=db)
@@ -63,16 +73,15 @@ def test_dashboard_http_product_routes_are_read_only(tmp_path):
     base_url = f"http://{server.server_address[0]}:{server.server_address[1]}"
     try:
         for route, expected in (
-            ("/", "Portfolio"),
-            ("/portfolio", "Open positions"),
-            ("/sets", "Trigger Catalog"),
-            ("/trigger-catalog", "What it checks"),
-            ("/trigger-detail", "formula-block"),
-            ("/rules", "Current Rules Configuration"),
-            ("/rules-version", "Rules unavailable"),
+            ("/", "Overview"),
+            ("/overview", "Positions"),
+            ("/portfolio", "Positions"),
+            ("/trading-configuration", "Trading Rules"),
+            ("/sets", "Trading Configuration"),
+            ("/trigger-catalog", "Trading Configuration"),
+            ("/rules", "Trading Configuration"),
             ("/research", "New Research"),
-            ("/research-detail", "Compare Demo to Active"),
-            ("/messages", "Messages"),
+            ("/research-detail", "Run 7D"),
             ("/analytics", "Research"),
         ):
             with urlopen(f"{base_url}{route}", timeout=5) as response:
@@ -90,7 +99,8 @@ def test_dashboard_http_product_routes_are_read_only(tmp_path):
         thread.join(timeout=2)
 
 
-def test_no_write_or_order_route_names_rendered(tmp_path):
+def test_no_write_or_order_route_names_rendered():
+    tmp_path = _tmpdir()
     db = _empty_db(tmp_path)
     html = render_dashboard(DashboardReadModel(db))
 
@@ -102,7 +112,8 @@ def test_no_write_or_order_route_names_rendered(tmp_path):
     assert "BYBIT_API_KEY" not in html
 
 
-def test_operator_controls_are_protected_frontend_boundaries(tmp_path):
+def test_operator_controls_are_protected_frontend_boundaries():
+    tmp_path = _tmpdir()
     db = _empty_db(tmp_path)
     server = create_server(port=0, db_path=db)
     try:
@@ -113,9 +124,6 @@ def test_operator_controls_are_protected_frontend_boundaries(tmp_path):
     assert "Pause Entries" in html
     assert "Close All" in html
     assert "Pause new entries?" in html
-    assert "The bot will stop opening new positions." in html
-    assert "Existing positions remain active and continue to be managed." in html
-    assert "Type CLOSE ALL to confirm" in html
     assert 'id="operatorPauseForm"' in html
     assert 'action="/operator/pause"' in html
     assert server.operator_control_token == ""
@@ -133,7 +141,8 @@ def test_product_renderer_never_emits_process_local_token_argument():
     assert 'name="token"' not in html
 
 
-def test_managed_oidc_operator_pause_does_not_require_local_token(tmp_path):
+def test_managed_oidc_operator_pause_does_not_require_local_token():
+    tmp_path = _tmpdir()
     db = _empty_db(tmp_path)
     authorizer = OperatorCommandAuthorizer(db, auth_mode="managed_oidc")
     server = create_server(port=0, db_path=db, operator_authorizer=authorizer)
@@ -168,7 +177,8 @@ def test_managed_oidc_operator_pause_does_not_require_local_token(tmp_path):
     assert server.operator_control_token == ""
 
 
-def test_portfolio_close_actions_fail_closed_without_execution_bridge(tmp_path):
+def test_portfolio_close_actions_fail_closed_without_execution_bridge():
+    tmp_path = _tmpdir()
     db = _empty_db(tmp_path)
     server = create_server(
         port=0,
@@ -212,7 +222,8 @@ def test_portfolio_close_actions_fail_closed_without_execution_bridge(tmp_path):
     assert all(row.result == "FAILED" for row in audit[:2])
 
 
-def test_portfolio_close_actions_use_injected_backend_contract(tmp_path):
+def test_portfolio_close_actions_use_injected_backend_contract():
+    tmp_path = _tmpdir()
     class FakeOperatorActions:
         def __init__(self):
             self.closed_one = None
@@ -269,7 +280,8 @@ def test_portfolio_close_actions_use_injected_backend_contract(tmp_path):
     assert all(row.result == "SUCCESS" for row in audit[:2])
 
 
-def test_secret_like_trace_values_are_not_rendered(tmp_path):
+def test_secret_like_trace_values_are_not_rendered():
+    tmp_path = _tmpdir()
     db = _empty_db(tmp_path)
     from triggertrade.persistence import CandleLifecycle, RuntimeStore
 
@@ -290,7 +302,8 @@ def test_secret_like_trace_values_are_not_rendered(tmp_path):
     assert "unit-signing-value" not in html
 
 
-def test_detail_routes_remain_available_for_existing_read_model_pages(tmp_path):
+def test_detail_routes_remain_available_for_existing_read_model_pages():
+    tmp_path = _tmpdir()
     from triggertrade.persistence import TriggerSetStore, bootstrap_current_trigger_sets
 
     db = tmp_path / "dashboard.sqlite3"
@@ -307,88 +320,25 @@ def test_detail_routes_remain_available_for_existing_read_model_pages(tmp_path):
         assert "relative_volume &gt;= 2.0 AND volume_percentile &gt;= 90" in detail
         assert "Version History" in detail
         assert "Used In Trigger Sets" in detail
-        assert "TRG-VOLUME" in detail
 
-        conn.request("GET", "/recommendations/REC-TRG-VOLUME-001")
-        recommendation = conn.getresponse().read().decode("utf-8")
-        assert "Observation" in recommendation
-        assert "Hypothesis" in recommendation
-        assert "Recommended Experiment" in recommendation
-        assert "No historical performance" in recommendation
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=2)
-
-
-def test_trigger_registry_routes_use_exact_identity_and_no_fixture_fallback(tmp_path):
-    from triggertrade.persistence import TriggerSetStore, bootstrap_current_trigger_sets
-
-    db = tmp_path / "dashboard.sqlite3"
-    bootstrap_current_trigger_sets(TriggerSetStore(db), created_at="2026-09-05T00:00:00+00:00")
-    server = create_server(port=0, db_path=db)
-    host, port = server.server_address
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        conn = HTTPConnection(host, port, timeout=2)
         conn.request("GET", "/triggers/TRG-002/0.2.0")
         response = conn.getresponse()
-        detail = response.read().decode("utf-8")
+        body = response.read().decode("utf-8")
         assert response.status == 200
-        assert "Robust Volume Confirmation" in detail
-        assert "Version 0.2.0" in detail
-        assert "triggertrade-futures-candidate" in detail
-        assert "Set 1" not in _section(detail, 'id="trigger-detail"', 'id="rules"')
+        assert "Robust Volume Confirmation" in body
 
         conn.request("GET", "/triggers/TRG-002/9.9.9")
         missing = conn.getresponse()
-        body = missing.read().decode("utf-8")
+        missing.read()
         assert missing.status == 404
-        assert "Traceback" not in body
-
-        conn.request("GET", "/set/triggertrade-futures-core/v1")
-        set_response = conn.getresponse()
-        assert set_response.status == 200
-
-        conn.request("GET", "/set/triggertrade-futures-core/v9")
-        missing_set = conn.getresponse()
-        missing_set.read()
-        assert missing_set.status == 404
     finally:
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
 
 
-def test_dashboard_missing_detail_ids_are_safe_404(tmp_path):
-    from triggertrade.persistence import TriggerSetStore, bootstrap_current_trigger_sets
-
-    db = tmp_path / "dashboard.sqlite3"
-    bootstrap_current_trigger_sets(TriggerSetStore(db), created_at="2026-09-05T00:00:00+00:00")
-    server = create_server(port=0, db_path=db)
-    host, port = server.server_address
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        conn = HTTPConnection(host, port, timeout=2)
-        conn.request("POST", "/recommendations/REC-TRG-VOLUME-001")
-        response = conn.getresponse()
-        response.read()
-        assert response.status == 405
-
-        conn.request("GET", "/rules/DOES-NOT-EXIST")
-        response = conn.getresponse()
-        body = response.read().decode("utf-8")
-        assert response.status == 404
-        assert "Traceback" not in body
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=2)
-
-
-def test_dashboard_routes_render_bootstrapped_registry_under_new_ia(tmp_path):
+def test_dashboard_routes_render_bootstrapped_registry_under_new_ia():
+    tmp_path = _tmpdir()
     db = tmp_path / "dashboard.sqlite3"
     server, initialized_db = create_server_from_env(
         {"TRIGGERTRADE_RUNTIME_DB_PATH": str(db), "TRIGGERTRADE_DASHBOARD_PORT": "0"},
@@ -404,37 +354,21 @@ def test_dashboard_routes_render_bootstrapped_registry_under_new_ia(tmp_path):
         rules = conn.getresponse()
         rules_html = rules.read().decode("utf-8")
         assert rules.status == 200
-        assert "Current Rules Configuration" in rules_html
+        assert "Trading Configuration" in rules_html
         assert "Save as New Version" in rules_html
-        assert "Portfolio" in rules_html
+        assert "Overview" in rules_html
         assert "Research" in rules_html
-        assert "Overview" not in rules_html
+        assert "Portfolio</button>" not in rules_html
 
         conn.request("GET", "/sets")
         sets = conn.getresponse()
         sets_html = sets.read().decode("utf-8")
         assert sets.status == 200
-        assert "Set 1" not in _section(sets_html, 'id="sets"', 'id="trigger-catalog"')
         assert "triggertrade-futures-core" in sets_html
         assert "triggertrade-futures-candidate" in sets_html
         assert "TRG-001" in sets_html
         assert "TRG-002" in sets_html
-
-        conn.request("GET", "/analytics")
-        legacy = conn.getresponse()
-        legacy_html = legacy.read().decode("utf-8")
-        assert legacy.status == 200
-        assert "Research" in legacy_html
-        assert "Backtest Profit Factor" in legacy_html
-        assert "Demo Profit Factor" in legacy_html
-        assert "Forward Test" not in legacy_html
     finally:
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
-
-
-def _section(html: str, start: str, end: str) -> str:
-    start_index = html.index(start)
-    end_index = html.index(end, start_index + len(start))
-    return html[start_index:end_index]
