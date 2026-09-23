@@ -1668,6 +1668,12 @@ def _reference_backend_script(payload: str) -> str:
   const qa = (sel, root=document) => Array.from(root.querySelectorAll(sel));
 
   function canSubmit(){ return !!state.canSubmitOperatorControl; }
+  async function postJson(url, body){
+    const response = await fetch(url, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body || {})});
+    const data = await response.json().catch(() => ({}));
+    if(!response.ok) throw new Error(data.error || data.reason || "Request failed");
+    return data;
+  }
   function normalizeCoinAllocation(v){
     if(v === null || v === undefined) return "";
     return String(v).replace("%", "").trim();
@@ -1685,6 +1691,20 @@ def _reference_backend_script(payload: str) -> str:
   function availableCoinSymbols(){
     const existing = new Set(coinDraft.map(c => c.symbol));
     return catalogSymbols().filter(symbol => !existing.has(symbol));
+  }
+  function researchSetOptions(){
+    return (state.registry.sets || []).map(s => ({
+      set_id: String(s.set_id || "").trim(),
+      set_version: String(s.version || s.set_version || "").trim(),
+      label: [s.display_name || s.set_id, s.version || s.set_version].filter(Boolean).join(" ")
+    })).filter(s => s.set_id && s.set_version);
+  }
+  function researchRulesOptions(){
+    const seen = new Set();
+    return [state.rules.current, ...(state.rules.history || [])].filter(Boolean).map(r => ({
+      rules_version_id: String(r.rules_version_id || "").trim(),
+      label: [r.display_version, r.rules_version_id].filter(Boolean).join(" · ")
+    })).filter(r => r.rules_version_id && !seen.has(r.rules_version_id) && seen.add(r.rules_version_id));
   }
   function setStatusLabel(value){
     const text = String(value || "UNKNOWN").toUpperCase();
@@ -1900,7 +1920,9 @@ def _reference_backend_script(payload: str) -> str:
     const pr = c.position_rules || {}, po = c.portfolio_rules || {};
     const values = new Map([
       ["Position Size", pr.position_size_pct],
+      ["Fixed Take Profit", pr.fixed_take_profit_pct],
       ["Minimum Take Profit", pr.minimum_take_profit_pct],
+      ["Stop Loss", pr.stop_loss_pct],
       ["Minimum Risk / Reward", pr.minimum_risk_reward],
       ["Minimum Net Edge", pr.minimum_net_edge_pct],
       ["Max Capital in Positions", po.max_capital_in_positions_pct],
@@ -1913,6 +1935,15 @@ def _reference_backend_script(payload: str) -> str:
       const input = q("input", row);
       if(label && input && values.has(label)) input.value = values.get(label) ?? "";
     });
+    const takeProfitRow = qa(".rule-row", body).find(row => q(".rule-name", row)?.textContent?.trim() === "Take Profit");
+    if(takeProfitRow){
+      const activeMode = String(pr.take_profit_mode || "DYNAMIC").toUpperCase();
+      qa(".mode-btn", takeProfitRow).forEach(button => button.classList.toggle("active", button.textContent.trim().toUpperCase() === activeMode));
+    }
+    const stopLossRow = qa(".rule-row", body).find(row => q(".rule-name", row)?.textContent?.trim() === "Stop Loss");
+    if(stopLossRow){
+      qa(".mode-btn", stopLossRow).forEach((button, index) => button.classList.toggle("active", index === 0));
+    }
     const leverageSelect = qa(".rule-row", body).find(row => q(".rule-name", row)?.textContent?.trim() === "Leverage")?.querySelector("select");
     if(leverageSelect && pr.leverage) leverageSelect.value = String(pr.leverage).endsWith("x") ? String(pr.leverage) : String(pr.leverage) + "x";
     const directionSelect = qa(".rule-row", body).find(row => q(".rule-name", row)?.textContent?.trim() === "Direction")?.querySelector("select");
@@ -1942,7 +1973,62 @@ def _reference_backend_script(payload: str) -> str:
       footer.innerHTML = `<select class="coin-add-select" aria-label="Coin to add">${symbols.length ? symbols.map(symbol => `<option value="${h(symbol)}">${h(symbol)}</option>`).join("") : '<option value="">Catalog unavailable</option>'}</select><button class="btn js-add-coin" type="button">+ Add Coin</button>`;
       q(".js-add-coin", footer)?.addEventListener("click", window.addCoinToRules);
     }
+    qa(".mode-selector .mode-btn", body).forEach(button => button.addEventListener("click", () => {
+      qa(".mode-btn", button.closest(".mode-selector")).forEach(node => node.classList.toggle("active", node === button));
+    }));
     q(".save-btn", body)?.addEventListener("click", window.saveRulesVersion);
+  }
+  function ruleInputValue(body, label, fallback){
+    const row = qa(".rule-row", body).find(node => q(".rule-name", node)?.textContent?.trim() === label);
+    if(!row) return fallback;
+    const input = q("input", row);
+    return input ? input.value : fallback;
+  }
+  function ruleSelectValue(body, label, fallback){
+    const row = qa(".rule-row", body).find(node => q(".rule-name", node)?.textContent?.trim() === label);
+    if(!row) return fallback;
+    const select = q("select", row);
+    return select ? select.value : fallback;
+  }
+  function ruleModeValue(body, label, fallback){
+    const row = qa(".rule-row", body).find(node => q(".rule-name", node)?.textContent?.trim() === label);
+    if(!row) return fallback;
+    const active = q(".mode-btn.active", row);
+    return active ? active.textContent.trim().toUpperCase() : fallback;
+  }
+  function directionPayload(value){
+    const normalized = String(value || "").toUpperCase();
+    if(normalized.includes("LONG") && normalized.includes("SHORT")) return "LONG_SHORT";
+    if(normalized.includes("SHORT")) return "SHORT_ONLY";
+    if(normalized.includes("LONG")) return "LONG_ONLY";
+    return normalized;
+  }
+  function rulePayload(){
+    const current = state.rules.current || {};
+    const pr = current.position_rules || {};
+    const po = current.portfolio_rules || {};
+    const body = q("#config-rules .rules-stack", desktop) || q("#rules-body", desktop) || q("#rulesBody", desktop);
+    return {
+      position_rules: {
+        ...pr,
+        position_size_pct: ruleInputValue(body, "Position Size", pr.position_size_pct),
+        take_profit_mode: ruleModeValue(body, "Take Profit", pr.take_profit_mode || "DYNAMIC"),
+        fixed_take_profit_pct: ruleInputValue(body, "Fixed Take Profit", pr.fixed_take_profit_pct),
+        minimum_take_profit_pct: ruleInputValue(body, "Minimum Take Profit", pr.minimum_take_profit_pct),
+        stop_loss_pct: ruleInputValue(body, "Stop Loss", pr.stop_loss_pct),
+        minimum_risk_reward: ruleInputValue(body, "Minimum Risk / Reward", pr.minimum_risk_reward),
+        minimum_net_edge_pct: ruleInputValue(body, "Minimum Net Edge", pr.minimum_net_edge_pct),
+        leverage: String(ruleSelectValue(body, "Leverage", pr.leverage) || "").replace("x", "")
+      },
+      portfolio_rules: {
+        ...po,
+        max_capital_in_positions_pct: ruleInputValue(body, "Max Capital in Positions", po.max_capital_in_positions_pct),
+        max_open_positions: ruleInputValue(body, "Max Open Positions", po.max_open_positions),
+        max_positions_per_coin: ruleInputValue(body, "Max Positions per Coin", po.max_positions_per_coin),
+        direction_mode: directionPayload(ruleSelectValue(body, "Direction", po.direction_mode)),
+        daily_loss_limit_pct: ruleInputValue(body, "Daily Loss Limit", po.daily_loss_limit_pct)
+      }
+    };
   }
   window.addCoinToRules = function(){
     const select = q("#config-rules .coin-add-select", desktop);
@@ -1967,16 +2053,16 @@ def _reference_backend_script(payload: str) -> str:
     const payload = {
       expected_rules_version_id: current.rules_version_id || "",
       expected_display_version: current.display_version || "",
-      position_rules: current.position_rules || {},
-      portfolio_rules: current.portfolio_rules || {},
+      ...rulePayload(),
       coins: coinPayload()
     };
-    const response = await fetch("/api/rules/versions", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload)});
-    if(response.ok){
-      const data = await response.json();
+    try{
+      const data = await postJson("/api/rules/versions", payload);
       state.rules.current = data.rules || state.rules.current;
       state.rules.history = data.history || state.rules.history;
       renderRules();
+    }catch(error){
+      alert(error.message || "Rules save failed.");
     }
   };
 
@@ -2020,12 +2106,50 @@ def _reference_backend_script(payload: str) -> str:
     const rows = [["Closed trades","closed_trades"],["Net P/L","net_pnl"],["Expectancy","expectancy"],["Profit Factor","profit_factor"],["Max Drawdown","max_drawdown"]];
     table.innerHTML = `<thead><tr><th>Metric</th><th>Active</th><th>Demo</th><th>Difference</th></tr></thead><tbody>${rows.map(([label,key]) => `<tr><td>${h(label)}</td><td class="base-cell">${h(currentCompare.active_benchmark?.[key] ?? "—")}</td><td class="neutral-cell">${h(currentCompare.research_demo?.[key] ?? "—")}</td><td>${h(currentCompare.difference?.[key] ?? "—")}</td></tr>`).join("")}</tbody>`;
   }
-  window.runBacktest = async function(period){ if(!currentResearchId) return; const days = period === "90D" ? 90 : period === "30D" ? 30 : 7; const end = new Date(), start = new Date(end.getTime() - days * 86400000); await fetch(`/api/research/${encodeURIComponent(currentResearchId)}/backtests`, {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({research_start:start.toISOString(),research_end:end.toISOString()})}); await openResearchById(currentResearchId); };
-  window.runDemo = async function(){ if(!currentResearchId) return; await fetch(`/api/research/${encodeURIComponent(currentResearchId)}/demo/start`, {method:"POST",headers:{"Content-Type":"application/json"},body:"{}"}); await openResearchById(currentResearchId); };
-  window.setDecision = async function(value){ if(!currentResearchId || !canSubmit()) return; const url = value === "REJECT" ? `/api/research/${encodeURIComponent(currentResearchId)}/archive` : `/api/research/${encodeURIComponent(currentResearchId)}/decision/make-active`; await fetch(url, {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({idempotency_key:"ui-"+Date.now()})}); await openResearchById(currentResearchId); };
+  function setNewResearchState(message){
+    const rulesSelect = q("#new-rules", desktop) || q("#newResearchRules", desktop);
+    let node = q("#newResearchState", desktop);
+    if(!node && rulesSelect?.parentElement){
+      node = document.createElement("div");
+      node.id = "newResearchState";
+      node.className = "panel-meta";
+      node.style.marginTop = "10px";
+      rulesSelect.insertAdjacentElement("afterend", node);
+    }
+    if(node) node.textContent = message || "";
+  }
+  window.runBacktest = async function(period){ if(!currentResearchId || !canSubmit()) return; const days = period === "90D" ? 90 : period === "30D" ? 30 : 7; const end = new Date(), start = new Date(end.getTime() - days * 86400000); try{ await postJson(`/api/research/${encodeURIComponent(currentResearchId)}/backtests`, {research_start:start.toISOString(),research_end:end.toISOString()}); }catch(error){ currentCompare = {available:false, reason:error.message || "Backtest unavailable"}; renderCompare(); } await openResearchById(currentResearchId); };
+  window.runDemo = async function(){ if(!currentResearchId || !canSubmit()) return; try{ await postJson(`/api/research/${encodeURIComponent(currentResearchId)}/demo/start`, {}); }catch(error){ currentCompare = {available:false, reason:error.message || "Demo start unavailable"}; renderCompare(); } await openResearchById(currentResearchId); };
+  window.setDecision = async function(value){ if(!currentResearchId || !canSubmit()) return; const url = value === "REJECT" ? `/api/research/${encodeURIComponent(currentResearchId)}/archive` : `/api/research/${encodeURIComponent(currentResearchId)}/decision/make-active`; try{ await postJson(url, {idempotency_key:"ui-"+Date.now()}); }catch(error){ currentCompare = {available:false, reason:error.message || "Decision unavailable"}; renderCompare(); } await openResearchById(currentResearchId); };
   window.exportResearch = function(){ const blob = new Blob([JSON.stringify({research:currentResearch, compare:currentCompare}, null, 2)], {type:"application/json"}); const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `${currentResearchId || "research"}-research.json`; a.click(); };
-  window.openNewResearch = function(){ q("#new-research-modal", desktop)?.classList.add("show"); };
+  function setupNewResearch(){
+    const setSelect = q("#new-set", desktop) || q("#newResearchSet", desktop);
+    const rulesSelect = q("#new-rules", desktop) || q("#newResearchRules", desktop);
+    const sets = researchSetOptions();
+    const rules = researchRulesOptions();
+    if(setSelect) setSelect.innerHTML = sets.length ? sets.map(s => `<option value="${h(s.set_id)}|${h(s.set_version)}">${h(s.label || `${s.set_id} ${s.set_version}`)}</option>`).join("") : '<option value="">Set unavailable</option>';
+    if(rulesSelect) rulesSelect.innerHTML = rules.length ? rules.map(r => `<option value="${h(r.rules_version_id)}">${h(r.label || r.rules_version_id)}</option>`).join("") : '<option value="">Rules unavailable</option>';
+    setNewResearchState(sets.length && rules.length ? "" : "Backend Set and Rules versions are unavailable.");
+  }
+  window.openNewResearch = function(){ setupNewResearch(); q("#new-research-modal", desktop)?.classList.add("show"); };
   window.closeNewResearch = function(){ q("#new-research-modal", desktop)?.classList.remove("show"); };
+  window.createResearch = async function(){
+    if(!canSubmit()) return;
+    const setValue = (q("#new-set", desktop) || q("#newResearchSet", desktop))?.value || "";
+    const rules_version_id = (q("#new-rules", desktop) || q("#newResearchRules", desktop))?.value || "";
+    const [set_id, set_version] = setValue.split("|");
+    if(!set_id || !set_version || !rules_version_id){
+      setNewResearchState("Backend Set and Rules versions are unavailable.");
+      return;
+    }
+    try{
+      const data = await postJson("/api/research", {set_id, set_version, rules_version_id});
+      window.closeNewResearch();
+      await openResearchById(data.research?.research_id);
+    }catch(error){
+      setNewResearchState(error.message || "Research creation failed.");
+    }
+  };
 
   setupFilters(); applyOperatorState(); setupKpis(); renderPositions(); renderMetrics(); renderTriggers(); renderSets(); renderRules(); renderResearchSummary();
   showPage(state.page === "config" ? "configuration" : state.page || "overview");

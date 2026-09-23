@@ -192,6 +192,10 @@ def test_trading_rules_coin_editor_uses_pending_allocations_and_existing_save_pa
     html = _html()
 
     assert "let coinDraftVersion = null, coinDraft = [];" in html
+    assert "function rulePayload()" in html
+    assert 'position_size_pct: ruleInputValue(body, "Position Size", pr.position_size_pct)' in html
+    assert 'take_profit_mode: ruleModeValue(body, "Take Profit", pr.take_profit_mode || "DYNAMIC")' in html
+    assert 'direction_mode: directionPayload(ruleSelectValue(body, "Direction", po.direction_mode))' in html
     assert "max_allocation_pct: normalizeCoinAllocation(x.max_allocation_pct)" in html
     assert "coinPayload()" in html
     assert "coins: coinPayload()" in html
@@ -244,3 +248,25 @@ def test_backend_wiring_payload_and_authorized_command_forms_are_present_without
     assert 'name="token"' not in html
     assert "/api/research/" in html
     assert "/api/rules/versions" in html
+
+
+def test_research_reference_actions_are_backend_wired_without_fixture_values():
+    html = _html()
+
+    assert "function researchSetOptions()" in html
+    assert "function researchRulesOptions()" in html
+    assert "function setupNewResearch()" in html
+    assert "function setNewResearchState(message)" in html
+    assert 'q("#new-set", desktop)' in html
+    assert 'q("#new-rules", desktop)' in html
+    assert "insertAdjacentElement(\"afterend\", node)" in html
+    assert "window.createResearch = async function()" in html
+    assert 'postJson("/api/research", {set_id, set_version, rules_version_id})' in html
+    assert "window.runBacktest = async function(period)" in html
+    assert "research_start:start.toISOString()" in html
+    assert "window.runDemo = async function()" in html
+    assert "window.setDecision = async function(value)" in html
+    assert 'idempotency_key:"ui-"+Date.now()' in html
+    assert "<td>R-001</td>" not in html
+    assert "BT-012" not in html
+    assert "DM-006" not in html

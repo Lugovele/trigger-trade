@@ -298,6 +298,11 @@ def test_research_dashboard_removes_fixture_rows_without_logs_page(tmp_path):
     assert 'data-page="logs"' not in html
     assert "openNewResearch" in html
     assert 'id="new-research-modal"' in html
+    assert 'id="new-set"' in html
+    assert 'id="new-rules"' in html
+    assert "function setupNewResearch()" in html
+    assert "window.createResearch = async function()" in html
+    assert 'postJson("/api/research", {set_id, set_version, rules_version_id})' in html
     assert '"set_id": "triggertrade-futures-core"' in html
     assert _rules.get_current_rules_version().rules_version_id in html
     assert "Set 2 · v5" not in html
