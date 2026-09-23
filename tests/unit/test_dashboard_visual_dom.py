@@ -22,7 +22,7 @@ def test_dashboard_uses_final_three_area_navigation():
 
     assert ">TriggerTrade<" in html
     assert 'data-page="overview"' in html
-    assert 'data-page="config"' in html
+    assert 'data-page="configuration"' in html
     assert 'data-page="research"' in html
     assert ">Overview</button>" in html
     assert ">Trading Configuration</button>" in html
@@ -35,7 +35,7 @@ def test_dashboard_uses_final_three_area_navigation():
 def test_overview_matches_final_positions_contract():
     html = _html()
 
-    assert 'id="overview"' in html
+    assert 'id="page-overview"' in html
     for label in (
         "Total Equity",
         "Available",
@@ -83,9 +83,9 @@ def test_mobile_overview_controls_are_present():
 
     assert "@media(max-width:760px)" in html
     assert "Filters <span" in html
-    assert ">Actions</button>" in html
-    assert 'id="filtersSheet"' in html
-    assert 'id="actionsSheet"' in html
+    assert "Actions ⋮" in html
+    assert 'id="filters-bg"' in html
+    assert 'id="actions-bg"' in html
     assert "Last 24H" in html
 
 
@@ -107,8 +107,8 @@ def test_trading_configuration_sections_are_present():
 def test_research_summary_and_standalone_detail_are_present():
     html = _html(initial_page="research")
 
-    assert 'id="research"' in html
-    assert 'id="research-detail"' in html
+    assert 'id="page-research"' in html
+    assert 'id="page-research-detail"' in html
     assert "+ New Research" in html
     for label in (
         "Research",

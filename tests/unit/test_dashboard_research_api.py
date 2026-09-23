@@ -289,21 +289,20 @@ def test_research_api_make_active_blocked_state_is_factual(tmp_path):
 def test_research_dashboard_removes_fixture_rows_without_logs_page(tmp_path):
     db, _rules = _research_db(tmp_path)
     html = render_dashboard(DashboardReadModel(db), initial_page="research")
-    research_section = html[html.index('id="research"') : html.index('id="researchDetail"', html.index('id="research"'))]
-    modal_section = html[html.index('id="newResearchModal"') : html.index('id="controlModal"')]
+    research_section = html[html.index('id="page-research"') : html.index('id="page-research-detail"', html.index('id="page-research"'))]
 
     assert "No Research records." in html
     assert "R-001" not in research_section
     assert "BT-012" not in html
     assert "DM-006" not in html
     assert 'data-page="logs"' not in html
-    assert "openNewResearchModal" in html
-    assert 'value="triggertrade-futures-core|v1"' in modal_section
-    assert _rules.get_current_rules_version().rules_version_id in modal_section
-    assert "Set 2 · v5" not in modal_section
-    assert "Rules · v4" not in modal_section
+    assert "openNewResearch" in html
+    assert 'id="new-research-modal"' in html
+    assert '"set_id": "triggertrade-futures-core"' in html
+    assert _rules.get_current_rules_version().rules_version_id in html
+    assert "Set 2 · v5" not in html
+    assert "Rules · v4" not in html
     assert "location.reload" not in html
-    assert "selectBacktestRun" in html
-    assert "selectDemoRun" in html
-    assert "stopDemoRun" in html
+    assert "/api/research/${encodeURIComponent(currentResearchId)}/backtests" in html
+    assert "/api/research/${encodeURIComponent(currentResearchId)}/demo/start" in html
     assert "research_start" in html

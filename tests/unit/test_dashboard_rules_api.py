@@ -33,8 +33,8 @@ def test_rules_api_current_history_detail_are_backend_backed(tmp_path):
         assert current_payload["runtime_support"]["daily_loss_enforcement"] == "accounting_backed_new_entries"
         assert history_payload["versions"][0]["rules_version_id"] == current.rules_version_id
         assert detail_payload["rules_version_id"] == current.rules_version_id
-        assert "Rules · v1" in html
-        rules_section = _section(html, 'id="rules"', 'id="rules-version"')
+        assert '"display_version": "v1"' in html
+        rules_section = _section(html, 'id="config-rules"', 'id="page-research"')
         assert "DOGEUSDT" not in rules_section
         assert "Minimum Net Edge 0.5%" not in rules_section
     finally:
@@ -151,22 +151,20 @@ def test_rules_ui_preserves_hidden_coins_leverage_and_disabled_thresholds(tmp_pa
     try:
         html = _text_request(host, port, "GET", "/rules")
 
-        assert '<option selected>7x</option>' in html
-        assert 'let coinDraft = new Map' in html
-        assert 'coins: [...coinDraft.values()]' in html
-        assert 'minimum_net_edge_pct: val("rulesEdge")' in html
-        assert 'max_open_positions: val("rulesMaxOpen")' in html
-        assert 'daily_loss_limit_pct: val("rulesDailyLoss")' in html
-        assert "Dynamic TP: unsupported/fail closed" in html
-        assert "Direction filters do not create SHORT alpha" in html
-        assert "rules_version_id:" in html
-        assert 'id="rulesCurrentVersionLabel"' in html
-        assert 'id="rulesCurrentIdentity"' in html
-        assert "renderCurrentIdentity();" in html
-        assert "payloadSignature(currentPayload())!==cleanSnapshot" in html
-        assert "refreshDirtyState();" in html
-        assert 'id="rulesErrorPanel"' in html
-        assert "showRulesError(msg)" in html
+        assert '"leverage": "7"' in html
+        assert '"minimum_net_edge_enabled": false' in html
+        assert '"max_open_positions_enabled": false' in html
+        assert '"daily_loss_limit_enabled": false' in html
+        assert '"symbol": "BTCUSDT"' in html
+        assert '"max_allocation_pct": "8.00"' in html
+        assert "let coinDraftVersion = null, coinDraft = [];" in html
+        assert "coins: coinPayload()" in html
+        assert "coin-add-select" in html
+        assert 'prompt("Coin symbol")' not in html
+        assert '"direction_mode":' in html
+        assert 'const directionSelect = qa(".rule-row", body).find' in html
+        assert '"rules_version_id":' in html
+        assert "/api/rules/versions" in html
     finally:
         _stop(server, thread)
 

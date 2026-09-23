@@ -1682,6 +1682,20 @@ def _reference_backend_script(payload: str) -> str:
   function catalogSymbols(){
     return (state.rules.coins || state.rules.catalog_coins || state.rules.supported_symbols || []).map(c => String(c.symbol || c).trim().toUpperCase()).filter(Boolean);
   }
+  function availableCoinSymbols(){
+    const existing = new Set(coinDraft.map(c => c.symbol));
+    return catalogSymbols().filter(symbol => !existing.has(symbol));
+  }
+  function setStatusLabel(value){
+    const text = String(value || "UNKNOWN").toUpperCase();
+    if(text === "ACTIVE") return "Active";
+    if(text === "TESTING" || text === "DRAFT" || text === "RESEARCH") return "Research";
+    if(text === "ARCHIVE" || text === "ARCHIVED" || text === "INACTIVE") return "Inactive";
+    return text;
+  }
+  function triggerStatusLabel(trigger){
+    return trigger?.immutable ? "Active" : "Research";
+  }
   function postForm(id, fill){
     const form = document.getElementById(id);
     if(!canSubmit() || !form) return;
@@ -1849,7 +1863,9 @@ def _reference_backend_script(payload: str) -> str:
   window.showTrigger = function(id, version){
     const t = (state.registry.selected_trigger && state.registry.selected_trigger.trigger_id === id && state.registry.selected_trigger.version === version) ? state.registry.selected_trigger : (state.registry.triggers || []).find(x => x.trigger_id === id && x.version === version);
     const detail = q("#trigger-details", desktop) || q("#triggerDetail", desktop);
-    if(detail) detail.innerHTML = `<div class="details-header"><div class="details-id">${h(id)} · ${h(version)}</div><div class="details-title">${h(t?.display_name || id || "Trigger")}</div></div><div class="details-section"><div class="panel-title">Exact Condition</div><div class="formula">${h(t?.formula_text || t?.what_it_checks || "Unavailable")}</div></div><div class="details-section"><div class="panel-title">Deterministic Evaluation Sequence</div><div class="body-text">${h(t?.how_it_works || "Backend trigger detail unavailable.")}</div></div><div class="details-section"><div class="panel-title">Version History</div><div class="formula">${h((t?.version_history || []).map(v => `${v.version} · ${v.change_summary || ""}`).join("\n") || "—")}</div></div>`;
+    const usedIn = t?.used_in || [];
+    const versions = t?.version_history || [];
+    if(detail) detail.innerHTML = `<div class="details-header"><div class="details-id">Trigger ${h(id)} · Version ${h(version || t?.version || "—")} · ${h(triggerStatusLabel(t))}</div><div class="details-title">${h(t?.display_name || id || "Trigger")}</div><div class="details-meta"><span class="meta-pill">Status: ${h(triggerStatusLabel(t))}</span><span class="meta-pill">${t?.immutable ? "CURRENT" : "HISTORICAL / RESEARCH"}</span></div></div><div class="details-section"><div class="section-title">Metric</div><div class="reference-links"><button class="reference-link" onclick="openConfig('metrics')">${h(t?.metric || "Metric unavailable")}</button></div></div><div class="details-section"><div class="section-title">Condition</div><div class="formula" style="white-space:pre-line">${h(t?.formula_text || t?.what_it_checks || "Unavailable")}</div></div><div class="details-section"><div class="section-title">What this Trigger means</div><div class="body-text">${h(t?.how_it_works || "Backend trigger detail unavailable.")}</div></div><div class="details-section"><div class="section-title">How it works</div><div class="step-list">${String(t?.how_it_works || "Backend trigger detail unavailable.").split(/\n+|;\s*/).filter(Boolean).map((step,index) => `<div class="calc-step"><div class="step-number">${index+1}</div><div class="step-body">${h(step)}</div></div>`).join("")}</div></div><div class="details-section"><div class="section-title">Unavailable behavior</div><div class="body-text">${h(t?.unavailable_reason || "If required backend observations or metric inputs are unavailable, the Trigger result is unavailable; the frontend does not convert missing facts to zero or fabricate a signal.")}</div></div><div class="details-section"><div class="section-title">Used in Set Versions</div><div class="reference-links">${usedIn.length ? usedIn.map(s => `<button class="reference-link" onclick="openConfig('sets');showSet('${h(s.set_id)}','${h(s.set_version)}')">${h(s.set_id)} ${h(s.set_version)} · ${h(setStatusLabel(s.set_status))}</button>`).join("") : "—"}</div></div><div class="details-section"><div class="section-title">Version History</div><div class="version-list">${versions.length ? versions.map(v => `<button class="version-button ${v.version === (version || t?.version) ? "selected" : ""}" onclick="showTrigger('${h(id)}','${h(v.version)}')">${h(v.version)} · ${h(v.change_summary || v.created_at || "")}</button>`).join("") : "—"}</div></div>`;
   };
   function renderSets(){
     const rows = state.registry.sets || [];
@@ -1860,9 +1876,11 @@ def _reference_backend_script(payload: str) -> str:
   }
   window.showSet = function(id, version){
     const s = (state.registry.sets || []).find(x => x.set_id === id && x.version === version);
-    const members = s?.trigger_versions || [];
+    const members = (s?.trigger_versions || s?.rules || []).map(x => ({trigger_id:x.trigger_id || x.rule_id, version:x.version || x.rule_version, display_name:x.display_name || x.name, condition:x.condition}));
     const detail = q("#set-details", desktop) || q("#setDetail", desktop);
-    if(detail) detail.innerHTML = `<div class="details-header"><div class="details-id">${h(id)} · ${h(version)} · ${h(s?.status || "UNKNOWN")}</div><div class="details-title">${h(s?.display_name || id || "Set")}</div></div><div class="details-section"><div class="set-logic"><div class="set-logic-row"><div class="logic-keyword">IF</div><div class="logic-condition">${h(members.map(t => t.trigger_id + " " + t.version + " evaluates TRUE").join(" AND ") || "No trigger versions recorded")}</div></div><div class="set-logic-row"><div class="logic-keyword">THEN</div><div class="logic-condition">Emit deterministic Set signal for the configured market; strategies convert signals into trade intents.</div></div></div></div>`;
+    const triggerLinks = members.map(t => `<button class="reference-link" onclick="openConfig('triggers');showTrigger('${h(t.trigger_id)}','${h(t.version)}')">${h(t.trigger_id)} ${h(t.version)}</button>`).join(" ");
+    const condition = members.map(t => `<span class="logic-trigger">${h(t.trigger_id)} ${h(t.version)}</span> evaluates TRUE`).join(" AND ");
+    if(detail) detail.innerHTML = `<div class="details-header"><div class="details-id">Set ${h(id)} · Version ${h(version)} · ${h(setStatusLabel(s?.status))}</div><div class="details-title">${h(s?.display_name || s?.purpose || id || "Set")}</div><div class="details-meta"><span class="meta-pill">Direction: LONG / SHORT / NONE</span><span class="meta-pill">${h([s?.symbol, s?.timeframe].filter(Boolean).join(" · ") || "Market unavailable")}</span></div></div><div class="details-section"><div class="section-title">Trigger Versions Used</div><div class="reference-links">${triggerLinks || "—"}</div></div><div class="details-section"><div class="section-title">Human-readable Set Logic</div><div class="set-logic"><div class="set-logic-row"><div class="logic-keyword">IF</div><div class="logic-condition">${condition || "No trigger versions recorded"}</div></div><div class="set-logic-row"><div class="logic-keyword">THEN</div><div class="logic-condition">Direction resolves through this Set to LONG / SHORT / NONE for the configured market.</div></div><div class="set-logic-row"><div class="logic-keyword">ELSE</div><div class="logic-condition">Direction = NONE.</div></div></div></div><div class="details-section"><div class="section-title">Historical correctness</div><div class="body-text">This panel renders the exact selected Set Version and the exact Trigger Versions recorded for that version.</div></div>`;
   };
   qa(".config-tab", desktop).forEach(b => b.onclick = () => { qa(".config-tab", desktop).forEach(x => x.classList.toggle("active", x.dataset.config === b.dataset.config)); qa(".config-view", desktop).forEach(x => x.classList.toggle("active", x.id === "config-" + b.dataset.config)); });
 
@@ -1918,15 +1936,18 @@ def _reference_backend_script(payload: str) -> str:
     if(history){
       history.innerHTML = '<div class="history-title">Version History</div>' + ((state.rules.history || []).map(v => `<div class="history-row"><button class="link">${h(v.display_version)}</button><span class="badge inactive">Inactive</span><div>${h(v.change_summary || "Previous configuration")}</div><div>${h(v.created_at || "—")}</div></div>`).join("") || '<div class="history-row"><button class="link">—</button><span class="badge inactive">Unavailable</span><div>No version history.</div><div>—</div></div>');
     }
-    q(".coins-footer .btn", body)?.addEventListener("click", window.addCoinToRules);
+    const footer = q(".coins-footer", body);
+    if(footer){
+      const symbols = availableCoinSymbols();
+      footer.innerHTML = `<select class="coin-add-select" aria-label="Coin to add">${symbols.length ? symbols.map(symbol => `<option value="${h(symbol)}">${h(symbol)}</option>`).join("") : '<option value="">Catalog unavailable</option>'}</select><button class="btn js-add-coin" type="button">+ Add Coin</button>`;
+      q(".js-add-coin", footer)?.addEventListener("click", window.addCoinToRules);
+    }
     q(".save-btn", body)?.addEventListener("click", window.saveRulesVersion);
   }
   window.addCoinToRules = function(){
+    const select = q("#config-rules .coin-add-select", desktop);
+    const symbol = String(select?.value || "").trim().toUpperCase();
     const symbols = catalogSymbols();
-    const raw = prompt("Coin symbol");
-    if(!raw) return;
-    const symbol = raw.trim().toUpperCase();
-    if(!symbol) return;
     if(!symbols.length){
       alert("Supported instrument catalog is unavailable.");
       return;

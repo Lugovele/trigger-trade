@@ -196,7 +196,9 @@ def test_trading_rules_coin_editor_uses_pending_allocations_and_existing_save_pa
     assert "coinPayload()" in html
     assert "coins: coinPayload()" in html
     assert "state.rules.coins" in html
-    assert "prompt(\"Coin symbol\")" in html
+    assert "prompt(\"Coin symbol\")" not in html
+    assert 'class="coin-add-select"' in html
+    assert "availableCoinSymbols()" in html
     assert "Symbol is not available in the supported instrument catalog." in html
     assert '<div class="coin-list">' in html
     assert 'class="coin-row"' in html
@@ -211,6 +213,23 @@ def test_trading_rules_coin_editor_uses_pending_allocations_and_existing_save_pa
     assert "#config-rules .coin-remove" in html
     assert "width:28px;" in html
     assert "height:28px;" in html
+
+
+def test_trigger_and_set_details_render_full_reference_structure_from_backend_data():
+    html = _html()
+
+    assert "What this Trigger means" in html
+    assert "How it works" in html
+    assert "Unavailable behavior" in html
+    assert "Used in Set Versions" in html
+    assert "Version History" in html
+    assert "showSet('${h(s.set_id)}','${h(s.set_version)}')" in html
+    assert "Trigger Versions Used" in html
+    assert "Human-readable Set Logic" in html
+    assert "Direction: LONG / SHORT / NONE" in html
+    assert "Direction = NONE." in html
+    assert "showTrigger('${h(t.trigger_id)}','${h(t.version)}')" in html
+    assert "This panel renders the exact selected Set Version" in html
 
 
 def test_backend_wiring_payload_and_authorized_command_forms_are_present_without_token():
