@@ -17,6 +17,7 @@ from triggertrade.config import (
     Market,
     TradingMode,
     load_config,
+    load_bybit_credentials,
 )
 from triggertrade.exchanges import BybitApiError, BybitDemoClient
 from triggertrade.market_data import BybitCandle, BybitInstrument, MarketObservation, parse_spot_candles, parse_spot_instrument
@@ -572,6 +573,34 @@ def validate_canonical_runtime_config(config: AppConfig) -> None:
         raise ConfigError("canonical runtime TEST lane requires local test simulation")
 
 
+def validate_bybit_demo_runtime_env(env: dict[str, str], config: AppConfig) -> None:
+    """Fail closed unless Demo execution can only target Bybit Demo linear."""
+
+    required_values = {
+        "TRIGGERTRADE_BYBIT_ENV": "demo",
+        "BYBIT_BASE_URL": "https://api-demo.bybit.com",
+        "TRIGGERTRADE_MARKET": "linear",
+        "TRIGGERTRADE_CATEGORY": "linear",
+    }
+    for name, expected in required_values.items():
+        actual = str(env.get(name) or "").strip().lower()
+        if actual != expected:
+            raise ConfigError(f"{name} must be explicitly set to {expected} for Bybit Demo execution")
+    if config.bybit.environment is not BybitEnvironment.DEMO:
+        raise ConfigError("Bybit Demo execution requires TRIGGERTRADE_BYBIT_ENV=demo")
+    if config.bybit.base_url != "https://api-demo.bybit.com":
+        raise ConfigError("Bybit Demo execution requires BYBIT_BASE_URL=https://api-demo.bybit.com")
+    if config.market is not Market.LINEAR or config.futures_runtime.category != "linear":
+        raise ConfigError("Bybit Demo execution requires linear market/category configuration")
+
+
+def validate_bybit_demo_private_runtime_env(env: dict[str, str], config: AppConfig) -> None:
+    """Fail closed unless private Demo execution has endpoint safety and credentials."""
+
+    validate_bybit_demo_runtime_env(env, config)
+    load_bybit_credentials(env)
+
+
 def runtime_state_store_from_env(env: dict[str, str], db_path):
     if env.get("TRIGGERTRADE_POSTGRES_DSN"):
         return canonical_runtime_state_store_from_env(env, component="runtime state store")
@@ -588,6 +617,7 @@ def build_canonical_runtime_from_env(env: dict[str, str]):
     require_canonical_durable_runtime_state(runtime_env, component="trading worker")
     config = load_config(runtime_env)
     validate_canonical_runtime_config(config)
+    validate_bybit_demo_private_runtime_env(runtime_env, config)
     settings = PostgresSettings.from_env(runtime_env)
     apply_postgres_migrations(dsn=settings.dsn, schema=settings.schema)
     factory = PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)
@@ -617,6 +647,7 @@ def build_legacy_demo_futures_runtime_from_env(env: dict[str, str]):
         raise ConfigError(f"legacy demo futures runtime requires explicit {LEGACY_DEMO_FUTURES_RUNTIME_OPT_IN}=1")
     config = load_config(runtime_env)
     validate_canonical_runtime_config(config)
+    validate_bybit_demo_private_runtime_env(runtime_env, config)
     db_path = runtime_db_path(config, runtime_env)
     ensure_runtime_registry_initialized(db_path)
     runtime_store = runtime_state_store_from_env(runtime_env, db_path)

@@ -24,6 +24,8 @@ def test_readiness_reports_unavailable_postgres_dependency(tmp_path):
     checks = {check.name: check for check in report.checks}
     assert report.ready is False
     assert checks["postgres_persistence"].status == "UNAVAILABLE"
+    assert checks["bybit_demo_config"].status == "BLOCKED"
+    assert checks["execution_bridge_attached"].status == "BLOCKED"
     assert "TRIGGERTRADE_POSTGRES_DSN is required" in checks["postgres_persistence"].detail
     assert "postgres_persistence" in report.unavailable_dependencies
 
@@ -33,8 +35,12 @@ def test_readiness_reports_running_when_runtime_and_postgres_are_reachable(tmp_p
 
     report = evaluate_dashboard_readiness(
         DashboardReadModel(db),
-        env={"TRIGGERTRADE_POSTGRES_DSN": "postgresql://unit.invalid/db"},
+        env={
+            "TRIGGERTRADE_POSTGRES_DSN": "postgresql://unit.invalid/db",
+            **_bybit_demo_env(),
+        },
         postgres_probe=_running_postgres_probe,
+        execution_bridge=_CertifiedBridge(),
     )
 
     assert report.ready is True
@@ -43,6 +49,27 @@ def test_readiness_reports_running_when_runtime_and_postgres_are_reachable(tmp_p
     checks = {check.name: check for check in report.checks}
     assert checks["worker_safety"].status == "RUNNING"
     assert checks["postgres_persistence"].status == "RUNNING"
+    assert checks["bybit_demo_config"].status == "RUNNING"
+    assert checks["execution_bridge_attached"].status == "RUNNING"
+
+
+def test_readiness_rejects_uncertified_execution_bridge_stub(tmp_path):
+    db = _runtime_ready_db(tmp_path)
+
+    report = evaluate_dashboard_readiness(
+        DashboardReadModel(db),
+        env={
+            "TRIGGERTRADE_POSTGRES_DSN": "postgresql://unit.invalid/db",
+            **_bybit_demo_env(),
+        },
+        postgres_probe=_running_postgres_probe,
+        execution_bridge=object(),
+    )
+
+    checks = {check.name: check for check in report.checks}
+    assert report.ready is False
+    assert checks["execution_bridge_attached"].status == "BLOCKED"
+    assert "certified canonical execution bridge" in checks["execution_bridge_attached"].detail
 
 
 def test_healthz_is_liveness_even_when_readiness_dependency_is_unavailable(tmp_path):
@@ -71,8 +98,9 @@ def test_healthz_is_liveness_even_when_readiness_dependency_is_unavailable(tmp_p
     assert health_body == "ok"
     assert readiness_response.status == HTTPStatus.OK
     assert readiness_payload["ready"] is False
-    assert readiness_payload["status"] == "UNAVAILABLE"
+    assert readiness_payload["status"] == "BLOCKED"
     assert "postgres_persistence" in readiness_payload["unavailable_dependencies"]
+    assert "execution_bridge_attached" in readiness_payload["unavailable_dependencies"]
 
 
 def test_readiness_api_exposes_dependency_aware_report_without_secrets(tmp_path):
@@ -80,7 +108,11 @@ def test_readiness_api_exposes_dependency_aware_report_without_secrets(tmp_path)
     server = create_server(
         port=0,
         db_path=db,
-        readiness_env={"TRIGGERTRADE_POSTGRES_DSN": "postgresql://unit:secret@example.invalid/db"},
+        readiness_env={
+            "TRIGGERTRADE_POSTGRES_DSN": "postgresql://unit:secret@example.invalid/db",
+            **_bybit_demo_env(),
+        },
+        operator_actions=_CertifiedBridge(),
         postgres_health_probe=_running_postgres_probe,
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -101,6 +133,8 @@ def test_readiness_api_exposes_dependency_aware_report_without_secrets(tmp_path)
     assert payload["status"] == "RUNNING"
     assert any(check["name"] == "postgres_persistence" for check in payload["checks"])
     assert any(check["name"] == "worker_safety" for check in payload["checks"])
+    assert any(check["name"] == "bybit_demo_config" for check in payload["checks"])
+    assert any(check["name"] == "execution_bridge_attached" for check in payload["checks"])
     text = json.dumps(payload)
     assert "secret" not in text
     assert "postgresql://" not in text
@@ -109,6 +143,25 @@ def test_readiness_api_exposes_dependency_aware_report_without_secrets(tmp_path)
 def _running_postgres_probe(env):
     assert env.get("TRIGGERTRADE_POSTGRES_DSN")
     return DashboardReadinessCheck("postgres_persistence", "RUNNING", "PostgreSQL persistence reachable")
+
+
+def _bybit_demo_env():
+    return {
+        "TRIGGERTRADE_BYBIT_ENV": "demo",
+        "BYBIT_BASE_URL": "https://api-demo.bybit.com",
+        "TRIGGERTRADE_MARKET": "linear",
+        "TRIGGERTRADE_CATEGORY": "linear",
+    }
+
+
+class _CertifiedBridge:
+    canonical_execution_bridge = True
+
+    def close_position(self, **kwargs):
+        return None
+
+    def close_all_positions(self, **kwargs):
+        return None
 
 
 def _runtime_ready_db(tmp_path):

@@ -1,6 +1,7 @@
 import pytest
 
 from triggertrade.config import ConfigError, Market, load_bybit_credentials, load_config
+from triggertrade.services.runtime import validate_bybit_demo_private_runtime_env, validate_bybit_demo_runtime_env
 
 
 def test_bybit_demo_base_url_selection():
@@ -51,3 +52,58 @@ def test_credentials_repr_does_not_leak_secret():
 
     assert "unit-signing-value" not in repr(credentials)
     assert "unit-key" not in repr(credentials)
+
+
+def test_private_bybit_demo_runtime_contract_requires_explicit_safe_endpoint():
+    env = {
+        "TRIGGERTRADE_BYBIT_ENV": "demo",
+        "BYBIT_BASE_URL": "https://api-demo.bybit.com",
+        "TRIGGERTRADE_MARKET": "linear",
+        "TRIGGERTRADE_CATEGORY": "linear",
+        "BYBIT_API_KEY": "unit-key",
+        "BYBIT_API_SECRET": "unit-signing-value",
+    }
+    config = load_config(env)
+
+    validate_bybit_demo_private_runtime_env(env, config)
+
+
+def test_public_bybit_demo_runtime_contract_does_not_require_secrets():
+    env = {
+        "TRIGGERTRADE_BYBIT_ENV": "demo",
+        "BYBIT_BASE_URL": "https://api-demo.bybit.com",
+        "TRIGGERTRADE_MARKET": "linear",
+        "TRIGGERTRADE_CATEGORY": "linear",
+    }
+    config = load_config(env)
+
+    validate_bybit_demo_runtime_env(env, config)
+
+
+def test_private_bybit_demo_runtime_contract_rejects_missing_explicit_base_url():
+    env = {
+        "TRIGGERTRADE_BYBIT_ENV": "demo",
+        "TRIGGERTRADE_MARKET": "linear",
+        "TRIGGERTRADE_CATEGORY": "linear",
+        "BYBIT_API_KEY": "unit-key",
+        "BYBIT_API_SECRET": "unit-signing-value",
+    }
+    config = load_config(env)
+
+    with pytest.raises(ConfigError, match="BYBIT_BASE_URL"):
+        validate_bybit_demo_private_runtime_env(env, config)
+
+
+def test_private_bybit_demo_runtime_contract_rejects_live_url_mismatch():
+    env = {
+        "TRIGGERTRADE_BYBIT_ENV": "demo",
+        "BYBIT_BASE_URL": "https://api.bybit.com",
+        "TRIGGERTRADE_MARKET": "linear",
+        "TRIGGERTRADE_CATEGORY": "linear",
+        "BYBIT_API_KEY": "unit-key",
+        "BYBIT_API_SECRET": "unit-signing-value",
+    }
+    config = load_config(env)
+
+    with pytest.raises(ConfigError, match="BYBIT_BASE_URL"):
+        validate_bybit_demo_private_runtime_env(env, config)

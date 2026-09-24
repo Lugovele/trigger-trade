@@ -247,11 +247,8 @@ def test_legacy_demo_futures_runtime_builder_bootstraps_same_configured_db_path(
     runtime = build_legacy_demo_futures_runtime_from_env(
         {
             "TRIGGERTRADE_RUNTIME_DB_PATH": str(db),
-            "TRIGGERTRADE_MARKET": "linear",
-            "TRIGGERTRADE_CATEGORY": "linear",
             "TRIGGERTRADE_EXECUTION_VENUE": "bybit_demo_futures",
-            "BYBIT_API_KEY": "unit-key",
-            "BYBIT_API_SECRET": "unit-secret",
+            **_bybit_demo_env(),
             LEGACY_DEMO_FUTURES_RUNTIME_OPT_IN: "1",
         }
     )
@@ -268,11 +265,8 @@ def test_legacy_demo_futures_runtime_active_formula_execution_requires_separate_
     runtime = build_legacy_demo_futures_runtime_from_env(
         {
             "TRIGGERTRADE_RUNTIME_DB_PATH": str(db),
-            "TRIGGERTRADE_MARKET": "linear",
-            "TRIGGERTRADE_CATEGORY": "linear",
             "TRIGGERTRADE_EXECUTION_VENUE": "bybit_demo_futures",
-            "BYBIT_API_KEY": "unit-key",
-            "BYBIT_API_SECRET": "unit-secret",
+            **_bybit_demo_env(),
             LEGACY_DEMO_FUTURES_RUNTIME_OPT_IN: "1",
             "TRIGGERTRADE_ALLOW_UNCERTIFIED_DEMO_ACTIVE_FORMULA_EXECUTION": "1",
         }
@@ -288,11 +282,8 @@ def test_canonical_runtime_builder_excludes_legacy_demo_futures_runtime_and_requ
         build_canonical_runtime_from_env(
             {
                 "TRIGGERTRADE_RUNTIME_DB_PATH": str(db),
-                "TRIGGERTRADE_MARKET": "linear",
-                "TRIGGERTRADE_CATEGORY": "linear",
                 "TRIGGERTRADE_EXECUTION_VENUE": "bybit_demo_futures",
-                "BYBIT_API_KEY": "unit-key",
-                "BYBIT_API_SECRET": "unit-secret",
+                **_bybit_demo_env(),
             }
         )
 
@@ -327,6 +318,7 @@ def test_canonical_runtime_rejects_legacy_local_paper_config_before_fallback(tmp
         build_legacy_demo_futures_runtime_from_env(
             {
                 "TRIGGERTRADE_RUNTIME_DB_PATH": str(tmp_path / "runtime.sqlite3"),
+                **_bybit_demo_env(),
                 LEGACY_DEMO_FUTURES_RUNTIME_OPT_IN: "1",
             }
         )
@@ -339,9 +331,8 @@ def test_canonical_runtime_rejects_legacy_spot_execution_config(tmp_path):
         build_legacy_demo_futures_runtime_from_env(
             {
                 "TRIGGERTRADE_RUNTIME_DB_PATH": str(tmp_path / "runtime.sqlite3"),
-                "TRIGGERTRADE_MARKET": "linear",
-                "TRIGGERTRADE_CATEGORY": "linear",
                 "TRIGGERTRADE_EXECUTION_VENUE": "bybit_demo",
+                **_bybit_demo_env(),
                 LEGACY_DEMO_FUTURES_RUNTIME_OPT_IN: "1",
             }
         )
@@ -370,6 +361,17 @@ def _html_section(html: str, start: str, end: str) -> str:
     start_index = html.index(start)
     end_index = html.index(end, start_index + len(start))
     return html[start_index:end_index]
+
+
+def _bybit_demo_env():
+    return {
+        "TRIGGERTRADE_BYBIT_ENV": "demo",
+        "BYBIT_BASE_URL": "https://api-demo.bybit.com",
+        "TRIGGERTRADE_MARKET": "linear",
+        "TRIGGERTRADE_CATEGORY": "linear",
+        "BYBIT_API_KEY": "unit-key",
+        "BYBIT_API_SECRET": "unit-secret",
+    }
 
 
 def test_bootstrap_fails_closed_on_existing_recommendation_payload_mismatch(tmp_path):

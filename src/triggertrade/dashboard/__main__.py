@@ -962,6 +962,7 @@ def _readiness_report(server: DashboardServer):
         server.read_model,
         env=server.readiness_env,
         postgres_probe=server.postgres_health_probe,
+        execution_bridge=server.operator_actions,
     )
 
 
