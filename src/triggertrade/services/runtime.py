@@ -624,6 +624,7 @@ def build_canonical_runtime_from_env(env: dict[str, str]):
     return build_target_trading_worker(
         factory=factory,
         runtime_store=PostgresRuntimeStore(factory),
+        operator_executor=None,
         worker_id=str(runtime_env.get("TRIGGERTRADE_WORKER_ID") or "").strip() or None,
         poll_seconds=_poll_seconds(runtime_env, key="TRIGGERTRADE_WORKER_POLL_SECONDS", default="5"),
     )

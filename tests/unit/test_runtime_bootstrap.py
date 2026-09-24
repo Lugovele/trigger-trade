@@ -203,6 +203,7 @@ def test_web_process_role_rejects_implicit_sqlite_fallback_when_runtime_mode_is_
 
 def test_production_dashboard_sqlite_compatibility_requires_explicit_opt_in(tmp_path, monkeypatch):
     monkeypatch.setattr("triggertrade.dashboard.__main__._promotion_governance_from_env", lambda env: None)
+    monkeypatch.setattr("triggertrade.dashboard.__main__._operator_execution_bridge_from_env", lambda env: None)
     db = tmp_path / "dashboard-compat.sqlite3"
     server, initialized_db = create_server_from_env(
         {

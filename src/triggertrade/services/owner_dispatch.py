@@ -16,6 +16,15 @@ from triggertrade.persistence import (
 )
 from triggertrade.persistence.durable_messages import OutboxMessageRecord
 from triggertrade.persistence.postgres import PostgresPersistenceError
+from triggertrade.services.operator_execution_bridge import (
+    OPERATOR_EXECUTION_CONSUMER,
+    OPERATOR_EXECUTION_MESSAGE_TYPE,
+    OPERATOR_EXECUTION_MESSAGE_VERSION,
+    OPERATOR_EXECUTION_PRODUCER,
+    OperatorExecutionCommandStore,
+    OperatorExecutionDispatcher,
+    OperatorExecutionExecutor,
+)
 
 
 class OwnerDispatchBlocked(PostgresPersistenceError):
@@ -31,9 +40,10 @@ class OwnerDispatchResult:
 class CanonicalOwnerDispatcher:
     """Dispatch only routes whose downstream owner effect is source-complete."""
 
-    def __init__(self, connection) -> None:
+    def __init__(self, connection, *, operator_executor: OperatorExecutionExecutor | None = None) -> None:
         self._connection = connection
         self._messages = DurableMessageStore(connection)
+        self._operator_executor = operator_executor
 
     def dispatch(self, message: OutboxMessageRecord) -> OwnerDispatchResult:
         inbox, _ = self._messages.record_inbox(
@@ -61,9 +71,26 @@ class CanonicalOwnerDispatcher:
             return self._try_lifecycle_start_from_authorization(message.payload)
         if route == ("Lifecycle", "Portfolio", "ORDER_EVENT", "7"):
             return self._accept_portfolio_final_receipt(message)
+        if route == (
+            OPERATOR_EXECUTION_PRODUCER,
+            OPERATOR_EXECUTION_CONSUMER,
+            OPERATOR_EXECUTION_MESSAGE_TYPE,
+            OPERATOR_EXECUTION_MESSAGE_VERSION,
+        ):
+            return self._execute_operator_command(message.payload)
         raise OwnerDispatchBlocked(
             f"handler_not_certified:{message.consumer}:{message.message_type}:{message.message_version}"
         )
+
+    def _execute_operator_command(self, payload: dict[str, Any]) -> str:
+        command_id = _body_text(payload, "operator_command", "command_id")
+        try:
+            return OperatorExecutionDispatcher(
+                store=OperatorExecutionCommandStore(self._connection),
+                executor=self._operator_executor,
+            ).dispatch(command_id)
+        except PostgresPersistenceError as exc:
+            raise OwnerDispatchBlocked(str(exc)) from exc
 
     def _try_lifecycle_start_from_order_spec(self, order_spec_payload: dict[str, Any]) -> str:
         order_spec_id = _body_text(order_spec_payload, "order_spec", "order_spec_id")

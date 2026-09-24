@@ -202,8 +202,9 @@ class DashboardCommandBoundary:
                 dedupe_key=f"operator:CLOSE_ONE:FAILED:{position_id}",
             )
             raise DashboardCommandError(error)
+        _require_canonical_execution_bridge(action, command_name="close-one")
         try:
-            _close_single_position(action, position_id=position_id, symbol=symbol)
+            _close_single_position(action, command=command, position_id=position_id, symbol=symbol)
         except Exception as exc:  # noqa: BLE001 - operator failures are recorded, then surfaced.
             error = str(exc)[:500]
             public_error = _safe_public_error(exc)
@@ -228,7 +229,7 @@ class DashboardCommandBoundary:
         self.operator_store.record_operator_action(
             action="CLOSE_ONE",
             target=position_id,
-            result="SUCCESS",
+            result="ACCEPTED",
             source=command.audit_source,
         )
 
@@ -252,8 +253,9 @@ class DashboardCommandBoundary:
                 dedupe_key="operator:CLOSE_ALL:FAILED:no_bridge",
             )
             raise DashboardCommandError(error)
+        _require_canonical_execution_bridge(action, command_name="close-all")
         try:
-            _close_all_positions(action)
+            _close_all_positions(action, command=command)
         except Exception as exc:  # noqa: BLE001 - operator failures are recorded, then surfaced.
             error = str(exc)[:500]
             public_error = _safe_public_error(exc)
@@ -276,7 +278,7 @@ class DashboardCommandBoundary:
         self.operator_store.record_operator_action(
             action="CLOSE_ALL",
             target="ACTIVE",
-            result="SUCCESS",
+            result="ACCEPTED",
             source=command.audit_source,
         )
 
@@ -285,18 +287,29 @@ class DashboardCommandError(RuntimeError):
     pass
 
 
-def _close_single_position(operator_actions, *, position_id: str, symbol: str):
-    try:
-        return operator_actions.close_position(position_id=position_id, symbol=symbol, close_reason="MANUAL")
-    except TypeError:
-        return operator_actions.close_position(position_id=position_id, close_reason="MANUAL")
+def _close_single_position(operator_actions, *, command: AuthorizedOperatorCommand, position_id: str, symbol: str):
+    return operator_actions.close_position(
+        position_id=position_id,
+        symbol=symbol,
+        close_reason="MANUAL",
+        requested_by=command.principal.principal_id,
+        authorization_source=command.principal.auth_source,
+        idempotency_key=command.idempotency_key,
+    )
 
 
-def _close_all_positions(operator_actions):
-    try:
-        return operator_actions.close_all_positions(scope="ACTIVE")
-    except TypeError:
-        return operator_actions.close_all_positions()
+def _close_all_positions(operator_actions, *, command: AuthorizedOperatorCommand):
+    return operator_actions.close_all_positions(
+        scope="ACTIVE",
+        requested_by=command.principal.principal_id,
+        authorization_source=command.principal.auth_source,
+        idempotency_key=command.idempotency_key,
+    )
+
+
+def _require_canonical_execution_bridge(operator_actions, *, command_name: str) -> None:
+    if not getattr(operator_actions, "canonical_execution_bridge", False):
+        raise DashboardCommandError(f"{command_name} execution bridge is not canonical")
 
 
 def _record_message(store: MessageStore, **kwargs: Any) -> None:

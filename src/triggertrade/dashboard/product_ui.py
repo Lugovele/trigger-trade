@@ -45,17 +45,21 @@ def _operator_forms_html() -> str:
     return (
         '<form id="operatorPauseForm" method="post" action="/operator/pause" hidden>'
         '<input type="hidden" name="confirm" value="yes">'
+        '<input type="hidden" name="idempotency_key" value="">'
         "</form>"
         '<form id="operatorResumeForm" method="post" action="/operator/resume" hidden>'
         '<input type="hidden" name="confirm" value="yes">'
+        '<input type="hidden" name="idempotency_key" value="">'
         "</form>"
         '<form id="operatorCloseOneForm" method="post" action="/operator/close-one" hidden>'
         '<input type="hidden" name="confirm" value="yes">'
+        '<input type="hidden" name="idempotency_key" value="">'
         '<input type="hidden" name="position_id" value="">'
         '<input type="hidden" name="symbol" value="">'
         "</form>"
         '<form id="operatorCloseAllForm" method="post" action="/operator/close-all" hidden>'
         '<input type="hidden" name="confirm" value="yes">'
+        '<input type="hidden" name="idempotency_key" value="">'
         '<input type="hidden" name="phrase" value="CLOSE ALL">'
         "</form>"
     )
@@ -1790,6 +1794,8 @@ def _reference_backend_script(payload: str) -> str:
     if(!canSubmit()){ setOperatorStatus("Operator command submission is unavailable.", "negative"); return false; }
     if(!form){ setOperatorStatus("Operator command form is unavailable.", "negative"); return false; }
     if(fill) fill(form);
+    const key = form.querySelector('[name="idempotency_key"]');
+    if(key) key.value = `${id}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const body = new URLSearchParams(new FormData(form));
     setOperatorStatus("Submitting...", "neutral");
     try{

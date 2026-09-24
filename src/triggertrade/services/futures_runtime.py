@@ -23,7 +23,7 @@ from triggertrade.execution.futures import (
     PositionState,
     estimate_costs,
 )
-from triggertrade.execution.position_lifecycle import build_fixed_protective_exit_plan
+from triggertrade.execution.position_lifecycle import CloseReason, build_fixed_protective_exit_plan
 from triggertrade.execution.position_lifecycle import FuturesPositionLifecycleService, PositionRiskConfig, calculate_position_size, instrument_metadata_from_position_snapshot
 from triggertrade.exchanges import BybitApiError, BybitDemoClient
 from triggertrade.instruments import CatalogError
@@ -1345,6 +1345,117 @@ class FuturesDualLaneRuntime:
             )
         except Exception:  # noqa: BLE001 - heartbeat observability must not change trading behavior.
             self._log("runtime heartbeat unavailable")
+
+
+class FuturesOperatorExecutionRuntime:
+    """Trading-worker-owned operator executor for durable dashboard commands."""
+
+    def __init__(
+        self,
+        *,
+        config: AppConfig,
+        market_client: BybitDemoClient,
+        futures_execution_store: FuturesExecutionStore,
+        accounting_store: FuturesAccountingStore,
+        position_store: FuturesPositionStore,
+        operator_state_store: OperatorStateStore,
+        instrument_catalog: InstrumentCatalogService | None = None,
+        active_adapter: BybitFuturesExecutionAdapter | None = None,
+        account_provider: Callable[[FuturesInstrumentMetadata], FuturesAccountState] | None = None,
+    ) -> None:
+        self._config = config
+        self._market_client = market_client
+        self._futures_execution_store = futures_execution_store
+        self._accounting_store = accounting_store
+        self._position_store = position_store
+        self._operator_state_store = operator_state_store
+        self._instrument_catalog = instrument_catalog or InstrumentCatalogService(
+            store=InstrumentCatalogStore(config.futures_runtime.db_path),
+            client=market_client,
+        )
+        self._active_adapter = active_adapter or BybitFuturesExecutionAdapter(market_client)
+        self._account_provider = account_provider
+
+    def close_position(self, *, position_id: str, close_reason: str = "MANUAL") -> dict[str, object]:
+        position = self._position_store.get_position(position_id)
+        if position is None:
+            raise ExecutionError("position not found")
+        instrument = instrument_metadata_from_position_snapshot(position) or self._resolve_instrument(position.symbol)
+        result = self._lifecycle(instrument).close_position(
+            position_id=position_id,
+            close_reason=CloseReason(close_reason),
+        )
+        return {
+            "position_id": result.position.position_id,
+            "reason": result.reason,
+            "execution_id": None if result.execution is None else result.execution.client_order_id,
+            "closed_trade_id": None if result.closed_trade is None else result.closed_trade.trade_id,
+            "position_status": result.position.status,
+        }
+
+    def close_all_positions(self, *, scope: str = "ACTIVE") -> dict[str, object]:
+        if scope != "ACTIVE":
+            raise ExecutionError("close all supports only ACTIVE scope")
+        close_all_id = f"closeall-{datetime.now(UTC).strftime('%Y%m%d%H%M%S%f')}"
+        self._position_store.begin_close_all(close_all_id)
+        positions = self._position_store.list_open_positions(include_unknown=True)
+        results: list[dict[str, object]] = []
+        failures: list[str] = []
+        for position in positions:
+            try:
+                instrument = instrument_metadata_from_position_snapshot(position) or self._resolve_instrument(position.symbol)
+                result = self._lifecycle(instrument).close_position(
+                    position_id=position.position_id,
+                    close_reason=CloseReason.CLOSE_ALL,
+                )
+                results.append(
+                    {
+                        "position_id": result.position.position_id,
+                        "reason": result.reason,
+                        "execution_id": None if result.execution is None else result.execution.client_order_id,
+                        "closed_trade_id": None if result.closed_trade is None else result.closed_trade.trade_id,
+                        "position_status": result.position.status,
+                    }
+                )
+            except Exception as exc:  # noqa: BLE001 - partial Close All must persist factual item failures.
+                failures.append(f"{position.position_id}:{exc.__class__.__name__}")
+        self._position_store.complete_close_all(close_all_id, "completed_with_failures" if failures else "completed")
+        return {
+            "scope": scope,
+            "close_all_id": close_all_id,
+            "target_count": len(positions),
+            "closed_count": len(results),
+            "results": results,
+            "failures": failures,
+        }
+
+    def _resolve_instrument(self, symbol: str) -> FuturesInstrumentMetadata:
+        self._instrument_catalog.ensure_available()
+        return self._instrument_catalog.metadata_for_symbol(symbol)
+
+    def _account_state(self, instrument: FuturesInstrumentMetadata) -> FuturesAccountState:
+        if self._account_provider is not None:
+            return self._account_provider(instrument)
+        wallet = self._market_client.wallet_balance("UNIFIED").result
+        positions = self._market_client.linear_position_list(instrument.symbol).result
+        return _account_from_bybit(wallet, positions, instrument, self._config.futures_runtime.leverage)
+
+    def _lifecycle(self, instrument: FuturesInstrumentMetadata) -> FuturesPositionLifecycleService:
+        return FuturesPositionLifecycleService(
+            execution_config=replace(_execution_config(self._config), symbol=instrument.symbol),
+            risk_config=_position_risk_config(self._config),
+            execution_store=self._futures_execution_store,
+            position_store=self._position_store,
+            accounting_store=self._accounting_store,
+            adapter=self._active_adapter,
+            instrument=instrument,
+            account=self._account_state(instrument),
+            execution_lane=Lane.ACTIVE.value,
+            operator_trading_state=self._operator_state_value,
+        )
+
+    def _operator_state_value(self) -> str:
+        return self._operator_state_store.get_trading_state().state.value
 
 
 def _execution_config(config: AppConfig) -> FuturesExecutionConfig:

@@ -13,10 +13,11 @@ from triggertrade.persistence.durable_messages import OutboxMessageRecord
 from triggertrade.persistence.postgres import PostgresConnectionFactory, PostgresUnitOfWork
 from triggertrade.persistence.postgres_runtime_store import PostgresRuntimeStore
 from triggertrade.services.owner_dispatch import OwnerDispatchBlocked, OwnerDispatchResult
+from triggertrade.services.operator_execution_bridge import OPERATOR_EXECUTION_CONSUMER, OperatorExecutionExecutor
 
 
 TRADING_WORKER_COMPONENT = "trading-worker"
-TRADING_WORKER_CONSUMERS = ("Portfolio", "Set", "Position", "Lifecycle")
+TRADING_WORKER_CONSUMERS = ("Portfolio", "Set", "Position", "Lifecycle", OPERATOR_EXECUTION_CONSUMER)
 
 
 class TradingWorkerBlocked(RuntimeError):
@@ -151,13 +152,14 @@ def build_target_trading_worker(
     *,
     factory: PostgresConnectionFactory,
     runtime_store: PostgresRuntimeStore,
+    operator_executor: OperatorExecutionExecutor | None = None,
     worker_id: str | None = None,
     consumers: Iterable[str] = TRADING_WORKER_CONSUMERS,
     poll_seconds: float = 5.0,
 ) -> TargetTradingWorker:
     return TargetTradingWorker(
         runtime_store=runtime_store,
-        message_client_factory=lambda: _PostgresMessageClient(factory),
+        message_client_factory=lambda: _PostgresMessageClient(factory, operator_executor=operator_executor),
         worker_id=worker_id,
         consumers=consumers,
         poll_seconds=poll_seconds,
@@ -165,8 +167,9 @@ def build_target_trading_worker(
 
 
 class _PostgresMessageClient:
-    def __init__(self, factory: PostgresConnectionFactory) -> None:
+    def __init__(self, factory: PostgresConnectionFactory, *, operator_executor: OperatorExecutionExecutor | None = None) -> None:
         self._factory = factory
+        self._operator_executor = operator_executor
 
     def claim_outbox(self, **kwargs):
         from triggertrade.persistence import DurableMessageStore
@@ -178,7 +181,7 @@ class _PostgresMessageClient:
         from triggertrade.services.owner_dispatch import CanonicalOwnerDispatcher
 
         with PostgresUnitOfWork(self._factory) as uow:
-            return CanonicalOwnerDispatcher(uow.connection).dispatch(message)
+            return CanonicalOwnerDispatcher(uow.connection, operator_executor=self._operator_executor).dispatch(message)
 
 
 def _worker_id(value: str | None) -> str:

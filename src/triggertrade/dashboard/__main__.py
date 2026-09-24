@@ -44,6 +44,7 @@ from triggertrade.services.operator_auth import (
     OperatorCommandAuthorizer,
     operator_authorizer_from_env,
 )
+from triggertrade.services.operator_execution_bridge import DashboardOperatorExecutionBridge
 from triggertrade.services.research import ResearchService, ResearchServiceError
 
 
@@ -524,6 +525,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
         values: dict[str, list[str]],
     ) -> AuthorizedOperatorCommand | None:
         payload = {key: items[0] for key, items in values.items() if items}
+        idempotency_key = str(payload.get("idempotency_key") or "").strip()
+        if command_type in {"CLOSE_ONE", "CLOSE_ALL"} and not idempotency_key:
+            return None
         payload = _payload_with_local_dev_cookie_token(self.headers, payload, self.server)
         try:
             return self.server.operator_authorizer.authorize_http_command(
@@ -533,6 +537,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 local_dev_token=self.server.operator_control_token,
                 scope="OPERATOR",
                 target="ACTIVE",
+                idempotency_key=idempotency_key or None,
             )
         except OperatorAuthorizationError:
             return None
@@ -890,6 +895,7 @@ def create_server_from_env(
     rules_service = TradingRulesService(TradingRulesStore(db_path), symbol_validator=catalog_service.validate_symbol)
     authorizer = operator_authorizer_from_env(db_path, env)
     promotion_governance = _promotion_governance_from_env(env)
+    operator_actions = _operator_execution_bridge_from_env(env)
     return create_server(
         host=host,
         port=port,
@@ -897,6 +903,7 @@ def create_server_from_env(
         trading_rules_service=rules_service,
         instrument_catalog_service=catalog_service,
         operator_authorizer=authorizer,
+        operator_actions=operator_actions,
         promotion_governance_store=promotion_governance,
     ), bootstrap.db_path
 
@@ -929,6 +936,16 @@ def _promotion_governance_from_env(env: dict[str, str]):
     apply_postgres_migrations(dsn=settings.dsn, schema=settings.schema)
     return ResearchPromotionGovernanceClient(
         PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)
+    )
+
+
+def _operator_execution_bridge_from_env(env: dict[str, str]):
+    if not env.get("TRIGGERTRADE_POSTGRES_DSN"):
+        return None
+    settings = PostgresSettings.from_env(env)
+    apply_postgres_migrations(dsn=settings.dsn, schema=settings.schema)
+    return DashboardOperatorExecutionBridge(
+        factory=PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)
     )
 
 

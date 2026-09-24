@@ -72,6 +72,8 @@ def test_close_one_fails_closed_and_audits_when_execution_bridge_missing(tmp_pat
 
 def test_close_one_redacts_secret_like_execution_errors_from_public_exception(tmp_path):
     class SecretLeakingOperatorActions:
+        canonical_execution_bridge = True
+
         def close_position(self, **kwargs):
             raise RuntimeError("authorization bearer token abc123 failed")
 

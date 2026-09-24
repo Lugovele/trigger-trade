@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 from triggertrade.persistence import RuntimeHeartbeat
 from triggertrade.services.owner_dispatch import OwnerDispatchBlocked, OwnerDispatchResult
+from triggertrade.services.operator_execution_bridge import OPERATOR_EXECUTION_CONSUMER
 from triggertrade.services.trading_worker import TargetTradingWorker
 
 
@@ -52,7 +53,13 @@ def test_target_trading_worker_hydrates_and_idles_without_legacy_runtime():
 
     assert [heartbeat.status for heartbeat in runtime_store.heartbeats] == ["RUNNING", "RUNNING"]
     assert runtime_store.heartbeats[-1].detail == "idle"
-    assert {claim["consumer"] for claim in client.claims} == {"Portfolio", "Set", "Position", "Lifecycle"}
+    assert {claim["consumer"] for claim in client.claims} == {
+        "Portfolio",
+        "Set",
+        "Position",
+        "Lifecycle",
+        OPERATOR_EXECUTION_CONSUMER,
+    }
 
 
 def test_target_trading_worker_fails_closed_for_unhandled_business_message():

@@ -146,6 +146,10 @@ def _postgres_persistence_check(
 
 def _worker_safety_check(checks: tuple[ReadinessCheckView, ...]) -> DashboardReadinessCheck:
     heartbeat = next(
+        (check for check in checks if check.name == "heartbeat:trading-worker"),
+        None,
+    )
+    heartbeat = heartbeat or next(
         (check for check in checks if check.name == "heartbeat:futures_runtime"),
         None,
     )

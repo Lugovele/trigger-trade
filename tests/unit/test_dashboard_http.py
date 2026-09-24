@@ -329,7 +329,7 @@ def test_portfolio_close_actions_fail_closed_without_execution_bridge():
         conn.request(
             "POST",
             "/operator/close-one",
-            body=f"confirm=yes&token={token}&position_id=pos-1&symbol=BTCUSDT",
+            body=f"confirm=yes&token={token}&idempotency_key=missing-bridge-close-one&position_id=pos-1&symbol=BTCUSDT",
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
         response = conn.getresponse()
@@ -340,7 +340,7 @@ def test_portfolio_close_actions_fail_closed_without_execution_bridge():
         conn.request(
             "POST",
             "/operator/close-all",
-            body=f"confirm=yes&token={token}&phrase=CLOSE+ALL",
+            body=f"confirm=yes&token={token}&idempotency_key=missing-bridge-close-all&phrase=CLOSE+ALL",
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
         response = conn.getresponse()
@@ -360,15 +360,33 @@ def test_portfolio_close_actions_fail_closed_without_execution_bridge():
 def test_portfolio_close_actions_use_injected_backend_contract():
     tmp_path = _tmpdir()
     class FakeOperatorActions:
+        canonical_execution_bridge = True
+
         def __init__(self):
             self.closed_one = None
             self.closed_all = False
 
-        def close_position(self, *, position_id, symbol, close_reason):
-            self.closed_one = (position_id, symbol, close_reason)
+        def close_position(
+            self,
+            *,
+            position_id,
+            symbol,
+            close_reason,
+            requested_by=None,
+            authorization_source=None,
+            idempotency_key=None,
+        ):
+            self.closed_one = (position_id, symbol, close_reason, requested_by, authorization_source, idempotency_key)
 
-        def close_all_positions(self, *, scope):
-            self.closed_all = scope == "ACTIVE"
+        def close_all_positions(
+            self,
+            *,
+            scope,
+            requested_by=None,
+            authorization_source=None,
+            idempotency_key=None,
+        ):
+            self.closed_all = (scope, requested_by, authorization_source, idempotency_key)
 
     db = _empty_db(tmp_path)
     actions = FakeOperatorActions()
@@ -387,24 +405,34 @@ def test_portfolio_close_actions_use_injected_backend_contract():
         conn.request(
             "POST",
             "/operator/close-one",
-            body=f"confirm=yes&token={token}&position_id=pos-1&symbol=BTCUSDT",
+            body=f"confirm=yes&token={token}&idempotency_key=close-one-http-1&position_id=pos-1&symbol=BTCUSDT",
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
         response = conn.getresponse()
         response.read()
         assert response.status == HTTPStatus.SEE_OTHER
-        assert actions.closed_one == ("pos-1", "BTCUSDT", "MANUAL")
+        assert actions.closed_one[:3] == ("pos-1", "BTCUSDT", "MANUAL")
+        assert actions.closed_one[3:] == (
+            "local_dashboard_operator",
+            "local_dev_compat",
+            "close-one-http-1",
+        )
 
         conn.request(
             "POST",
             "/operator/close-all",
-            body=f"confirm=yes&token={token}&phrase=CLOSE+ALL",
+            body=f"confirm=yes&token={token}&idempotency_key=close-all-http-1&phrase=CLOSE+ALL",
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
         response = conn.getresponse()
         response.read()
         assert response.status == HTTPStatus.SEE_OTHER
-        assert actions.closed_all is True
+        assert actions.closed_all == (
+            "ACTIVE",
+            "local_dashboard_operator",
+            "local_dev_compat",
+            "close-all-http-1",
+        )
     finally:
         server.shutdown()
         server.server_close()
@@ -412,7 +440,7 @@ def test_portfolio_close_actions_use_injected_backend_contract():
 
     audit = OperatorStateStore(db).operator_action_rows()
     assert [row.action for row in audit[:2]] == ["CLOSE_ALL", "CLOSE_ONE"]
-    assert all(row.result == "SUCCESS" for row in audit[:2])
+    assert all(row.result == "ACCEPTED" for row in audit[:2])
 
 
 def test_secret_like_trace_values_are_not_rendered():
