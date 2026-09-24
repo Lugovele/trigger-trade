@@ -86,6 +86,9 @@ def test_mobile_overview_controls_are_present():
     assert "Actions ⋮" in html
     assert 'id="filters-bg"' in html
     assert 'id="actions-bg"' in html
+    assert "Prototype: Pause Entries" not in html
+    assert "onclick=\"action('pause')\"" in html
+    assert "onclick=\"action('close')\"" in html
     assert "Last 24H" in html
 
 

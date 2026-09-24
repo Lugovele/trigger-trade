@@ -227,16 +227,18 @@ def test_trigger_and_set_details_render_full_reference_structure_from_backend_da
     assert "Unavailable behavior" in html
     assert "Used in Set Versions" in html
     assert "Version History" in html
-    assert "showSet('${h(s.set_id)}','${h(s.set_version)}')" in html
+    assert 'class="reference-link js-open-set"' in html
+    assert 'data-set-id="${h(s.set_id)}"' in html
     assert "Trigger Versions Used" in html
     assert "Human-readable Set Logic" in html
     assert "Direction: LONG / SHORT / NONE" in html
     assert "Direction = NONE." in html
-    assert "showTrigger('${h(t.trigger_id)}','${h(t.version)}')" in html
+    assert 'class="reference-link js-open-trigger"' in html
+    assert 'data-trigger-id="${h(t.trigger_id)}"' in html
     assert "This panel renders the exact selected Set Version" in html
 
 
-def test_backend_wiring_payload_and_authorized_command_forms_are_present_without_token():
+def test_backend_wiring_payload_and_visible_controls_are_present_without_token():
     html = _html()
 
     assert '"total_equity": "1000.00"' in html
@@ -248,6 +250,18 @@ def test_backend_wiring_payload_and_authorized_command_forms_are_present_without
     assert 'name="token"' not in html
     assert "/api/research/" in html
     assert "/api/rules/versions" in html
+    assert "window.openConfig = function(view)" in html
+    assert "window.renderResearchSummary = renderResearchSummary" in html
+    assert "window.setCompareScope = function(scope)" in html
+    assert "window.setComparePeriod = function(period)" in html
+    assert "Compare by ${h(compareScope)} is unavailable until the backend exposes factual segmented comparison dimensions." in html
+    assert "Compare period ${h(comparePeriod)} is unavailable until the backend exposes factual period-specific comparison dimensions." in html
+    assert 'demo_status || r.selected_demo_status' in html
+    assert "const demoState = (r) =>" in html
+    assert "demoState(r).replace" in html
+    assert "Prototype: Pause Entries" not in html
+    assert "onclick=\"action('pause')\"" in html
+    assert "onclick=\"action('close')\"" in html
 
 
 def test_research_reference_actions_are_backend_wired_without_fixture_values():

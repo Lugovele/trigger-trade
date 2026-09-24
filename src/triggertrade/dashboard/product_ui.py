@@ -1653,6 +1653,7 @@ def _reference_backend_script(payload: str) -> str:
   const mobile = document.getElementById("tt-mobile-reference");
   const pageMap = {overview:"overview",config:"configuration",research:"research","research-detail":"research"};
   let posView = "placed", currentResearchId = null, currentResearch = null, currentCompare = null;
+  let compareScope = "overall", comparePeriod = "7D";
   let coinDraftVersion = null, coinDraft = [];
   const h = (v) => String(v ?? "—").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
   const money = (v) => v === null || v === undefined || v === "" ? "—" : "$" + String(v);
@@ -1742,6 +1743,21 @@ def _reference_backend_script(payload: str) -> str:
     event.stopPropagation();
     closePosition(button.dataset.positionId || "", button.dataset.symbol || "");
   });
+  document.addEventListener("click", (event) => {
+    const triggerButton = event.target.closest(".js-open-trigger");
+    if(triggerButton){
+      event.stopPropagation();
+      openConfig("triggers");
+      showTrigger(triggerButton.dataset.triggerId || "", triggerButton.dataset.triggerVersion || "");
+      return;
+    }
+    const setButton = event.target.closest(".js-open-set");
+    if(setButton){
+      event.stopPropagation();
+      openConfig("sets");
+      showSet(setButton.dataset.setId || "", setButton.dataset.setVersion || "");
+    }
+  });
 
   function showPage(page){
     const normalized = page === "config" ? "configuration" : page;
@@ -1754,8 +1770,15 @@ def _reference_backend_script(payload: str) -> str:
     history.replaceState(null, "", normalized === "overview" ? "/overview" : normalized === "configuration" ? "/trading-configuration" : normalized === "research-detail" && currentResearchId ? "/research/" + encodeURIComponent(currentResearchId) : "/" + normalized);
   }
   window.openPage = showPage;
+  window.openConfig = function(view){
+    showPage("configuration");
+    qa(".config-tab", desktop).forEach(node => node.classList.toggle("active", node.dataset.config === view));
+    qa(".config-view", desktop).forEach(node => node.classList.toggle("active", node.id === "config-" + view));
+  };
   qa(".top-tab", desktop).forEach(node => node.addEventListener("click", () => showPage(node.dataset.page)));
   qa(".nav button", mobile).forEach(node => node.addEventListener("click", () => showPage(pageMap[node.textContent.trim().toLowerCase()] || "overview")));
+  qa(".btn.warning", desktop).forEach(node => { if(node.textContent.includes("Pause") || node.textContent.includes("Resume")) node.addEventListener("click", confirmPauseEntries); });
+  qa(".btn.danger", desktop).forEach(node => { if(node.textContent.includes("Close All")) node.addEventListener("click", confirmCloseAll); });
 
   function applyOperatorState(){
     const paused = state.operatorState === "TRADING_PAUSED";
@@ -1885,7 +1908,7 @@ def _reference_backend_script(payload: str) -> str:
     const detail = q("#trigger-details", desktop) || q("#triggerDetail", desktop);
     const usedIn = t?.used_in || [];
     const versions = t?.version_history || [];
-    if(detail) detail.innerHTML = `<div class="details-header"><div class="details-id">Trigger ${h(id)} · Version ${h(version || t?.version || "—")} · ${h(triggerStatusLabel(t))}</div><div class="details-title">${h(t?.display_name || id || "Trigger")}</div><div class="details-meta"><span class="meta-pill">Status: ${h(triggerStatusLabel(t))}</span><span class="meta-pill">${t?.immutable ? "CURRENT" : "HISTORICAL / RESEARCH"}</span></div></div><div class="details-section"><div class="section-title">Metric</div><div class="reference-links"><button class="reference-link" onclick="openConfig('metrics')">${h(t?.metric || "Metric unavailable")}</button></div></div><div class="details-section"><div class="section-title">Condition</div><div class="formula" style="white-space:pre-line">${h(t?.formula_text || t?.what_it_checks || "Unavailable")}</div></div><div class="details-section"><div class="section-title">What this Trigger means</div><div class="body-text">${h(t?.how_it_works || "Backend trigger detail unavailable.")}</div></div><div class="details-section"><div class="section-title">How it works</div><div class="step-list">${String(t?.how_it_works || "Backend trigger detail unavailable.").split(/\n+|;\s*/).filter(Boolean).map((step,index) => `<div class="calc-step"><div class="step-number">${index+1}</div><div class="step-body">${h(step)}</div></div>`).join("")}</div></div><div class="details-section"><div class="section-title">Unavailable behavior</div><div class="body-text">${h(t?.unavailable_reason || "If required backend observations or metric inputs are unavailable, the Trigger result is unavailable; the frontend does not convert missing facts to zero or fabricate a signal.")}</div></div><div class="details-section"><div class="section-title">Used in Set Versions</div><div class="reference-links">${usedIn.length ? usedIn.map(s => `<button class="reference-link" onclick="openConfig('sets');showSet('${h(s.set_id)}','${h(s.set_version)}')">${h(s.set_id)} ${h(s.set_version)} · ${h(setStatusLabel(s.set_status))}</button>`).join("") : "—"}</div></div><div class="details-section"><div class="section-title">Version History</div><div class="version-list">${versions.length ? versions.map(v => `<button class="version-button ${v.version === (version || t?.version) ? "selected" : ""}" onclick="showTrigger('${h(id)}','${h(v.version)}')">${h(v.version)} · ${h(v.change_summary || v.created_at || "")}</button>`).join("") : "—"}</div></div>`;
+    if(detail) detail.innerHTML = `<div class="details-header"><div class="details-id">Trigger ${h(id)} · Version ${h(version || t?.version || "—")} · ${h(triggerStatusLabel(t))}</div><div class="details-title">${h(t?.display_name || id || "Trigger")}</div><div class="details-meta"><span class="meta-pill">Status: ${h(triggerStatusLabel(t))}</span><span class="meta-pill">${t?.immutable ? "CURRENT" : "HISTORICAL / RESEARCH"}</span></div></div><div class="details-section"><div class="section-title">Metric</div><div class="reference-links"><button class="reference-link" onclick="openConfig('metrics')">${h(t?.metric || "Metric unavailable")}</button></div></div><div class="details-section"><div class="section-title">Condition</div><div class="formula" style="white-space:pre-line">${h(t?.formula_text || t?.what_it_checks || "Unavailable")}</div></div><div class="details-section"><div class="section-title">What this Trigger means</div><div class="body-text">${h(t?.how_it_works || "Backend trigger detail unavailable.")}</div></div><div class="details-section"><div class="section-title">How it works</div><div class="step-list">${String(t?.how_it_works || "Backend trigger detail unavailable.").split(/\n+|;\s*/).filter(Boolean).map((step,index) => `<div class="calc-step"><div class="step-number">${index+1}</div><div class="step-body">${h(step)}</div></div>`).join("")}</div></div><div class="details-section"><div class="section-title">Unavailable behavior</div><div class="body-text">${h(t?.unavailable_reason || "If required backend observations or metric inputs are unavailable, the Trigger result is unavailable; the frontend does not convert missing facts to zero or fabricate a signal.")}</div></div><div class="details-section"><div class="section-title">Used in Set Versions</div><div class="reference-links">${usedIn.length ? usedIn.map(s => `<button class="reference-link js-open-set" data-set-id="${h(s.set_id)}" data-set-version="${h(s.set_version)}">${h(s.set_id)} ${h(s.set_version)} · ${h(setStatusLabel(s.set_status))}</button>`).join("") : "—"}</div></div><div class="details-section"><div class="section-title">Version History</div><div class="version-list">${versions.length ? versions.map(v => `<button class="version-button js-open-trigger ${v.version === (version || t?.version) ? "selected" : ""}" data-trigger-id="${h(id)}" data-trigger-version="${h(v.version)}">${h(v.version)} · ${h(v.change_summary || v.created_at || "")}</button>`).join("") : "—"}</div></div>`;
   };
   function renderSets(){
     const rows = state.registry.sets || [];
@@ -1898,11 +1921,11 @@ def _reference_backend_script(payload: str) -> str:
     const s = (state.registry.sets || []).find(x => x.set_id === id && x.version === version);
     const members = (s?.trigger_versions || s?.rules || []).map(x => ({trigger_id:x.trigger_id || x.rule_id, version:x.version || x.rule_version, display_name:x.display_name || x.name, condition:x.condition}));
     const detail = q("#set-details", desktop) || q("#setDetail", desktop);
-    const triggerLinks = members.map(t => `<button class="reference-link" onclick="openConfig('triggers');showTrigger('${h(t.trigger_id)}','${h(t.version)}')">${h(t.trigger_id)} ${h(t.version)}</button>`).join(" ");
+    const triggerLinks = members.map(t => `<button class="reference-link js-open-trigger" data-trigger-id="${h(t.trigger_id)}" data-trigger-version="${h(t.version)}">${h(t.trigger_id)} ${h(t.version)}</button>`).join(" ");
     const condition = members.map(t => `<span class="logic-trigger">${h(t.trigger_id)} ${h(t.version)}</span> evaluates TRUE`).join(" AND ");
     if(detail) detail.innerHTML = `<div class="details-header"><div class="details-id">Set ${h(id)} · Version ${h(version)} · ${h(setStatusLabel(s?.status))}</div><div class="details-title">${h(s?.display_name || s?.purpose || id || "Set")}</div><div class="details-meta"><span class="meta-pill">Direction: LONG / SHORT / NONE</span><span class="meta-pill">${h([s?.symbol, s?.timeframe].filter(Boolean).join(" · ") || "Market unavailable")}</span></div></div><div class="details-section"><div class="section-title">Trigger Versions Used</div><div class="reference-links">${triggerLinks || "—"}</div></div><div class="details-section"><div class="section-title">Human-readable Set Logic</div><div class="set-logic"><div class="set-logic-row"><div class="logic-keyword">IF</div><div class="logic-condition">${condition || "No trigger versions recorded"}</div></div><div class="set-logic-row"><div class="logic-keyword">THEN</div><div class="logic-condition">Direction resolves through this Set to LONG / SHORT / NONE for the configured market.</div></div><div class="set-logic-row"><div class="logic-keyword">ELSE</div><div class="logic-condition">Direction = NONE.</div></div></div></div><div class="details-section"><div class="section-title">Historical correctness</div><div class="body-text">This panel renders the exact selected Set Version and the exact Trigger Versions recorded for that version.</div></div>`;
   };
-  qa(".config-tab", desktop).forEach(b => b.onclick = () => { qa(".config-tab", desktop).forEach(x => x.classList.toggle("active", x.dataset.config === b.dataset.config)); qa(".config-view", desktop).forEach(x => x.classList.toggle("active", x.id === "config-" + b.dataset.config)); });
+  qa(".config-tab", desktop).forEach(b => b.onclick = () => openConfig(b.dataset.config));
 
   function renderRules(){
     const c = state.rules.current;
@@ -2068,9 +2091,18 @@ def _reference_backend_script(payload: str) -> str:
 
   function renderResearchSummary(){
     const body = q("#research-summary-body", desktop) || q("#researchBody", desktop);
-    const rows = state.research.summaries || [];
+    const search = String(q("#research-search", desktop)?.value || "").trim().toLowerCase();
+    const demoFilter = String(q("#demo-filter", desktop)?.value || "").trim().toLowerCase();
+    const decisionFilter = String(q("#decision-filter", desktop)?.value || "").trim().toLowerCase();
+    const demoState = (r) => String(r.demo_status || r.selected_demo_status || r.status || "").toLowerCase().includes("running") ? "running" : r.selected_demo_run_id ? "complete" : "pending";
+    const rows = (state.research.summaries || []).filter(r => {
+      const demo = demoState(r);
+      const decision = String(r.decision || r.status || "NONE").toLowerCase();
+      const haystack = [r.research_id, r.set_id, r.set_version, r.rules_display_version, r.rules_version_id, decision].join(" ").toLowerCase();
+      return (!search || haystack.includes(search)) && (!demoFilter || demo === demoFilter) && (!decisionFilter || decision === decisionFilter);
+    });
     if(!body) return;
-    body.innerHTML = rows.length ? rows.map(r => `<tr class="research-row" data-research-id="${h(r.research_id)}"><td><div class="research-id">${h(r.research_id)}</div></td><td>${h(r.set_id)}<div class="panel-meta">${h(r.set_version)}</div></td><td>${h(r.rules_display_version)}<div class="panel-meta">${h(r.rules_version_id)}</div></td><td>${h(r.selected_demo_run_id ? "Complete" : "Pending")}</td><td>${h(r.selected_demo_profit_factor ?? "—")}</td><td>${h(r.compare_to_active || "—")}</td><td>—</td><td>${badge(r.decision || r.status || "NONE")}</td></tr>`).join("") : '<tr><td colspan="8" class="empty">No Research records.</td></tr>';
+    body.innerHTML = rows.length ? rows.map(r => `<tr class="research-row" data-research-id="${h(r.research_id)}"><td><div class="research-id">${h(r.research_id)}</div></td><td>${h(r.set_id)}<div class="panel-meta">${h(r.set_version)}</div></td><td>${h(r.rules_display_version)}<div class="panel-meta">${h(r.rules_version_id)}</div></td><td>${h(demoState(r).replace(/^./, c => c.toUpperCase()))}</td><td>${h(r.selected_demo_profit_factor ?? "—")}</td><td>${h(r.compare_to_active || "—")}</td><td>—</td><td>${badge(r.decision || r.status || "NONE")}</td></tr>`).join("") : '<tr><td colspan="8" class="empty">No Research records.</td></tr>';
     qa("[data-research-id]", desktop).forEach(row => row.onclick = () => openResearchById(row.dataset.researchId));
   }
   window.openResearchById = async function(id){
@@ -2102,6 +2134,14 @@ def _reference_backend_script(payload: str) -> str:
   function renderCompare(){
     const table = q("#compare-table", desktop) || q("#compareTable", desktop);
     if(!table) return;
+    if(compareScope !== "overall"){
+      table.innerHTML = `<tbody><tr><td class="empty">Compare by ${h(compareScope)} is unavailable until the backend exposes factual segmented comparison dimensions.</td></tr></tbody>`;
+      return;
+    }
+    if(comparePeriod !== "7D"){
+      table.innerHTML = `<tbody><tr><td class="empty">Compare period ${h(comparePeriod)} is unavailable until the backend exposes factual period-specific comparison dimensions.</td></tr></tbody>`;
+      return;
+    }
     if(!currentCompare?.available){ table.innerHTML = `<tbody><tr><td class="empty">${h(currentCompare?.reason || "Compare unavailable")}</td></tr></tbody>`; return; }
     const rows = [["Closed trades","closed_trades"],["Net P/L","net_pnl"],["Expectancy","expectancy"],["Profit Factor","profit_factor"],["Max Drawdown","max_drawdown"]];
     table.innerHTML = `<thead><tr><th>Metric</th><th>Active</th><th>Demo</th><th>Difference</th></tr></thead><tbody>${rows.map(([label,key]) => `<tr><td>${h(label)}</td><td class="base-cell">${h(currentCompare.active_benchmark?.[key] ?? "—")}</td><td class="neutral-cell">${h(currentCompare.research_demo?.[key] ?? "—")}</td><td>${h(currentCompare.difference?.[key] ?? "—")}</td></tr>`).join("")}</tbody>`;
@@ -2118,6 +2158,20 @@ def _reference_backend_script(payload: str) -> str:
     }
     if(node) node.textContent = message || "";
   }
+  window.renderResearchSummary = renderResearchSummary;
+  window.setCompareScope = function(scope){
+    compareScope = scope || "overall";
+    qa(".compare-tab", desktop).forEach(node => {
+      const label = (node.textContent || "").trim().toLowerCase();
+      node.classList.toggle("active", (compareScope === "overall" && label === "overall") || label.includes(compareScope));
+    });
+    renderCompare();
+  };
+  window.setComparePeriod = function(period){
+    comparePeriod = period || "7D";
+    qa(".compare-period", desktop).forEach(node => node.classList.toggle("active", (node.textContent || "").trim() === comparePeriod));
+    renderCompare();
+  };
   window.runBacktest = async function(period){ if(!currentResearchId || !canSubmit()) return; const days = period === "90D" ? 90 : period === "30D" ? 30 : 7; const end = new Date(), start = new Date(end.getTime() - days * 86400000); try{ await postJson(`/api/research/${encodeURIComponent(currentResearchId)}/backtests`, {research_start:start.toISOString(),research_end:end.toISOString()}); }catch(error){ currentCompare = {available:false, reason:error.message || "Backtest unavailable"}; renderCompare(); } await openResearchById(currentResearchId); };
   window.runDemo = async function(){ if(!currentResearchId || !canSubmit()) return; try{ await postJson(`/api/research/${encodeURIComponent(currentResearchId)}/demo/start`, {}); }catch(error){ currentCompare = {available:false, reason:error.message || "Demo start unavailable"}; renderCompare(); } await openResearchById(currentResearchId); };
   window.setDecision = async function(value){ if(!currentResearchId || !canSubmit()) return; const url = value === "REJECT" ? `/api/research/${encodeURIComponent(currentResearchId)}/archive` : `/api/research/${encodeURIComponent(currentResearchId)}/decision/make-active`; try{ await postJson(url, {idempotency_key:"ui-"+Date.now()}); }catch(error){ currentCompare = {available:false, reason:error.message || "Decision unavailable"}; renderCompare(); } await openResearchById(currentResearchId); };
@@ -2207,6 +2261,8 @@ def render_product_dashboard(
     desktop_body = _without_reference_scripts(_reference_body(DESKTOP_REFERENCE_HTML))
     mobile_styles = _scoped_mobile_reference_styles(MOBILE_OVERVIEW_REFERENCE_HTML)
     mobile_body = _without_reference_scripts(_reference_body(MOBILE_OVERVIEW_REFERENCE_HTML))
+    mobile_body = mobile_body.replace("onclick=\"alert('Prototype: Pause Entries')\"", "onclick=\"action('pause')\"")
+    mobile_body = mobile_body.replace("onclick=\"confirm('Close all open positions?')\"", "onclick=\"action('close')\"")
     responsive_css = """
 <style id="triggertrade-reference-composition">
 #tt-desktop-reference{display:contents}
