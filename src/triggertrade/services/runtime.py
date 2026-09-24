@@ -618,6 +618,10 @@ def build_canonical_runtime_from_env(env: dict[str, str]):
     )
     from triggertrade.execution.bybit_futures import BybitFuturesExecutionAdapter
     from triggertrade.services.futures_runtime import FuturesOperatorExecutionRuntime
+    from triggertrade.services.research_demo_execution import (
+        CanonicalResearchDemoExecutionExecutor,
+        CanonicalResearchDemoTradingCycleProvider,
+    )
     from triggertrade.services.runtime_storage import require_canonical_durable_runtime_state
     from triggertrade.services.trading_worker import build_target_trading_worker
 
@@ -631,20 +635,49 @@ def build_canonical_runtime_from_env(env: dict[str, str]):
     factory = PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)
     credentials = load_bybit_credentials(runtime_env)
     market_client = BybitDemoClient(config=config.bybit, credentials=credentials)
+    futures_execution_store = PostgresFuturesExecutionStore(factory)
+    accounting_store = PostgresFuturesAccountingStore(factory)
+    position_store = PostgresFuturesPositionStore(factory)
+    operator_state_store = PostgresOperatorStateStore(factory)
     operator_executor = FuturesOperatorExecutionRuntime(
         config=config,
         market_client=market_client,
-        futures_execution_store=PostgresFuturesExecutionStore(factory),
-        accounting_store=PostgresFuturesAccountingStore(factory),
-        position_store=PostgresFuturesPositionStore(factory),
-        operator_state_store=PostgresOperatorStateStore(factory),
+        futures_execution_store=futures_execution_store,
+        accounting_store=accounting_store,
+        position_store=position_store,
+        operator_state_store=operator_state_store,
         instrument_catalog=_BybitRuntimeInstrumentCatalog(market_client),
         active_adapter=BybitFuturesExecutionAdapter(market_client),
     )
+    research_demo_executor = None
+    if _env_true(runtime_env.get("TRIGGERTRADE_RESEARCH_DEMO_HANDOFF_ENABLED")):
+        instrument_catalog = _BybitRuntimeInstrumentCatalog(market_client)
+        active_adapter = BybitFuturesExecutionAdapter(market_client)
+        research_demo_executor = CanonicalResearchDemoExecutionExecutor(
+            config=config,
+            factory=factory,
+            trading_cycle=CanonicalResearchDemoTradingCycleProvider(
+                config=config,
+                factory=factory,
+                market_client=market_client,
+                futures_execution_store=futures_execution_store,
+                accounting_store=accounting_store,
+                runtime_store=PostgresRuntimeStore(factory),
+                operator_state_store=operator_state_store,
+                position_store=position_store,
+                instrument_catalog=instrument_catalog,
+                active_adapter=active_adapter,
+                allow_uncertified_active_formula_execution=_env_true(
+                    runtime_env.get("TRIGGERTRADE_ALLOW_UNCERTIFIED_DEMO_ACTIVE_FORMULA_EXECUTION")
+                ),
+            ),
+            accounting_store=accounting_store,
+        )
     return build_target_trading_worker(
         factory=factory,
         runtime_store=PostgresRuntimeStore(factory),
         operator_executor=operator_executor,
+        research_demo_executor=research_demo_executor,
         worker_id=str(runtime_env.get("TRIGGERTRADE_WORKER_ID") or "").strip() or None,
         poll_seconds=_poll_seconds(runtime_env, key="TRIGGERTRADE_WORKER_POLL_SECONDS", default="5"),
     )

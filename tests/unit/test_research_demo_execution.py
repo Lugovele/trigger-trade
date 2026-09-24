@@ -4,9 +4,12 @@ import os
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 
+import triggertrade.services.research_demo_execution as research_demo_execution
+from triggertrade.accounting import EquitySnapshot
 from triggertrade.persistence.durable_messages import DurableMessageStore
 from triggertrade.persistence.postgres import (
     OwnerStateConflict,
@@ -20,9 +23,12 @@ from triggertrade.persistence.postgres import (
 from triggertrade.canonical_json import canonical_json_digest
 from triggertrade.persistence.postgres_research_registry import PostgresResearchConfigurationRegistry
 from triggertrade.persistence.research_store import ResearchDecision, ResearchRecord, ResearchStatus
+from triggertrade.config import ConfigError, ExecutionVenue, load_config
 from triggertrade.rules import CoinRule, DirectionMode, TakeProfitMode, TradingRulesVersion, TradingRulesVersionDraft
 from triggertrade.services.research import ResearchDemoIsolation
 from triggertrade.services.research_demo_execution import (
+    CanonicalResearchDemoExecutionExecutor,
+    CanonicalResearchDemoTradingCycleProvider,
     RESEARCH_DEMO_CONSUMER,
     RESEARCH_DEMO_MESSAGE_TYPE,
     RESEARCH_DEMO_MESSAGE_VERSION,
@@ -31,7 +37,11 @@ from triggertrade.services.research_demo_execution import (
     ResearchDemoExecutionDispatcher,
     ResearchDemoExecutionRecord,
     ResearchDemoExecutionStore,
+    _ResearchDemoAccountingStore,
+    _PostgresResearchDemoDailyLossStore,
 )
+from triggertrade.services.futures_runtime import FuturesDualLaneResult
+from triggertrade.services.runtime import RuntimeCycleResult
 from triggertrade.trigger_sets import TriggerSetStatus, TriggerSetVersion
 
 
@@ -54,6 +64,7 @@ def test_research_demo_dispatch_marks_running_and_replays_terminal_result_once()
 
     assert detail == f"research_demo_running:{record.demo_run_id}"
     assert store.transitions == ["RUNNING"]
+    assert store.rechecks == [record.demo_run_id]
     assert executor.calls == [record.demo_run_id]
 
     store.record = _copy_record(store.record, status="COMPLETED")
@@ -230,10 +241,711 @@ def test_research_config_registry_rejects_immutable_conflicts():
                 cursor.execute(f'DROP SCHEMA IF EXISTS "{settings.schema}" CASCADE')
 
 
+def test_canonical_research_demo_executor_reconstructs_config_and_projects_running_progress(monkeypatch):
+    executor = _executor(monkeypatch, now="2026-09-25T00:00:00+00:00")
+    record = _copy_record(_demo_record(), started_at="2026-09-24T00:00:00Z", requested_at="2026-09-24T00:00:00Z")
+
+    result = executor.start_research_demo(record)
+
+    assert result["terminal"] is False
+    assert result["execution_owner"] == "trading-worker"
+    assert result["configuration"] == {
+        "research_id": record.research_id,
+        "set_id": record.set_id,
+        "set_version": record.set_version,
+        "rules_version_id": record.rules_version_id,
+    }
+    assert result["progress"]["duration_days"] == 7
+    assert result["progress"]["duration_elapsed"] is False
+
+
+def test_canonical_research_demo_executor_finalizes_result_from_accounting_once(monkeypatch):
+    executor = _executor(
+        monkeypatch,
+        now="2026-10-02T00:00:01+00:00",
+        accounting=_FakeAccountingStore(
+            (
+                {
+                    "trade_id": "trade-win",
+                    "research_demo_run_id": "rdm-unit-1",
+                    "execution_owner": "ResearchDemoExecution",
+                    "research_demo_result_scope": "RESEARCH_DEMO",
+                    "trigger_set_id": "triggertrade-futures-core",
+                    "trigger_set_version": "v1",
+                    "evidence_source": "ACTIVE",
+                    "net_pnl": "5",
+                    "gross_pnl": "6",
+                },
+                {
+                    "trade_id": "trade-loss",
+                    "research_demo_run_id": "rdm-unit-1",
+                    "execution_owner": "ResearchDemoExecution",
+                    "research_demo_result_scope": "RESEARCH_DEMO",
+                    "trigger_set_id": "triggertrade-futures-core",
+                    "trigger_set_version": "v1",
+                    "evidence_source": "EXCHANGE",
+                    "net_pnl": "-2",
+                    "gross_pnl": "-1",
+                },
+            )
+        ),
+    )
+    record = _copy_record(_demo_record(), started_at="2026-09-24T00:00:00Z", requested_at="2026-09-24T00:00:00Z")
+
+    first = executor.start_research_demo(record)
+    second = executor.start_research_demo(record)
+
+    assert first == second
+    assert first["terminal"] is True
+    assert first["result"]["source"] == "canonical_futures_accounting"
+    assert first["result"]["trades"] == 2
+    assert first["result"]["net_pnl"] == "3"
+    assert first["result"]["win_rate"] == "0.5"
+    assert first["result"]["profit_factor"] == "2.5"
+
+
+def test_canonical_research_demo_executor_fails_closed_without_canonical_cycle_evidence(monkeypatch):
+    executor = _executor(monkeypatch, trading_cycle=_FakeTradingCycle(canonical=False))
+    record = _copy_record(_demo_record(), started_at="2026-09-24T00:00:00Z", requested_at="2026-09-24T00:00:00Z")
+
+    with pytest.raises(PostgresPersistenceError, match="research_demo_canonical_execution_cycle_unavailable"):
+        executor.start_research_demo(record)
+
+
+def test_canonical_research_demo_trading_cycle_provider_uses_exact_pinned_runtime(monkeypatch):
+    captured = {}
+
+    class FakeRuntime:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def process_once(self):
+            pair = captured["trigger_set_store"].get_active_trading_pair("BTCUSDT", "1m")
+            assert pair is not None
+            assert pair.trigger_set.set_id == "triggertrade-futures-core"
+            assert pair.trigger_set.version == "rdm-unit-1::v1"
+            assert pair.rules_version.rules_version_id == "rules-v1"
+            assert captured["trading_rules_store"].get_current().rules_version_id == "rules-v1"
+            assert [item.position_id for item in captured["position_store"].list_open_positions(include_unknown=True)] == [
+                "scoped-position"
+            ]
+            assert captured["position_store"].open_position_for_symbol("BTCUSDT").position_id == "scoped-position"
+            assert [item.intent_id for item in captured["futures_execution_store"].unresolved()] == ["scoped-intent"]
+            return FuturesDualLaneResult(
+                candle_id="BTCUSDT:1m:2026-09-24T00:00:00Z",
+                active=(
+                    RuntimeCycleResult(
+                        "BTCUSDT:1m:2026-09-24T00:00:00Z",
+                        "CONFIRMED",
+                        "intent-1",
+                        "risk-1",
+                        True,
+                        "ACKNOWLEDGED",
+                    ),
+                ),
+                test=(),
+            )
+
+    monkeypatch.setattr("triggertrade.services.research_demo_execution.FuturesDualLaneRuntime", FakeRuntime)
+
+    class FakeScopedExecutionStore:
+        def unresolved(self):
+            return (
+                SimpleNamespace(
+                    intent_id="scoped-intent",
+                    trigger_set_id="triggertrade-futures-core",
+                    trigger_set_version="rdm-unit-1::v1",
+                ),
+                SimpleNamespace(
+                    intent_id="unrelated-intent",
+                    trigger_set_id="triggertrade-futures-core",
+                    trigger_set_version="other-run::v1",
+                ),
+            )
+
+        def get_by_intent(self, intent_id):
+            return next((item for item in self.unresolved() if item.intent_id == intent_id), None)
+
+        def get_by_client_order_id(self, client_order_id):
+            return None
+
+        def list_recent(self, limit=20):
+            return self.unresolved()[:limit]
+
+    class FakeScopedPositionStore:
+        def list_open_positions(self, include_unknown=False):
+            return (
+                SimpleNamespace(
+                    position_id="unrelated-position",
+                    symbol="BTCUSDT",
+                    trigger_set_id="triggertrade-futures-core",
+                    trigger_set_version="other-run::v1",
+                    rules_version_id="rules-v1",
+                    evidence_source="BYBIT_DEMO_ACCOUNT",
+                    position_value="10",
+                ),
+                SimpleNamespace(
+                    position_id="scoped-position",
+                    symbol="BTCUSDT",
+                    trigger_set_id="triggertrade-futures-core",
+                    trigger_set_version="rdm-unit-1::v1",
+                    rules_version_id="rules-v1",
+                    evidence_source="BYBIT_DEMO_ACCOUNT",
+                    position_value="10",
+                ),
+            )
+
+        def open_position_for_symbol(self, symbol):
+            return self.list_open_positions(include_unknown=True)[0] if symbol == "BTCUSDT" else None
+
+    provider = CanonicalResearchDemoTradingCycleProvider(
+        config=load_config(_demo_runtime_env()),
+        factory=object(),
+        market_client=object(),
+        futures_execution_store=FakeScopedExecutionStore(),
+        accounting_store=_FakeAccountingStore(()),
+        runtime_store=object(),
+        operator_state_store=object(),
+        position_store=FakeScopedPositionStore(),
+        instrument_catalog=object(),
+        active_adapter=object(),
+    )
+
+    result = provider.run_research_demo_cycle(
+        record=_copy_record(_demo_record(), rules_version_id="rules-v1"),
+        configuration=type(
+            "Config",
+            (),
+            {"research": _research_record(), "trigger_set": _trigger_set(), "rules": _rules_version()},
+        )(),
+    )
+
+    assert result["canonical_cycle"] is True
+    assert result["canonical_trading_decisions_invoked"] is True
+    assert result["canonical_lifecycle_invoked"] is True
+    assert result["canonical_futures_execution_invoked"] is True
+    assert result["reconciliation_before_resubmit"] is True
+    assert result["runtime"]["active"][0]["execution_status"] == "ACKNOWLEDGED"
+    assert result["unresolved_executions"] == 1
+    assert result["open_positions"] == 1
+
+
+def test_canonical_research_demo_trading_cycle_provider_treats_quiet_signal_cycle_as_lifecycle_progress(monkeypatch):
+    class FakeRuntime:
+        def __init__(self, **kwargs):
+            pass
+
+        def process_once(self):
+            return FuturesDualLaneResult(
+                candle_id="BTCUSDT:1m:2026-09-24T00:00:00Z",
+                active=(
+                    RuntimeCycleResult(
+                        "BTCUSDT:1m:2026-09-24T00:00:00Z",
+                        "NO_SIGNAL",
+                    ),
+                ),
+                test=(),
+            )
+
+    monkeypatch.setattr("triggertrade.services.research_demo_execution.FuturesDualLaneRuntime", FakeRuntime)
+    provider = CanonicalResearchDemoTradingCycleProvider(
+        config=load_config(_demo_runtime_env()),
+        factory=object(),
+        market_client=object(),
+        futures_execution_store=_FakeExecutionStore(),
+        accounting_store=_FakeAccountingStore(()),
+        runtime_store=object(),
+        operator_state_store=object(),
+        position_store=_FakePositionStore(),
+        instrument_catalog=object(),
+        active_adapter=object(),
+    )
+
+    result = provider.run_research_demo_cycle(
+        record=_copy_record(_demo_record(), rules_version_id="rules-v1"),
+        configuration=type(
+            "Config",
+            (),
+            {"research": _research_record(), "trigger_set": _trigger_set(), "rules": _rules_version()},
+        )(),
+    )
+
+    assert result["canonical_trading_decisions_invoked"] is True
+    assert result["canonical_lifecycle_invoked"] is True
+    assert result["canonical_futures_execution_invoked"] is False
+    assert result["unresolved_obligations"] == 0
+
+
+def test_canonical_research_demo_trading_cycle_provider_treats_already_processed_as_wait_state(monkeypatch):
+    class FakeRuntime:
+        def __init__(self, **kwargs):
+            pass
+
+        def process_once(self):
+            return FuturesDualLaneResult(
+                candle_id="BTCUSDT:1m:2026-09-24T00:00:00Z",
+                active=(
+                    RuntimeCycleResult(
+                        "BTCUSDT:1m:2026-09-24T00:00:00Z",
+                        None,
+                        skipped_reason="already_processed",
+                    ),
+                ),
+                test=(),
+            )
+
+    monkeypatch.setattr("triggertrade.services.research_demo_execution.FuturesDualLaneRuntime", FakeRuntime)
+    provider = CanonicalResearchDemoTradingCycleProvider(
+        config=load_config(_demo_runtime_env()),
+        factory=object(),
+        market_client=object(),
+        futures_execution_store=_FakeExecutionStore(),
+        accounting_store=_FakeAccountingStore(()),
+        runtime_store=object(),
+        operator_state_store=object(),
+        position_store=_FakePositionStore(),
+        instrument_catalog=object(),
+        active_adapter=object(),
+    )
+
+    result = provider.run_research_demo_cycle(
+        record=_copy_record(_demo_record(), rules_version_id="rules-v1"),
+        configuration=type(
+            "Config",
+            (),
+            {"research": _research_record(), "trigger_set": _trigger_set(), "rules": _rules_version()},
+        )(),
+    )
+
+    assert result["canonical_runtime_wait_state"] is True
+    assert result["canonical_trading_decisions_invoked"] is False
+    assert result["canonical_lifecycle_invoked"] is False
+    assert result["unresolved_obligations"] == 0
+
+
+def test_canonical_research_demo_executor_allows_runtime_wait_state(monkeypatch):
+    class WaitTradingCycle:
+        canonical_research_demo_trading_cycle = True
+
+        def run_research_demo_cycle(self, *, record, configuration):
+            return {
+                "canonical_cycle": True,
+                "canonical_runtime_wait_state": True,
+                "reconciliation_before_resubmit": True,
+                "resubmitted_without_reconciliation": False,
+                "canonical_trading_decisions_invoked": False,
+                "canonical_lifecycle_invoked": False,
+                "canonical_futures_execution_invoked": False,
+                "unresolved_obligations": 0,
+            }
+
+    executor = _executor(monkeypatch, trading_cycle=WaitTradingCycle())
+    record = _copy_record(_demo_record(), started_at="2026-09-24T00:00:00Z", requested_at="2026-09-24T00:00:00Z")
+
+    result = executor.start_research_demo(record)
+
+    assert result["terminal"] is False
+    assert result["cycle"]["canonical_runtime_wait_state"] is True
+
+
+def test_canonical_research_demo_result_projection_fails_closed_on_attribution_query_error(monkeypatch):
+    class BrokenUnitOfWork:
+        def __init__(self, factory):
+            pass
+
+        def __enter__(self):
+            raise RuntimeError("database unavailable")
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(research_demo_execution, "PostgresUnitOfWork", BrokenUnitOfWork)
+
+    with pytest.raises(PostgresPersistenceError, match="closed-trade attribution query failed"):
+        research_demo_execution._project_result_from_accounting(
+            accounting_store=_FakeAccountingStore(()),
+            factory=PostgresConnectionFactory(dsn="postgresql://unit.invalid/triggertrade", schema="unit"),
+            demo_run_id="rdm-unit-1",
+            set_id="triggertrade-futures-core",
+            set_version="v1",
+        )
+
+
+def test_research_demo_daily_loss_store_isolates_same_trading_day_by_demo_run(monkeypatch):
+    records: dict[tuple[str, str, str], OwnerStateRecord] = {}
+    revisions: dict[tuple[str, str, str], int] = {}
+
+    class FakeOwnerStateStore:
+        def __init__(self, connection):
+            pass
+
+        def get(self, *, owner, state_type, state_id):
+            return records.get((owner, state_type, state_id))
+
+        def put_if_absent(self, *, owner, state_type, state_id, payload):
+            key = (owner, state_type, state_id)
+            record = records.get(key)
+            if record is None:
+                revisions[key] = 1
+                record = OwnerStateRecord(
+                    owner=owner,
+                    state_type=state_type,
+                    state_id=state_id,
+                    payload=payload,
+                    payload_digest=canonical_json_digest(payload),
+                    revision=revisions[key],
+                )
+                records[key] = record
+            return record, revisions[key] == 1
+
+        def compare_and_set(self, *, owner, state_type, state_id, expected_revision, payload):
+            key = (owner, state_type, state_id)
+            current = records[key]
+            assert current.revision == expected_revision
+            revisions[key] = expected_revision + 1
+            updated = OwnerStateRecord(
+                owner=owner,
+                state_type=state_type,
+                state_id=state_id,
+                payload=payload,
+                payload_digest=canonical_json_digest(payload),
+                revision=revisions[key],
+            )
+            records[key] = updated
+            return updated
+
+    class FakeUnitOfWork:
+        connection = object()
+
+        def __init__(self, factory):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(research_demo_execution, "OwnerStateStore", FakeOwnerStateStore)
+    monkeypatch.setattr(research_demo_execution, "PostgresUnitOfWork", FakeUnitOfWork)
+
+    first = _PostgresResearchDemoDailyLossStore(object(), demo_run_id="rdm-one")
+    second = _PostgresResearchDemoDailyLossStore(object(), demo_run_id="rdm-two")
+
+    first.ensure_baseline(
+        trading_day="2026-09-24",
+        baseline_equity=Decimal("100"),
+        baseline_source="unit",
+        baseline_observed_at="2026-09-24T00:00:00Z",
+        updated_at="2026-09-24T00:00:00Z",
+    )
+    first.latch(
+        trading_day="2026-09-24",
+        latched_at="2026-09-24T00:01:00Z",
+        rules_version_id="rules-v1",
+        reason="unit",
+    )
+
+    assert first.get_record("2026-09-24").latched is True
+    assert second.get_record("2026-09-24") is None
+
+    second.ensure_baseline(
+        trading_day="2026-09-24",
+        baseline_equity=Decimal("200"),
+        baseline_source="unit",
+        baseline_observed_at="2026-09-24T00:00:00Z",
+        updated_at="2026-09-24T00:00:00Z",
+    )
+
+    assert second.get_record("2026-09-24").latched is False
+    assert {state_id for _, _, state_id in records} == {"rdm-one::2026-09-24", "rdm-two::2026-09-24"}
+
+
+def test_research_demo_accounting_daily_loss_reads_are_demo_run_scoped(monkeypatch):
+    records: dict[tuple[str, str, str], OwnerStateRecord] = {}
+
+    class FakeOwnerStateStore:
+        def __init__(self, connection):
+            pass
+
+        def get(self, *, owner, state_type, state_id):
+            return records.get((owner, state_type, state_id))
+
+        def put_if_absent(self, *, owner, state_type, state_id, payload):
+            key = (owner, state_type, state_id)
+            record = records.get(key)
+            if record is None:
+                record = OwnerStateRecord(
+                    owner=owner,
+                    state_type=state_type,
+                    state_id=state_id,
+                    payload=payload,
+                    payload_digest=canonical_json_digest(payload),
+                    revision=1,
+                )
+                records[key] = record
+            return record, True
+
+    class FakeUnitOfWork:
+        connection = object()
+
+        def __init__(self, factory):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def execute(self, query, params):
+            owner, state_type, demo_run_id, execution_owner, result_scope = params
+            matches = [
+                (state_id, record.payload)
+                for (row_owner, row_type, state_id), record in records.items()
+                if row_owner == owner
+                and row_type == state_type
+                and record.payload.get("research_demo_run_id") == demo_run_id
+                and record.payload.get("execution_owner") == execution_owner
+                and record.payload.get("research_demo_result_scope") == result_scope
+            ]
+            self.with_state_id = "SELECT state_id" in query
+            self.rows = matches
+
+        def fetchall(self):
+            import json
+
+            if self.with_state_id:
+                return tuple((row[0], json.dumps(row[1])) for row in self.rows)
+            return tuple((json.dumps(row[1]),) for row in self.rows)
+
+    class FakeConnection:
+        def cursor(self):
+            return FakeCursor()
+
+    FakeUnitOfWork.connection = FakeConnection()
+
+    class FakeInnerAccounting:
+        def __init__(self):
+            self.rows = (
+                {
+                    "trade_id": "trade-demo",
+                    "closed_at": "2026-09-24T01:00:00+00:00",
+                    "net_pnl": "-3",
+                    "gross_pnl": "-3",
+                    "evidence_source": "EXCHANGE",
+                },
+                {
+                    "trade_id": "trade-unrelated",
+                    "closed_at": "2026-09-24T02:00:00+00:00",
+                    "net_pnl": "-999",
+                    "gross_pnl": "-999",
+                    "evidence_source": "EXCHANGE",
+                },
+            )
+
+        def record_closed_trade(self, result):
+            return True
+
+        def record_equity_snapshot(self, snapshot):
+            return True
+
+        def list_closed_trades(self, limit=20):
+            return self.rows[:limit]
+
+    monkeypatch.setattr(research_demo_execution, "OwnerStateStore", FakeOwnerStateStore)
+    monkeypatch.setattr(research_demo_execution, "PostgresUnitOfWork", FakeUnitOfWork)
+
+    store = _ResearchDemoAccountingStore(
+        inner=FakeInnerAccounting(),
+        factory=PostgresConnectionFactory(dsn="postgresql://unit.invalid/triggertrade", schema="unit"),
+        demo_run_id="rdm-unit-1",
+        set_id="triggertrade-futures-core",
+        set_version="v1",
+    )
+    store.record_closed_trade(
+        SimpleNamespace(
+            trade_id="trade-demo",
+            trigger_set_version="rdm-unit-1::v1",
+            evidence_source="EXCHANGE",
+        )
+    )
+    store.record_equity_snapshot(
+        EquitySnapshot(
+            snapshot_id="snapshot-demo",
+            observed_at="2026-09-24T00:05:00+00:00",
+            source="BYBIT_DEMO_ACCOUNT",
+            wallet_balance=Decimal("100"),
+            equity=Decimal("100"),
+            available_margin=Decimal("100"),
+            used_margin=Decimal("0"),
+            unrealized_pnl=Decimal("0"),
+            realized_pnl=Decimal("0"),
+            running_peak=Decimal("100"),
+            drawdown_absolute=Decimal("0"),
+            drawdown_percent=Decimal("0"),
+            max_drawdown=Decimal("0"),
+        )
+    )
+    store.record_equity_snapshot(
+        EquitySnapshot(
+            snapshot_id="snapshot-demo-later",
+            observed_at="2026-09-24T00:10:00+00:00",
+            source="BYBIT_DEMO_ACCOUNT",
+            wallet_balance=Decimal("125"),
+            equity=Decimal("125"),
+            available_margin=Decimal("125"),
+            used_margin=Decimal("0"),
+            unrealized_pnl=Decimal("0"),
+            realized_pnl=Decimal("0"),
+            running_peak=Decimal("125"),
+            drawdown_absolute=Decimal("0"),
+            drawdown_percent=Decimal("0"),
+            max_drawdown=Decimal("0"),
+        )
+    )
+    unrelated_snapshot_payload = {
+        "snapshot_id": "snapshot-unrelated",
+        "research_demo_run_id": "rdm-other",
+        "execution_owner": RESEARCH_DEMO_CONSUMER,
+        "research_demo_result_scope": "RESEARCH_DEMO",
+        "observed_at": "2026-09-24T00:15:00+00:00",
+        "source": "BYBIT_DEMO_ACCOUNT",
+        "equity": "999",
+    }
+    records[("ResearchDemoExecution", "research_demo_equity_snapshot_attribution", "snapshot-unrelated")] = OwnerStateRecord(
+        owner="ResearchDemoExecution",
+        state_type="research_demo_equity_snapshot_attribution",
+        state_id="snapshot-unrelated",
+        payload=unrelated_snapshot_payload,
+        payload_digest=canonical_json_digest(unrelated_snapshot_payload),
+        revision=1,
+    )
+
+    assert store.realized_net_pnl_for_utc_day("2026-09-24") == Decimal("-3")
+    snapshot = store.first_equity_snapshot_for_utc_day("2026-09-24")
+    assert snapshot is not None
+    assert snapshot["snapshot_id"] == "snapshot-demo"
+    assert snapshot["equity"] == "100"
+    latest = store.latest_equity_snapshot()
+    assert latest is not None
+    assert latest["snapshot_id"] == "snapshot-demo-later"
+    assert latest["equity"] == "125"
+
+
+def test_canonical_research_demo_executor_fails_closed_when_cycle_has_no_execution_evidence(monkeypatch):
+    provider = _FakeTradingCycle(canonical=True, execution_status=None, unresolved=1)
+    executor = _executor(monkeypatch, trading_cycle=provider)
+    record = _copy_record(_demo_record(), started_at="2026-09-24T00:00:00Z", requested_at="2026-09-24T00:00:00Z")
+
+    with pytest.raises(PostgresPersistenceError, match="canonical_futures_execution_invoked"):
+        executor.start_research_demo(record)
+
+
+def test_canonical_research_demo_executor_allows_quiet_no_trade_cycle(monkeypatch):
+    provider = _FakeTradingCycle(canonical=True, execution_status=None, unresolved=0)
+    executor = _executor(monkeypatch, trading_cycle=provider)
+    record = _copy_record(_demo_record(), started_at="2026-09-24T00:00:00Z", requested_at="2026-09-24T00:00:00Z")
+
+    result = executor.start_research_demo(record)
+
+    assert result["terminal"] is False
+    assert result["cycle"]["canonical_futures_execution_invoked"] is False
+    assert result["cycle"]["unresolved_obligations"] == 0
+
+
+def test_canonical_research_demo_executor_rejects_live_or_non_demo_venue(monkeypatch):
+    with pytest.raises(ConfigError, match="Bybit Demo Futures"):
+        _executor(
+            monkeypatch,
+            config=load_config(
+                {
+                    **_demo_runtime_env(),
+                    "TRIGGERTRADE_EXECUTION_VENUE": ExecutionVenue.LOCAL_PAPER.value,
+                }
+            ),
+        )
+
+
+def test_research_demo_dispatch_completes_terminal_result_with_canonical_executor(monkeypatch):
+    executor = _executor(
+        monkeypatch,
+        now="2026-10-02T00:00:01+00:00",
+        accounting=_FakeAccountingStore(()),
+    )
+    record = _copy_record(_demo_record(), started_at="2026-09-24T00:00:00Z", requested_at="2026-09-24T00:00:00Z")
+    store = _FakeResearchDemoStore(record)
+
+    detail = ResearchDemoExecutionDispatcher(store=store, executor=executor).dispatch(record.demo_run_id)
+    replay = ResearchDemoExecutionDispatcher(store=store, executor=executor).dispatch(record.demo_run_id)
+
+    assert detail == f"research_demo_completed:{record.demo_run_id}"
+    assert replay == "research_demo_replay:COMPLETED"
+    assert store.transitions == ["RUNNING", "COMPLETED"]
+
+
+def test_research_demo_postgres_executor_persists_progress_completion_and_reconnects():
+    psycopg = pytest.importorskip("psycopg")
+    settings = _settings()
+    try:
+        apply_postgres_migrations(dsn=settings.dsn, schema=settings.schema)
+        factory = PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)
+        handoff = PostgresResearchDemoExecutionHandoff(factory=factory)
+        research = _research_record()
+        trigger_set = _trigger_set()
+        rules = _rules_version()
+        handoff.start_research_demo(
+            research=research,
+            trigger_set=trigger_set,
+            rules=rules,
+            isolation=_isolation(),
+            started_at="2026-09-24T00:00:00+00:00",
+            pin_payload={"pin": "research-demo", "research_id": research.research_id},
+            demo_run_id="rdm-postgres-executor",
+        )
+        executor = CanonicalResearchDemoExecutionExecutor(
+            config=load_config(_demo_runtime_env()),
+            factory=factory,
+            trading_cycle=_FakeTradingCycle(),
+            accounting_store=_FakeAccountingStore(()),
+            clock=lambda: datetime.fromisoformat("2026-10-02T00:00:01+00:00"),
+        )
+        with PostgresUnitOfWork(factory) as uow:
+            detail = ResearchDemoExecutionDispatcher(
+                store=ResearchDemoExecutionStore(uow.connection),
+                executor=executor,
+            ).dispatch("rdm-postgres-executor")
+        with PostgresUnitOfWork(factory) as uow:
+            reloaded = ResearchDemoExecutionStore(uow.connection).get("rdm-postgres-executor")
+            replay = ResearchDemoExecutionDispatcher(
+                store=ResearchDemoExecutionStore(uow.connection),
+                executor=executor,
+            ).dispatch("rdm-postgres-executor")
+
+        assert detail == "research_demo_completed:rdm-postgres-executor"
+        assert replay == "research_demo_replay:COMPLETED"
+        assert reloaded is not None
+        assert reloaded.status == "COMPLETED"
+        assert reloaded.result is not None
+        assert reloaded.result["result"]["source"] == "canonical_futures_accounting"
+    finally:
+        with psycopg.connect(settings.dsn, autocommit=True) as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(f'DROP SCHEMA IF EXISTS "{settings.schema}" CASCADE')
+
+
 class _FakeResearchDemoStore:
     def __init__(self, record: ResearchDemoExecutionRecord) -> None:
         self.record = record
         self.transitions: list[str] = []
+        self.rechecks: list[str] = []
 
     def get(self, demo_run_id: str):
         assert demo_run_id == self.record.demo_run_id
@@ -249,6 +961,9 @@ class _FakeResearchDemoStore:
         self.record = _copy_record(self.record, status="COMPLETED", result=result)
         return self.record
 
+    def enqueue_recheck(self, record):
+        self.rechecks.append(record.demo_run_id)
+
 
 class _FakeResearchDemoExecutor:
     canonical_research_demo_executor = True
@@ -259,6 +974,86 @@ class _FakeResearchDemoExecutor:
     def start_research_demo(self, record):
         self.calls.append(record.demo_run_id)
         return {"terminal": False, "source": "canonical_test_executor"}
+
+
+class _FakeTradingCycle:
+    canonical_research_demo_trading_cycle = True
+
+    def __init__(self, *, unresolved=0, canonical=True, execution_status="ACKNOWLEDGED"):
+        self.unresolved = unresolved
+        self.canonical = canonical
+        self.execution_status = execution_status
+        self.calls = []
+
+    def run_research_demo_cycle(self, *, record, configuration):
+        self.calls.append((record.demo_run_id, configuration.research.research_id))
+        return {
+            "canonical_cycle": self.canonical,
+            "reconciliation_before_resubmit": self.canonical,
+            "resubmitted_without_reconciliation": False,
+            "canonical_trading_decisions_invoked": self.canonical,
+            "canonical_lifecycle_invoked": self.canonical,
+            "canonical_futures_execution_invoked": self.canonical and self.execution_status is not None,
+            "unresolved_obligations": self.unresolved,
+        }
+
+
+class _FakeAccountingStore:
+    def __init__(self, rows):
+        self.rows = tuple(rows)
+
+    def list_closed_trades(self, limit=20):
+        return self.rows[:limit]
+
+
+class _FakeExecutionStore:
+    def unresolved(self):
+        return ()
+
+
+class _FakePositionStore:
+    def list_open_positions(self, include_unknown=False):
+        return ()
+
+
+def _executor(monkeypatch, *, now="2026-09-25T00:00:00+00:00", config=None, accounting=None, trading_cycle=None):
+    class FakeUnitOfWork:
+        connection = object()
+
+        def __init__(self, factory):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeRegistry:
+        def __init__(self, connection):
+            pass
+
+        def get_research_demo_configuration(self, *, research_id, set_id, set_version, rules_version_id):
+            research = _research_record()
+            trigger_set = _trigger_set()
+            rules = _rules_version()
+            assert (research_id, set_id, set_version, rules_version_id) == (
+                research.research_id,
+                trigger_set.set_id,
+                trigger_set.version,
+                rules.rules_version_id,
+            )
+            return type("Config", (), {"research": research, "trigger_set": trigger_set, "rules": rules})()
+
+    monkeypatch.setattr("triggertrade.services.research_demo_execution.PostgresUnitOfWork", FakeUnitOfWork)
+    monkeypatch.setattr("triggertrade.services.research_demo_execution.PostgresResearchConfigurationRegistry", FakeRegistry)
+    return CanonicalResearchDemoExecutionExecutor(
+        config=config or load_config(_demo_runtime_env()),
+        factory=object(),
+        trading_cycle=trading_cycle or _FakeTradingCycle(),
+        accounting_store=accounting or _FakeAccountingStore(()),
+        clock=lambda: datetime.fromisoformat(now),
+    )
 
 
 def _demo_record() -> ResearchDemoExecutionRecord:
@@ -424,3 +1219,16 @@ def _settings() -> PostgresSettings:
     if not dsn:
         pytest.skip("TRIGGERTRADE_POSTGRES_DSN is not configured")
     return PostgresSettings(dsn=dsn, schema=f"tt_research_demo_{uuid.uuid4().hex[:16]}")
+
+
+def _demo_runtime_env() -> dict[str, str]:
+    return {
+        "TRIGGERTRADE_EXECUTION_VENUE": ExecutionVenue.BYBIT_DEMO_FUTURES.value,
+        "TRIGGERTRADE_ACTIVE_EXECUTION_VENUE": ExecutionVenue.BYBIT_DEMO_FUTURES.value,
+        "TRIGGERTRADE_TEST_EXECUTION_VENUE": ExecutionVenue.LOCAL_TEST_SIMULATION.value,
+        "TRIGGERTRADE_BYBIT_ENV": "demo",
+        "BYBIT_BASE_URL": "https://api-demo.bybit.com",
+        "TRIGGERTRADE_MARKET": "linear",
+        "TRIGGERTRADE_CATEGORY": "linear",
+        "TRIGGERTRADE_LIVE_TRADING_ENABLED": "false",
+    }

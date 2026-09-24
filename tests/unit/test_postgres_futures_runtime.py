@@ -35,6 +35,8 @@ def test_canonical_runtime_constructs_worker_owned_postgres_executor():
     assert "PostgresFuturesPositionStore" in source
     assert "PostgresOperatorStateStore" in source
     assert "operator_executor=operator_executor" in source
+    assert "CanonicalResearchDemoTradingCycleProvider" in source
+    assert "research_demo_executor=research_demo_executor" in source
     assert " futures_execution_store=FuturesExecutionStore(" not in source
     assert " accounting_store=FuturesAccountingStore(" not in source
     assert " position_store=FuturesPositionStore(" not in source
@@ -123,59 +125,66 @@ def test_close_all_uses_stable_operation_id_and_keeps_nonterminal_aggregate_in_p
     reason="isolated PostgreSQL DSN is required for canonical futures persistence smoke",
 )
 def test_postgres_futures_stores_persist_execution_position_and_accounting_round_trip():
-    settings = PostgresSettings.from_env(os.environ)
-    apply_postgres_migrations(dsn=settings.dsn, schema=settings.schema)
-    factory = PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)
-    suffix = uuid4().hex
+    psycopg = pytest.importorskip("psycopg")
+    base = PostgresSettings.from_env(os.environ)
+    settings = PostgresSettings(dsn=base.dsn, schema=f"tt_futures_store_{uuid4().hex[:16]}")
+    try:
+        apply_postgres_migrations(dsn=settings.dsn, schema=settings.schema)
+        factory = PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)
+        suffix = uuid4().hex
 
-    execution_store = PostgresFuturesExecutionStore(factory)
-    position_store = PostgresFuturesPositionStore(factory)
-    accounting_store = PostgresFuturesAccountingStore(factory)
+        execution_store = PostgresFuturesExecutionStore(factory)
+        position_store = PostgresFuturesPositionStore(factory)
+        accounting_store = PostgresFuturesAccountingStore(factory)
 
-    execution = _execution_record(suffix)
-    reserved, created = execution_store.reserve(execution)
-    assert created is True
-    assert reserved.intent_id == execution.intent_id
+        execution = _execution_record(suffix)
+        reserved, created = execution_store.reserve(execution)
+        assert created is True
+        assert reserved.intent_id == execution.intent_id
 
-    submitted = execution_store.update(
-        replace(
-            reserved,
-            status=OrderStatus.SUBMITTED,
-            exchange_order_id=f"exchange-{suffix}",
-            reconciliation_state="submitted",
-            updated_at=_now(),
+        submitted = execution_store.update(
+            replace(
+                reserved,
+                status=OrderStatus.SUBMITTED,
+                exchange_order_id=f"exchange-{suffix}",
+                reconciliation_state="submitted",
+                updated_at=_now(),
+            )
         )
-    )
-    assert PostgresFuturesExecutionStore(factory).get_by_client_order_id(execution.client_order_id) == submitted
-    assert submitted in PostgresFuturesExecutionStore(factory).unresolved()
+        assert PostgresFuturesExecutionStore(factory).get_by_client_order_id(execution.client_order_id) == submitted
+        assert submitted in PostgresFuturesExecutionStore(factory).unresolved()
 
-    position = _position_record(suffix, execution)
-    position_store.save_open_position(position)
-    marked = PostgresFuturesPositionStore(factory).mark_closing(
-        position.position_id,
-        f"close-intent-{suffix}",
-        f"risk-close-{suffix}",
-        "MANUAL",
-    )
-    assert marked.status == "CLOSING"
-    assert marked.close_intent_id == f"close-intent-{suffix}"
+        position = _position_record(suffix, execution)
+        position_store.save_open_position(position)
+        marked = PostgresFuturesPositionStore(factory).mark_closing(
+            position.position_id,
+            f"close-intent-{suffix}",
+            f"risk-close-{suffix}",
+            "MANUAL",
+        )
+        assert marked.status == "CLOSING"
+        assert marked.close_intent_id == f"close-intent-{suffix}"
 
-    fill = FuturesFillEvent(
-        event_id=f"fill-{suffix}",
-        trade_id=position.trade_id,
-        execution_id=execution.client_order_id,
-        symbol=position.symbol,
-        direction=PositionState.LONG,
-        action=PositionAction.OPEN_LONG.value,
-        quantity=Decimal("0.001"),
-        price=Decimal("50000"),
-        fee=Decimal("0.01"),
-        fee_asset="USDT",
-        occurred_at=_now(),
-        settlement_asset="USDT",
-    )
-    assert accounting_store.record_fill(fill) is True
-    assert PostgresFuturesAccountingStore(factory).list_fills(position.trade_id) == (fill,)
+        fill = FuturesFillEvent(
+            event_id=f"fill-{suffix}",
+            trade_id=position.trade_id,
+            execution_id=execution.client_order_id,
+            symbol=position.symbol,
+            direction=PositionState.LONG,
+            action=PositionAction.OPEN_LONG.value,
+            quantity=Decimal("0.001"),
+            price=Decimal("50000"),
+            fee=Decimal("0.01"),
+            fee_asset="USDT",
+            occurred_at=_now(),
+            settlement_asset="USDT",
+        )
+        assert accounting_store.record_fill(fill) is True
+        assert PostgresFuturesAccountingStore(factory).list_fills(position.trade_id) == (fill,)
+    finally:
+        with psycopg.connect(base.dsn, autocommit=True) as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(f'DROP SCHEMA IF EXISTS "{settings.schema}" CASCADE')
 
 
 def _execution_record(suffix: str) -> FuturesExecutionRecord:

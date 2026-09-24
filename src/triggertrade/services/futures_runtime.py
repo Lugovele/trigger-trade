@@ -107,6 +107,7 @@ class FuturesDualLaneRuntime:
         runtime_store: RuntimeStore,
         trigger_set_store: TriggerSetStore,
         operator_state_store: OperatorStateStore,
+        trading_rules_store: TradingRulesStore | None = None,
         daily_loss_store: DailyLossStore | None = None,
         message_store: MessageStore | None = None,
         position_store: FuturesPositionStore | None = None,
@@ -133,7 +134,7 @@ class FuturesDualLaneRuntime:
             store=InstrumentCatalogStore(config.futures_runtime.db_path),
             client=market_client,
         )
-        self._trading_rules_store = TradingRulesStore(config.futures_runtime.db_path)
+        self._trading_rules_store = trading_rules_store or TradingRulesStore(config.futures_runtime.db_path)
         self._trading_rules_service = TradingRulesService(self._trading_rules_store, symbol_validator=self._instrument_catalog.validate_symbol)
         self._trading_rules_service.ensure_initial_version(config)
         self._active_adapter = active_adapter or BybitFuturesExecutionAdapter(market_client)
