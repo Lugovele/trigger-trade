@@ -17,6 +17,7 @@ from triggertrade.persistence import (
     ResearchBacktestStatus,
     ResearchDemoStatus,
     ResearchDecision,
+    ResearchStatus,
     FuturesPositionRecord,
     FuturesPositionStore,
     TradingRulesStore,
@@ -30,7 +31,13 @@ from triggertrade.persistence.runtime_store import RuntimeStore
 from triggertrade.persistence.trace_store import TraceStore
 from triggertrade.rules import TakeProfitMode, TradingRulesService
 from triggertrade.research_pins import research_pin_digest, research_pin_payload
-from triggertrade.services.research import ResearchDemoIsolation, ResearchPromotionCommand, ResearchService, ResearchServiceError
+from triggertrade.services.research import (
+    ResearchDemoExecutionHandoffResult,
+    ResearchDemoIsolation,
+    ResearchPromotionCommand,
+    ResearchService,
+    ResearchServiceError,
+)
 from tests.unit.test_backtest_replay import _config, _instrument, _trade_candles
 from tests.unit.test_futures_performance_analytics import _fill as _accounting_fill
 from triggertrade.accounting import close_futures_trade
@@ -338,6 +345,26 @@ def test_research_demo_rejects_unattributed_or_live_like_isolation_scopes(tmp_pa
     assert missing_state.blocked_reason == "research_demo_isolation_scope_unattributed"
     assert live_scope.status is ResearchDemoStatus.BLOCKED
     assert live_scope.blocked_reason == "research_demo_live_side_effect_scope_forbidden"
+    assert FuturesExecutionStore(db).unresolved() == ()
+
+
+def test_research_demo_safe_isolation_still_requires_canonical_handoff(tmp_path):
+    db, rules = _research_db(tmp_path)
+    research = _service(db).create_research(
+        set_id="triggertrade-futures-core",
+        set_version="v1",
+        rules_version_id=rules.get_current_rules_version().rules_version_id,
+    )
+
+    demo = _service(
+        db,
+        demo_isolation=_safe_demo_isolation(),
+        demo_execution_handoff=False,
+    ).start_demo_run(research.research_id, created_at="2026-09-08T12:00:00+00:00")
+
+    assert demo.status is ResearchDemoStatus.BLOCKED
+    assert demo.blocked_reason == "research_demo_canonical_execution_handoff_unavailable"
+    assert ResearchStore(db).get_research(research.research_id).status is ResearchStatus.BLOCKED
     assert FuturesExecutionStore(db).unresolved() == ()
 
 
@@ -959,10 +986,15 @@ def _service(
     *,
     with_backtest_runtime=False,
     demo_isolation=None,
+    demo_execution_handoff=None,
     backtest_runner=None,
     promotion_governance_store=None,
     legacy_sqlite_promotion_enabled=False,
 ):
+    if demo_execution_handoff is None and demo_isolation is not None:
+        demo_execution_handoff = _FakeResearchDemoExecutionHandoff()
+    elif demo_execution_handoff is False:
+        demo_execution_handoff = None
     return ResearchService(
         store=ResearchStore(db),
         trigger_set_store=TriggerSetStore(db),
@@ -971,6 +1003,7 @@ def _service(
         config=_config(db) if with_backtest_runtime else None,
         instrument=_instrument() if with_backtest_runtime else None,
         demo_isolation=demo_isolation,
+        demo_execution_handoff=demo_execution_handoff,
         backtest_runner=backtest_runner,
         promotion_governance_store=promotion_governance_store,
         legacy_sqlite_promotion_enabled=legacy_sqlite_promotion_enabled,
@@ -1046,6 +1079,29 @@ class _FakePromotionGovernanceStore:
             state=SimpleNamespace(payload=stored_payload, payload_digest=digest),
             outbox=SimpleNamespace(message_id=request_id, payload_digest=digest),
             inserted=inserted,
+        )
+
+
+class _FakeResearchDemoExecutionHandoff:
+    canonical_worker_handoff = True
+
+    def __init__(self) -> None:
+        self.requests = []
+
+    def start_research_demo(self, *, research, rules, isolation, started_at, pin_payload):
+        self.requests.append(
+            {
+                "research_id": research.research_id,
+                "rules_version_id": rules.rules_version_id,
+                "execution_scope_id": isolation.execution_scope_id,
+                "started_at": started_at,
+                "pin_digest": canonical_json_digest(pin_payload),
+            }
+        )
+        return ResearchDemoExecutionHandoffResult(
+            handoff_id=f"research-demo-handoff:{research.research_id}:{started_at}",
+            execution_owner="trading-worker",
+            durable=True,
         )
 
 

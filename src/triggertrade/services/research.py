@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 import re
 import sqlite3
-from typing import Any, Callable
+from typing import Any, Callable, Protocol
 
 from triggertrade.analytics import TradePerformanceFact, assemble_entry_report, assemble_take_profit_report, compute_futures_performance
 from triggertrade.canonical_json import canonical_json_digest
@@ -71,6 +71,27 @@ class ResearchCompareResult:
 
 
 @dataclass(frozen=True)
+class ResearchDemoExecutionHandoffResult:
+    handoff_id: str
+    execution_owner: str
+    durable: bool
+
+
+class ResearchDemoExecutionHandoff(Protocol):
+    canonical_worker_handoff: bool
+
+    def start_research_demo(
+        self,
+        *,
+        research: ResearchRecord,
+        rules: TradingRulesVersion,
+        isolation: ResearchDemoIsolation,
+        started_at: str,
+        pin_payload: dict[str, Any],
+    ) -> ResearchDemoExecutionHandoffResult: ...
+
+
+@dataclass(frozen=True)
 class ResearchPromotionCommand:
     operator_principal: str
     authorization_source: str
@@ -91,6 +112,7 @@ class ResearchService:
         config: AppConfig | None = None,
         instrument: FuturesInstrumentMetadata | None = None,
         demo_isolation: ResearchDemoIsolation | None = None,
+        demo_execution_handoff: ResearchDemoExecutionHandoff | None = None,
         backtest_runner: BacktestRunner | None = None,
         promotion_governance_store: ResearchPromotionGovernanceStore | None = None,
         legacy_sqlite_promotion_enabled: bool = False,
@@ -103,6 +125,7 @@ class ResearchService:
         self._config = config
         self._instrument = instrument
         self._demo_isolation = demo_isolation or ResearchDemoIsolation()
+        self._demo_execution_handoff = demo_execution_handoff
         self._backtest_runner = backtest_runner or run_backtest
         self._promotion_governance_store = promotion_governance_store
         self._legacy_sqlite_promotion_enabled = legacy_sqlite_promotion_enabled
@@ -258,6 +281,26 @@ class ResearchService:
             blocked_reason=None,
             isolation=self._demo_isolation,
         )
+        handoff = self._demo_execution_handoff
+        if handoff is None or not getattr(handoff, "canonical_worker_handoff", False):
+            return self._blocked_demo(
+                research,
+                reason="research_demo_canonical_execution_handoff_unavailable",
+                created_at=created_at,
+            )
+        handoff_result = handoff.start_research_demo(
+            research=research,
+            rules=rules,
+            isolation=self._demo_isolation,
+            started_at=now,
+            pin_payload=run_pins,
+        )
+        if handoff_result.execution_owner != "trading-worker" or not handoff_result.durable:
+            return self._blocked_demo(
+                research,
+                reason="research_demo_canonical_execution_handoff_unavailable",
+                created_at=created_at,
+            )
         record = self._store.add_demo_run(
             research_id=research.research_id,
             status=ResearchDemoStatus.RUNNING,
@@ -273,7 +316,12 @@ class ResearchService:
             run_id=record.run_id,
             result=record.status.value,
             created_at=record.created_at,
-            metadata={"execution_scope_id": record.execution_scope_id, "account_scope": record.account_scope},
+            metadata={
+                "execution_scope_id": record.execution_scope_id,
+                "account_scope": record.account_scope,
+                "handoff_id": handoff_result.handoff_id,
+                "execution_owner": handoff_result.execution_owner,
+            },
         )
         return record
 
