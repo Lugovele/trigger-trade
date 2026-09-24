@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from html import escape
 from http import HTTPStatus
+from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
@@ -48,6 +49,8 @@ from triggertrade.services.research import ResearchService, ResearchServiceError
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 ALLOWED_HOSTS = frozenset({DEFAULT_HOST, "0.0.0.0"})
+LOCAL_DEV_OPERATOR_COOKIE = "tt_local_operator"
+LOCAL_DEV_OPERATOR_HEADER = "X-TriggerTrade-Local-Operator"
 
 
 class DashboardServer(ThreadingHTTPServer):
@@ -80,7 +83,7 @@ class DashboardServer(ThreadingHTTPServer):
         self.operator_actions = operator_actions
         self.operator_control_token = (
             secrets.token_urlsafe(24)
-            if operator_authorizer.auth_mode == LOCAL_DEV_AUTH_SOURCE
+            if operator_authorizer.auth_mode == LOCAL_DEV_AUTH_SOURCE and _server_is_loopback(self)
             else ""
         )
         self.readiness_env = dict(os.environ if readiness_env is None else readiness_env)
@@ -455,6 +458,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(payload)))
         self.send_header("Cache-Control", "no-store")
+        cookie = _local_dev_operator_cookie(self.server)
+        if cookie:
+            self.send_header("Set-Cookie", cookie)
         self.end_headers()
         self.wfile.write(payload)
 
@@ -493,6 +499,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         scope: str,
         target: str = "ACTIVE",
     ) -> AuthorizedOperatorCommand | None:
+        payload = _payload_with_local_dev_cookie_token(self.headers, payload, self.server)
         try:
             return self.server.operator_authorizer.authorize_http_command(
                 command_type,
@@ -516,6 +523,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         values: dict[str, list[str]],
     ) -> AuthorizedOperatorCommand | None:
         payload = {key: items[0] for key, items in values.items() if items}
+        payload = _payload_with_local_dev_cookie_token(self.headers, payload, self.server)
         try:
             return self.server.operator_authorizer.authorize_http_command(
                 command_type,
@@ -527,6 +535,76 @@ class DashboardHandler(BaseHTTPRequestHandler):
             )
         except OperatorAuthorizationError:
             return None
+
+
+def _local_dev_operator_cookie(server: DashboardServer) -> str:
+    if server.operator_authorizer.auth_mode != LOCAL_DEV_AUTH_SOURCE or not server.operator_control_token:
+        return ""
+    if not _server_is_loopback(server):
+        return ""
+    cookie = SimpleCookie()
+    cookie[LOCAL_DEV_OPERATOR_COOKIE] = server.operator_control_token
+    morsel = cookie[LOCAL_DEV_OPERATOR_COOKIE]
+    morsel["path"] = "/"
+    morsel["httponly"] = True
+    morsel["samesite"] = "Strict"
+    morsel["max-age"] = "28800"
+    return morsel.OutputString()
+
+
+def _payload_with_local_dev_cookie_token(headers, payload: dict, server: DashboardServer) -> dict:
+    if server.operator_authorizer.auth_mode != LOCAL_DEV_AUTH_SOURCE:
+        return payload
+    if payload.get("token") or not server.operator_control_token:
+        return payload
+    if not _server_is_loopback(server):
+        return payload
+    if not _local_dev_cookie_request_is_same_origin(headers, server):
+        return payload
+    token = _cookie_value(headers.get("Cookie", ""), LOCAL_DEV_OPERATOR_COOKIE)
+    if token != server.operator_control_token:
+        return payload
+    updated = dict(payload)
+    updated["token"] = token
+    return updated
+
+
+def _server_is_loopback(server: DashboardServer) -> bool:
+    host = str(server.server_address[0])
+    return host in {DEFAULT_HOST, "::1", "localhost"}
+
+
+def _local_dev_cookie_request_is_same_origin(headers, server: DashboardServer) -> bool:
+    expected = _server_origin(server)
+    if headers.get(LOCAL_DEV_OPERATOR_HEADER) != "1":
+        return False
+    host = (headers.get("Host") or "").strip().lower()
+    if host and host != expected.removeprefix("http://"):
+        return False
+    origin = (headers.get("Origin") or "").strip().lower()
+    if origin and origin != expected:
+        return False
+    referer = (headers.get("Referer") or "").strip().lower()
+    if referer and not (referer == expected or referer.startswith(expected + "/")):
+        return False
+    return True
+
+
+def _server_origin(server: DashboardServer) -> str:
+    host, port = server.server_address[:2]
+    return f"http://{host}:{port}".lower()
+
+
+def _cookie_value(raw_cookie: str, name: str) -> str:
+    if not raw_cookie:
+        return ""
+    cookie = SimpleCookie()
+    try:
+        cookie.load(raw_cookie)
+    except Exception:  # noqa: BLE001 - malformed cookies simply fail authorization.
+        return ""
+    morsel = cookie.get(name)
+    return morsel.value if morsel is not None else ""
 
 
 def render_dashboard(
@@ -652,7 +730,9 @@ def create_server(
         postgres_health_probe=postgres_health_probe,
     )
     read_model.operator_control_token = server.operator_control_token
-    read_model.operator_command_submit_enabled = authorizer.browser_commands_supported
+    read_model.operator_command_submit_enabled = authorizer.browser_commands_supported and (
+        authorizer.auth_mode != LOCAL_DEV_AUTH_SOURCE or bool(server.operator_control_token)
+    )
     return server
 
 

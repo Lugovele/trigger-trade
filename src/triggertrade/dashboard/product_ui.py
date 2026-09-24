@@ -1652,9 +1652,10 @@ def _reference_backend_script(payload: str) -> str:
   const desktop = document.getElementById("tt-desktop-reference");
   const mobile = document.getElementById("tt-mobile-reference");
   const pageMap = {overview:"overview",config:"configuration",research:"research","research-detail":"research"};
-  let posView = "placed", currentResearchId = null, currentResearch = null, currentCompare = null;
+  let posView = "placed", historyRange = "24H", currentResearchId = null, currentResearch = null, currentCompare = null;
   let compareScope = "overall", comparePeriod = "7D";
   let coinDraftVersion = null, coinDraft = [];
+  let coinSearchOpen = false, coinSearchQuery = "", coinSearchIndex = 0, coinSearchError = "";
   const h = (v) => String(v ?? "—").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
   const money = (v) => v === null || v === undefined || v === "" ? "—" : "$" + String(v);
   const count = (v) => v === null || v === undefined ? "—" : String(v);
@@ -1670,7 +1671,7 @@ def _reference_backend_script(payload: str) -> str:
 
   function canSubmit(){ return !!state.canSubmitOperatorControl; }
   async function postJson(url, body){
-    const response = await fetch(url, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body || {})});
+    const response = await fetch(url, {method:"POST", headers:{"Content-Type":"application/json","X-TriggerTrade-Local-Operator":"1"}, body:JSON.stringify(body || {})});
     const data = await response.json().catch(() => ({}));
     if(!response.ok) throw new Error(data.error || data.reason || "Request failed");
     return data;
@@ -1692,6 +1693,43 @@ def _reference_backend_script(payload: str) -> str:
   function availableCoinSymbols(){
     const existing = new Set(coinDraft.map(c => c.symbol));
     return catalogSymbols().filter(symbol => !existing.has(symbol));
+  }
+  function matchingCoinSymbols(){
+    const q = coinSearchQuery.trim().toUpperCase();
+    const symbols = availableCoinSymbols();
+    return q ? symbols.filter(symbol => symbol.includes(q)) : symbols;
+  }
+  function resetCoinSearch(){
+    coinSearchOpen = false;
+    coinSearchQuery = "";
+    coinSearchIndex = 0;
+    coinSearchError = "";
+  }
+  function addCoinSymbol(symbol){
+    const clean = String(symbol || "").trim().toUpperCase();
+    const symbols = catalogSymbols();
+    if(!symbols.length){ coinSearchError = "Supported instrument catalog is unavailable."; updateCoinSearchResults(); return false; }
+    if(!symbols.includes(clean)){ coinSearchError = "Symbol is not available in the supported instrument catalog."; updateCoinSearchResults(); return false; }
+    if(coinDraft.some(c => c.symbol === clean)){ coinSearchError = "Coin is already included."; updateCoinSearchResults(); return false; }
+    coinDraft = [...coinDraft, {symbol: clean, enabled:true, max_allocation_pct:""}];
+    resetCoinSearch();
+    renderRules();
+    return true;
+  }
+  function coinSearchResultsHtml(){
+    const matches = matchingCoinSymbols();
+    const active = Math.min(coinSearchIndex, Math.max(matches.length - 1, 0));
+    return `<div class="coin-search-options">${matches.slice(0, 8).map((symbol, index) => `<button class="coin-search-option ${index === active ? "active" : ""}" type="button" data-symbol="${h(symbol)}">${h(symbol)}</button>`).join("") || '<div class="coin-search-empty">No matching supported symbols.</div>'}</div>${coinSearchError ? `<div class="coin-search-error">${h(coinSearchError)}</div>` : ""}`;
+  }
+  function bindCoinSearchOptions(scope){
+    qa(".coin-search-option", scope || desktop).forEach(button => button.addEventListener("click", () => addCoinSymbol(button.dataset.symbol)));
+  }
+  function updateCoinSearchResults(){
+    const box = q("#config-rules .coin-combobox", desktop);
+    if(!box) return;
+    box.querySelectorAll(".coin-search-options,.coin-search-empty,.coin-search-error").forEach(node => node.remove());
+    q(".coin-search-input", box)?.insertAdjacentHTML("afterend", coinSearchResultsHtml());
+    bindCoinSearchOptions(box);
   }
   function researchSetOptions(){
     return (state.registry.sets || []).map(s => ({
@@ -1717,25 +1755,72 @@ def _reference_backend_script(payload: str) -> str:
   function triggerStatusLabel(trigger){
     return trigger?.immutable ? "Active" : "Research";
   }
-  function postForm(id, fill){
+  function operatorStatusNode(){
+    let node = q("#operatorCommandStatus", desktop);
+    if(!node){
+      node = document.createElement("div");
+      node.id = "operatorCommandStatus";
+      node.className = "panel-meta";
+      node.style.minWidth = "180px";
+      const mobileActive = window.matchMedia && window.matchMedia("(max-width:760px)").matches;
+      const actions = mobileActive ? q(".panel-head", mobile) : q(".positions-actions", desktop);
+      if(actions) actions.appendChild(node);
+    }
+    return node;
+  }
+  function setOperatorStatus(message, tone="neutral"){
+    const node = operatorStatusNode();
+    if(!node) return;
+    node.innerHTML = h(message || "");
+    node.className = "panel-meta " + tone;
+  }
+  function publicFormError(text){
+    return String(text || "Command failed").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 180) || "Command failed";
+  }
+  function requestOperatorConfirmation(message, submit){
+    const node = operatorStatusNode();
+    if(!node) return;
+    node.className = "panel-meta";
+    node.innerHTML = `${h(message)} <button class="row-action js-confirm-operator-command" type="button">Confirm</button> <button class="row-action js-cancel-operator-command" type="button">Cancel</button>`;
+    q(".js-confirm-operator-command", node)?.addEventListener("click", submit);
+    q(".js-cancel-operator-command", node)?.addEventListener("click", () => setOperatorStatus("Cancelled."));
+  }
+  async function submitOperatorForm(id, fill, successMessage, afterSuccess){
     const form = document.getElementById(id);
-    if(!canSubmit() || !form) return;
+    if(!canSubmit()){ setOperatorStatus("Operator command submission is unavailable.", "negative"); return false; }
+    if(!form){ setOperatorStatus("Operator command form is unavailable.", "negative"); return false; }
     if(fill) fill(form);
-    form.submit();
+    const body = new URLSearchParams(new FormData(form));
+    setOperatorStatus("Submitting...", "neutral");
+    try{
+      const response = await fetch(form.action, {method:"POST", headers:{"Content-Type":"application/x-www-form-urlencoded","X-TriggerTrade-Local-Operator":"1"}, body});
+      const text = await response.text();
+      if(!response.ok) throw new Error(publicFormError(text));
+      if(afterSuccess) afterSuccess();
+      setOperatorStatus(successMessage || "Command submitted.", "positive");
+      return true;
+    }catch(error){
+      setOperatorStatus(error.message || "Command failed.", "negative");
+      return false;
+    }
   }
   window.confirmPauseEntries = function(){
     const paused = state.operatorState === "TRADING_PAUSED";
-    const text = paused ? "Resume new entries?" : "Pause new entries?";
-    if(confirm(text)) postForm(paused ? "operatorResumeForm" : "operatorPauseForm");
+    requestOperatorConfirmation(paused ? "Confirm resume new entries." : "Confirm pause new entries.", () => submitOperatorForm(
+      paused ? "operatorResumeForm" : "operatorPauseForm",
+      null,
+      paused ? "Entries resumed." : "Entries paused.",
+      () => { state.operatorState = paused ? "TRADING_ENABLED" : "TRADING_PAUSED"; state.operatorStateAvailable = true; applyOperatorState(); }
+    ));
   };
   window.confirmCloseAll = function(){
-    if(confirm("Close all currently open positions?")) postForm("operatorCloseAllForm");
+    requestOperatorConfirmation("Confirm Close All open positions.", () => submitOperatorForm("operatorCloseAllForm", null, "Close All submitted."));
   };
   window.closePosition = function(id, symbol){
-    if(confirm("Close " + symbol + "?")) postForm("operatorCloseOneForm", (form) => {
+    requestOperatorConfirmation("Confirm close " + (symbol || "position") + ".", () => submitOperatorForm("operatorCloseOneForm", (form) => {
       form.querySelector('[name="position_id"]').value = id || "";
       form.querySelector('[name="symbol"]').value = symbol || "";
-    });
+    }, "Close Position submitted."));
   };
   document.addEventListener("click", (event) => {
     const button = event.target.closest(".js-close-position");
@@ -1748,14 +1833,14 @@ def _reference_backend_script(payload: str) -> str:
     if(triggerButton){
       event.stopPropagation();
       openConfig("triggers");
-      showTrigger(triggerButton.dataset.triggerId || "", triggerButton.dataset.triggerVersion || "");
+      window.showTrigger(triggerButton.dataset.triggerId || "", triggerButton.dataset.triggerVersion || "");
       return;
     }
     const setButton = event.target.closest(".js-open-set");
     if(setButton){
       event.stopPropagation();
       openConfig("sets");
-      showSet(setButton.dataset.setId || "", setButton.dataset.setVersion || "");
+      window.showSet(setButton.dataset.setId || "", setButton.dataset.setVersion || "");
     }
   });
 
@@ -1822,7 +1907,21 @@ def _reference_backend_script(payload: str) -> str:
     const history = (state.portfolio.closed_positions || []).map(r => ({kind:"history", time:r.closed_at || "—", coin:r.symbol, side:r.side, status:"CLOSED", qty:[r.qty,r.qty_unit].filter(Boolean).join(" "), value:r.value, entry:r.entry_price, current:r.exit_price, tp:[pct(r.planned_tp_pct),money(r.planned_tp_price)].join(" · "), sl:[pct(r.planned_sl_pct),money(r.planned_sl_price)].join(" · "), pnl:[pct(r.realized_pnl_pct),signedMoney(r.realized_pnl_amount)].join(" · "), set:r.set_version || "legacy/unknown", age:dur(r.duration_seconds), reason:String(r.close_reason || "—").replace(/_/g," "), id:r.position_id}));
     return {placed: [], open, history};
   }
-  function selected(root, id){ return q("#" + id, root)?.value || ""; }
+  function selected(root, id){
+    const raw = q("#" + id, root)?.value || "";
+    return String(raw).replace(/^[^:]+:\s*/, "");
+  }
+  function historyRangeMillis(){
+    return ({ "24H": 1, "7D": 7, "30D": 30, "90D": 90 }[historyRange] || 1) * 24 * 60 * 60 * 1000;
+  }
+  function applyHistoryRange(rows){
+    if(posView !== "history") return rows;
+    const cutoff = Date.now() - historyRangeMillis();
+    return rows.filter(row => {
+      const ts = Date.parse(row.time || "");
+      return Number.isNaN(ts) || ts >= cutoff;
+    });
+  }
   function filtered(rows, root){
     const coin = selected(root, root === mobile ? "fcoin" : "filter-coin");
     const side = selected(root, root === mobile ? "fside" : "filter-side");
@@ -1834,23 +1933,33 @@ def _reference_backend_script(payload: str) -> str:
     const rows = [...positionRows().open, ...positionRows().history];
     const coins = ["All", ...new Set(rows.map(r => r.coin).filter(Boolean))];
     const sets = ["All", ...new Set(rows.map(r => r.set).filter(Boolean))];
+    const sides = ["All", ...new Set(rows.map(r => r.side).filter(Boolean))];
+    const statuses = ["All", ...new Set(rows.map(r => r.status).filter(Boolean))];
     [["filter-coin", coins, "Coin"], ["filter-set", sets, "Set"]].forEach(([id, values, label]) => { const node = q("#"+id, desktop); if(node) node.innerHTML = `<option value="">${label}: All</option>` + values.filter(v=>v!=="All").map(v=>`<option>${h(v)}</option>`).join(""); });
-    [["fcoin", coins], ["fset", sets]].forEach(([id, values]) => { const node = q("#"+id, mobile); if(node) node.innerHTML = values.map(v=>`<option>${h(v)}</option>`).join(""); });
+    [["filter-side", sides, "Side"], ["filter-status", statuses, "Status"]].forEach(([id, values, label]) => { const node = q("#"+id, desktop); if(node) node.innerHTML = `<option value="">${label}: All</option>` + values.filter(v=>v!=="All").map(v=>`<option>${h(v)}</option>`).join(""); });
+    [["fcoin", coins], ["fset", sets], ["fside", sides], ["fstatus", statuses]].forEach(([id, values]) => { const node = q("#"+id, mobile); if(node) node.innerHTML = values.map(v=>`<option>${h(v)}</option>`).join(""); });
+  }
+  function historyRangeFromButton(button){
+    return button.dataset.range || String(button.textContent || "").trim();
   }
   function renderPositions(){
     const all = positionRows();
-    const desktopRows = filtered(all[posView] || [], desktop);
+    const desktopRows = filtered(applyHistoryRange(all[posView] || []), desktop);
     const body = q("#positions-body", desktop);
     const historyTools = q("#history-tools", desktop);
     const historyNote = q("#history-note", desktop) || q("#history-note", mobile);
     if(historyTools) historyTools.classList.toggle("show", posView === "history");
-    if(historyNote) historyNote.style.display = posView === "history" ? "" : "none";
-    qa(".positions-tab", desktop).forEach(b => b.classList.toggle("active", b.dataset.view === posView || b.dataset.pos === posView));
+    if(historyNote){
+      historyNote.style.display = posView === "history" ? "" : "none";
+      historyNote.textContent = `History range: ${historyRange}`;
+    }
+    qa(".positions-tab", desktop).forEach(b => b.classList.toggle("active", positionViewFromButton(b) === posView));
+    qa(".range-btn", desktop).forEach(b => b.classList.toggle("active", historyRangeFromButton(b) === historyRange));
     qa(".seg button", mobile).forEach(b => b.classList.toggle("active", b.id && b.id.indexOf(posView) === 0));
     if(body){
-      body.innerHTML = desktopRows.length ? desktopRows.map(r => `<tr><td>${h(r.time)}</td><td><b>${h(r.coin)}</b></td><td>${sideBadge(r.side)}</td><td>${badge(r.status)}</td><td>${h(r.qty)}</td><td>${money(r.value)}</td><td>${money(r.entry)}</td><td>${money(r.current)}</td><td>${h(r.tp)}</td><td>${h(r.sl)}</td><td class="${pnlClass(r.pnl)}">${h(r.pnl)}</td><td>${h(r.set)}</td><td>${h(r.age)}</td><td>${h(r.reason)}</td><td>${r.kind === "open" ? `<button class="row-action danger js-close-position" data-position-id="${h(r.id)}" data-symbol="${h(r.coin)}">Close</button>` : r.kind === "placed" ? '<button class="row-action">Cancel</button>' : "—"}</td></tr>`).join("") : '<tr><td colspan="15" class="empty">No records.</td></tr>';
+      body.innerHTML = desktopRows.length ? desktopRows.map(r => `<tr><td>${h(r.time)}</td><td><b>${h(r.coin)}</b></td><td>${sideBadge(r.side)}</td><td>${badge(r.status)}</td><td>${h(r.qty)}</td><td>${money(r.value)}</td><td>${money(r.entry)}</td><td>${money(r.current)}</td><td>${h(r.tp)}</td><td>${h(r.sl)}</td><td class="${pnlClass(r.pnl)}">${h(r.pnl)}</td><td>${h(r.set)}</td><td>${h(r.age)}</td><td>${h(r.reason)}</td><td>${r.kind === "open" ? `<button class="row-action danger js-close-position" data-position-id="${h(r.id)}" data-symbol="${h(r.coin)}">Close</button>` : r.kind === "placed" ? '<button class="row-action" type="button" disabled title="Cancel Order backend command is unavailable">Cancel</button>' : "—"}</td></tr>`).join("") : '<tr><td colspan="15" class="empty">No records.</td></tr>';
     }
-    const mobileRows = filtered(all[posView] || [], mobile);
+    const mobileRows = filtered(applyHistoryRange(all[posView] || []), mobile);
     const list = q("#list", mobile);
     if(list){
       list.innerHTML = mobileRows.length ? mobileRows.map(r => `<article class="card" onclick="this.classList.toggle('expanded')"><div class="card-top"><div class="coin-row"><span class="coin">${h(r.coin)}</span><span class="side">${h(r.side)}</span></div>${badge(r.status)}</div><div class="grid"><div><div class="fl">Entry</div><div class="fv">${money(r.entry)}</div></div><div><div class="fl">${r.status === "CLOSED" ? "Exit" : "Current"}</div><div class="fv">${money(r.current)}</div></div><div><div class="fl">Take Profit</div><div class="fv">${h(r.tp)}</div></div><div><div class="fl">Stop Loss</div><div class="fv">${h(r.sl)}</div></div>${r.pnl !== "—" ? `<div><div class="fl">P&amp;L</div><div class="fv ${pnlClass(r.pnl)}">${h(r.pnl)}</div></div>` : ""}${r.reason !== "—" ? `<div class="reason"><div class="fl">Reason</div><div class="fv">${h(r.reason)}</div></div>` : ""}</div><div class="meta"><span>${h(r.set)}</span><span>${h(r.age)}</span></div><div class="details"><div><div class="fl">Time</div><div class="fv">${h(r.time)}</div></div><div><div class="fl">Quantity</div><div class="fv">${h(r.qty)}</div></div><div><div class="fl">Value</div><div class="fv">${money(r.value)}</div></div><div><div class="fl">Status</div><div class="fv">${h(r.status)}</div></div></div>${r.kind === "open" ? `<button class="row-action danger js-close-position" data-position-id="${h(r.id)}" data-symbol="${h(r.coin)}">Close Position</button>` : ""}</article>`).join("") : '<div class="empty">No records.</div>';
@@ -1876,7 +1985,11 @@ def _reference_backend_script(payload: str) -> str:
   window.applyFilters = function(){ window.backdrop("filters-bg"); renderPositions(); };
   window.resetFilters = function(){ qa("select", mobile).forEach(s => s.selectedIndex = 0); renderPositions(); };
   window.action = function(name){ window.backdrop("actions-bg"); if(name === "pause") confirmPauseEntries(); if(name === "close") confirmCloseAll(); };
-  qa(".positions-tab", desktop).forEach(b => b.addEventListener("click", () => setPositionsView(b.dataset.view || b.dataset.pos)));
+  function positionViewFromButton(button){
+    return button.dataset.view || button.dataset.pos || String(button.id || "").replace(/-tab$/, "");
+  }
+  qa(".positions-tab", desktop).forEach(b => b.addEventListener("click", () => window.setPositionsView(positionViewFromButton(b))));
+  qa(".range-btn", desktop).forEach(b => b.addEventListener("click", () => { historyRange = historyRangeFromButton(b) || historyRange; renderPositions(); }));
   qa(".positions-tools-row select", desktop).forEach(s => s.addEventListener("change", renderPositions));
 
   const metricDocs = [
@@ -1885,10 +1998,10 @@ def _reference_backend_script(payload: str) -> str:
     {id:"F-002", key:"turnover", name:"Relative Turnover", timeframe:"5m", type:"Formula", meaning:"Relative Turnover measures current completed-period trading activity relative to the methodology-defined historical reference activity.", source:"Turnover observations are taken from completed exchange market-data intervals. Both the current observation and the required reference observations must exist.", variables:[["Current Turnover","Turnover of the completed interval being evaluated."],["Reference Turnover","Historical reference turnover calculated from the required comparison observations."],["Relative Turnover","Current Turnover divided by Reference Turnover."]], steps:["Read the completed current-period turnover from exchange market data.","Read the completed historical turnover observations required for the reference.","Calculate the methodology-defined Reference Turnover.","Divide Current Turnover by Reference Turnover.","Pass the resulting ratio to consuming Trigger logic."], formula:"Relative Turnover = Current Turnover / Reference Turnover", example:"Current Turnover = 2,000,000 USDT.\nReference Turnover = 1,000,000 USDT.\n\nRelative Turnover = 2.0.\n\nThat means current turnover is twice the reference level.", unavailable:"If the required current or reference observations are unavailable, or the reference denominator is invalid, the result is unavailable."}
   ];
   function renderMetrics(){
-    const body = q("#metrics-body", desktop);
+    const body = q("#metrics-body", desktop) || q("#metricsBody", desktop) || q("#config-metrics tbody", desktop);
     if(body) body.innerHTML = metricDocs.map(m => `<tr class="catalog-row" data-metric="${m.key}"><td>${h(m.name)}</td><td>${h(m.timeframe)}</td></tr>`).join("");
-    qa("[data-metric]", desktop).forEach(row => row.onclick = () => showMetric(row.dataset.metric));
-    showMetric(metricDocs[0].id);
+    qa("[data-metric]", desktop).forEach(row => row.onclick = () => window.showMetric(row.dataset.metric));
+    window.showMetric(metricDocs[0].id);
   }
   window.showMetric = function(id){
     const m = metricDocs.find(x => x.key === id || x.id === id) || metricDocs[0];
@@ -1898,24 +2011,28 @@ def _reference_backend_script(payload: str) -> str:
   function renderTriggers(){
     const rows = state.registry.triggers || [];
     const sets = state.registry.sets || [];
-    const body = q("#triggers-body", desktop);
+    const body = q("#triggers-body", desktop) || q("#triggersBody", desktop) || q("#config-triggers tbody", desktop);
     if(body) body.innerHTML = rows.length ? rows.map(t => `<tr class="catalog-row" data-trigger-id="${h(t.trigger_id)}" data-trigger-version="${h(t.version)}"><td>${h(t.display_name || t.trigger_id)}</td><td>${h(t.version)}</td><td>—</td><td>${h(t.what_it_checks || "—")}</td><td>${h(sets.filter(s => (s.trigger_versions||[]).some(v => v.trigger_id === t.trigger_id && v.version === t.version)).map(s => s.set_id + " " + s.version).join(", ") || "—")}</td><td>${badge(t.immutable ? "ACTIVE" : "RESEARCH")}</td></tr>`).join("") : '<tr><td colspan="6" class="empty">No Trigger versions available.</td></tr>';
-    qa("[data-trigger-id]", desktop).forEach(row => row.onclick = () => showTrigger(row.dataset.triggerId, row.dataset.triggerVersion));
-    if(rows[0]) showTrigger(rows[0].trigger_id, rows[0].version);
+    qa("[data-trigger-id]", desktop).forEach(row => row.onclick = () => window.showTrigger(row.dataset.triggerId, row.dataset.triggerVersion));
+    if(rows[0]) window.showTrigger(rows[0].trigger_id, rows[0].version);
   }
   window.showTrigger = function(id, version){
     const t = (state.registry.selected_trigger && state.registry.selected_trigger.trigger_id === id && state.registry.selected_trigger.version === version) ? state.registry.selected_trigger : (state.registry.triggers || []).find(x => x.trigger_id === id && x.version === version);
     const detail = q("#trigger-details", desktop) || q("#triggerDetail", desktop);
-    const usedIn = t?.used_in || [];
+    const usedIn = (t?.used_in && t.used_in.length)
+      ? t.used_in
+      : (state.registry.sets || [])
+          .filter(s => (s.trigger_versions || []).some(v => v.trigger_id === id && v.version === version))
+          .map(s => ({set_id:s.set_id, set_version:s.version, set_status:s.status}));
     const versions = t?.version_history || [];
     if(detail) detail.innerHTML = `<div class="details-header"><div class="details-id">Trigger ${h(id)} · Version ${h(version || t?.version || "—")} · ${h(triggerStatusLabel(t))}</div><div class="details-title">${h(t?.display_name || id || "Trigger")}</div><div class="details-meta"><span class="meta-pill">Status: ${h(triggerStatusLabel(t))}</span><span class="meta-pill">${t?.immutable ? "CURRENT" : "HISTORICAL / RESEARCH"}</span></div></div><div class="details-section"><div class="section-title">Metric</div><div class="reference-links"><button class="reference-link" onclick="openConfig('metrics')">${h(t?.metric || "Metric unavailable")}</button></div></div><div class="details-section"><div class="section-title">Condition</div><div class="formula" style="white-space:pre-line">${h(t?.formula_text || t?.what_it_checks || "Unavailable")}</div></div><div class="details-section"><div class="section-title">What this Trigger means</div><div class="body-text">${h(t?.how_it_works || "Backend trigger detail unavailable.")}</div></div><div class="details-section"><div class="section-title">How it works</div><div class="step-list">${String(t?.how_it_works || "Backend trigger detail unavailable.").split(/\n+|;\s*/).filter(Boolean).map((step,index) => `<div class="calc-step"><div class="step-number">${index+1}</div><div class="step-body">${h(step)}</div></div>`).join("")}</div></div><div class="details-section"><div class="section-title">Unavailable behavior</div><div class="body-text">${h(t?.unavailable_reason || "If required backend observations or metric inputs are unavailable, the Trigger result is unavailable; the frontend does not convert missing facts to zero or fabricate a signal.")}</div></div><div class="details-section"><div class="section-title">Used in Set Versions</div><div class="reference-links">${usedIn.length ? usedIn.map(s => `<button class="reference-link js-open-set" data-set-id="${h(s.set_id)}" data-set-version="${h(s.set_version)}">${h(s.set_id)} ${h(s.set_version)} · ${h(setStatusLabel(s.set_status))}</button>`).join("") : "—"}</div></div><div class="details-section"><div class="section-title">Version History</div><div class="version-list">${versions.length ? versions.map(v => `<button class="version-button js-open-trigger ${v.version === (version || t?.version) ? "selected" : ""}" data-trigger-id="${h(id)}" data-trigger-version="${h(v.version)}">${h(v.version)} · ${h(v.change_summary || v.created_at || "")}</button>`).join("") : "—"}</div></div>`;
   };
   function renderSets(){
     const rows = state.registry.sets || [];
-    const body = q("#sets-body", desktop);
+    const body = q("#sets-body", desktop) || q("#setsBody", desktop) || q("#config-sets tbody", desktop);
     if(body) body.innerHTML = rows.length ? rows.map(s => `<tr class="catalog-row" data-set-id="${h(s.set_id)}" data-set-version="${h(s.version)}"><td>${h(s.display_name || s.set_id)}</td><td>${h(s.version)}</td><td>${h([s.symbol, s.timeframe].filter(Boolean).join(" · ") || "—")}</td><td>${h((s.trigger_versions || []).map(t => t.trigger_id + " " + t.version).join(", ") || "—")}</td><td>${badge(s.status || "UNKNOWN")}</td></tr>`).join("") : '<tr><td colspan="5" class="empty">No Set versions available.</td></tr>';
-    qa("[data-set-id]", desktop).forEach(row => row.onclick = () => showSet(row.dataset.setId, row.dataset.setVersion));
-    if(rows[0]) showSet(rows[0].set_id, rows[0].version);
+    qa("[data-set-id]", desktop).forEach(row => row.onclick = () => window.showSet(row.dataset.setId, row.dataset.setVersion));
+    if(rows[0]) window.showSet(rows[0].set_id, rows[0].version);
   }
   window.showSet = function(id, version){
     const s = (state.registry.sets || []).find(x => x.set_id === id && x.version === version);
@@ -1992,14 +2109,40 @@ def _reference_backend_script(payload: str) -> str:
     }
     const footer = q(".coins-footer", body);
     if(footer){
-      const symbols = availableCoinSymbols();
-      footer.innerHTML = `<select class="coin-add-select" aria-label="Coin to add">${symbols.length ? symbols.map(symbol => `<option value="${h(symbol)}">${h(symbol)}</option>`).join("") : '<option value="">Catalog unavailable</option>'}</select><button class="btn js-add-coin" type="button">+ Add Coin</button>`;
+      const search = coinSearchOpen ? `<div class="coin-combobox"><input class="coin-search-input" type="text" value="${h(coinSearchQuery)}" placeholder="Search or enter symbol..." autocomplete="off" aria-label="Search or enter symbol">${coinSearchResultsHtml()}</div>` : "";
+      footer.innerHTML = `${search}<button class="btn js-add-coin" type="button">+ Add Coin</button>`;
       q(".js-add-coin", footer)?.addEventListener("click", window.addCoinToRules);
+      const input = q(".coin-search-input", footer);
+      if(input){
+        input.addEventListener("input", () => { coinSearchQuery = input.value; coinSearchIndex = 0; coinSearchError = ""; updateCoinSearchResults(); });
+        input.addEventListener("keydown", (event) => {
+          const options = matchingCoinSymbols();
+          if(event.key === "ArrowDown"){ event.preventDefault(); coinSearchIndex = Math.min(coinSearchIndex + 1, Math.max(options.length - 1, 0)); updateCoinSearchResults(); return; }
+          if(event.key === "ArrowUp"){ event.preventDefault(); coinSearchIndex = Math.max(coinSearchIndex - 1, 0); updateCoinSearchResults(); return; }
+          if(event.key === "Escape"){ event.preventDefault(); resetCoinSearch(); renderRules(); return; }
+          if(event.key === "Enter"){ event.preventDefault(); addCoinSymbol(options[coinSearchIndex] || coinSearchQuery); }
+        });
+        setTimeout(() => q(".coin-search-input", desktop)?.focus(), 0);
+      }
+      bindCoinSearchOptions(footer);
     }
     qa(".mode-selector .mode-btn", body).forEach(button => button.addEventListener("click", () => {
       qa(".mode-btn", button.closest(".mode-selector")).forEach(node => node.classList.toggle("active", node === button));
     }));
     q(".save-btn", body)?.addEventListener("click", window.saveRulesVersion);
+  }
+  function setRulesSaveState(message, tone="neutral"){
+    const body = q("#config-rules .rules-stack", desktop) || q("#rules-body", desktop) || q("#rulesBody", desktop);
+    const row = q(".rules-save", body);
+    if(!row) return;
+    let node = q(".rules-save-state", row);
+    if(!node){
+      node = document.createElement("div");
+      node.className = "rules-save-state panel-meta";
+      row.prepend(node);
+    }
+    node.className = "rules-save-state panel-meta " + tone;
+    node.textContent = message || "";
   }
   function ruleInputValue(body, label, fallback){
     const row = qa(".rule-row", body).find(node => q(".rule-name", node)?.textContent?.trim() === label);
@@ -2054,25 +2197,18 @@ def _reference_backend_script(payload: str) -> str:
     };
   }
   window.addCoinToRules = function(){
-    const select = q("#config-rules .coin-add-select", desktop);
-    const symbol = String(select?.value || "").trim().toUpperCase();
-    const symbols = catalogSymbols();
-    if(!symbols.length){
-      alert("Supported instrument catalog is unavailable.");
+    if(!coinSearchOpen){
+      coinSearchOpen = true;
+      coinSearchError = "";
+      renderRules();
       return;
     }
-    if(!symbols.includes(symbol)){
-      alert("Symbol is not available in the supported instrument catalog.");
-      return;
-    }
-    if(coinDraft.some(c => c.symbol === symbol)) return;
-    coinDraft = [...coinDraft, {symbol, enabled:true, max_allocation_pct:""}];
-    renderRules();
+    addCoinSymbol(matchingCoinSymbols()[coinSearchIndex] || coinSearchQuery);
   };
   window.saveRulesVersion = async function(){
-    if(!canSubmit()) return;
+    if(!canSubmit()){ setRulesSaveState("Operator command submission is unavailable.", "negative"); return; }
     const current = state.rules.current;
-    if(!current) return;
+    if(!current){ setRulesSaveState("Current rules version is unavailable.", "negative"); return; }
     const payload = {
       expected_rules_version_id: current.rules_version_id || "",
       expected_display_version: current.display_version || "",
@@ -2080,12 +2216,14 @@ def _reference_backend_script(payload: str) -> str:
       coins: coinPayload()
     };
     try{
+      setRulesSaveState("Saving...", "neutral");
       const data = await postJson("/api/rules/versions", payload);
       state.rules.current = data.rules || state.rules.current;
       state.rules.history = data.history || state.rules.history;
       renderRules();
+      setRulesSaveState("Saved as new version.", "positive");
     }catch(error){
-      alert(error.message || "Rules save failed.");
+      setRulesSaveState(error.message || "Rules save failed.", "negative");
     }
   };
 
@@ -2103,7 +2241,7 @@ def _reference_backend_script(payload: str) -> str:
     });
     if(!body) return;
     body.innerHTML = rows.length ? rows.map(r => `<tr class="research-row" data-research-id="${h(r.research_id)}"><td><div class="research-id">${h(r.research_id)}</div></td><td>${h(r.set_id)}<div class="panel-meta">${h(r.set_version)}</div></td><td>${h(r.rules_display_version)}<div class="panel-meta">${h(r.rules_version_id)}</div></td><td>${h(demoState(r).replace(/^./, c => c.toUpperCase()))}</td><td>${h(r.selected_demo_profit_factor ?? "—")}</td><td>${h(r.compare_to_active || "—")}</td><td>—</td><td>${badge(r.decision || r.status || "NONE")}</td></tr>`).join("") : '<tr><td colspan="8" class="empty">No Research records.</td></tr>';
-    qa("[data-research-id]", desktop).forEach(row => row.onclick = () => openResearchById(row.dataset.researchId));
+    qa("[data-research-id]", desktop).forEach(row => row.onclick = () => window.openResearchById(row.dataset.researchId));
   }
   window.openResearchById = async function(id){
     currentResearchId = id;
@@ -2116,6 +2254,7 @@ def _reference_backend_script(payload: str) -> str:
   function runRows(rows){ return rows.length ? rows.map(r => `<tr><td>${h(r.run_id || r.backtest_run_id)}</td><td>${h((r.period_start || r.started_at || "—") + " -> " + (r.period_end || r.stopped_at || "—"))}</td><td>${h(r.metrics?.closed_trades ?? "—")}</td><td>${h(r.metrics?.net_pnl ?? "—")}</td><td>${h(r.metrics?.profit_factor ?? "—")}</td><td>${h(r.status || "—")}</td></tr>`).join("") : '<tr><td colspan="6" class="empty">No runs.</td></tr>'; }
   function renderResearchDetail(){
     const r = currentResearch?.research || {};
+    const decisionValue = r.decision || r.status || "NONE";
     const title = q("#research-detail-title", desktop) || q("#researchTitle", desktop);
     if(title) title.textContent = r.research_id ? `${r.research_id} · ${r.set_id} ${r.set_version} · Rules ${r.rules_display_version || r.rules_version_id}` : "Research";
     const bt = q("#backtest-body", desktop) || q("#backtestBody", desktop);
@@ -2123,7 +2262,14 @@ def _reference_backend_script(payload: str) -> str:
     if(bt) bt.innerHTML = runRows(currentResearch?.backtests || []);
     if(dm) dm.innerHTML = runRows(currentResearch?.demos || []);
     const decision = q("#decision-state", desktop) || q("#decisionStateInline", desktop);
-    if(decision){ decision.textContent = r.decision || "NONE"; decision.className = "badge " + String(r.decision || "none").toLowerCase(); }
+    if(decision){ decision.textContent = decisionValue; decision.className = "badge " + String(decisionValue || "none").toLowerCase(); }
+    const workflowDecision = q("#wfDecisionState", desktop) || q("#flowDecisionState", desktop);
+    if(workflowDecision) workflowDecision.textContent = decisionValue;
+    const workflowDecisionCard = q("#wfDecision", desktop);
+    if(workflowDecisionCard){
+      workflowDecisionCard.classList.toggle("done", decisionValue !== "NONE");
+      workflowDecisionCard.classList.toggle("reject-done", decisionValue === "REJECT" || decisionValue === "ARCHIVE" || decisionValue === "ARCHIVED");
+    }
   }
   async function loadCompare(){
     if(!currentResearchId) return;
@@ -2158,6 +2304,20 @@ def _reference_backend_script(payload: str) -> str:
     }
     if(node) node.textContent = message || "";
   }
+  function setResearchActionStatus(message, tone="neutral"){
+    let node = q("#researchActionStatus", desktop);
+    if(!node){
+      node = document.createElement("div");
+      node.id = "researchActionStatus";
+      node.className = "panel-meta";
+      const head = q(".research-detail-head", desktop);
+      if(head) head.appendChild(node);
+    }
+    if(node){
+      node.className = "panel-meta " + tone;
+      node.textContent = message || "";
+    }
+  }
   window.renderResearchSummary = renderResearchSummary;
   window.setCompareScope = function(scope){
     compareScope = scope || "overall";
@@ -2172,9 +2332,9 @@ def _reference_backend_script(payload: str) -> str:
     qa(".compare-period", desktop).forEach(node => node.classList.toggle("active", (node.textContent || "").trim() === comparePeriod));
     renderCompare();
   };
-  window.runBacktest = async function(period){ if(!currentResearchId || !canSubmit()) return; const days = period === "90D" ? 90 : period === "30D" ? 30 : 7; const end = new Date(), start = new Date(end.getTime() - days * 86400000); try{ await postJson(`/api/research/${encodeURIComponent(currentResearchId)}/backtests`, {research_start:start.toISOString(),research_end:end.toISOString()}); }catch(error){ currentCompare = {available:false, reason:error.message || "Backtest unavailable"}; renderCompare(); } await openResearchById(currentResearchId); };
-  window.runDemo = async function(){ if(!currentResearchId || !canSubmit()) return; try{ await postJson(`/api/research/${encodeURIComponent(currentResearchId)}/demo/start`, {}); }catch(error){ currentCompare = {available:false, reason:error.message || "Demo start unavailable"}; renderCompare(); } await openResearchById(currentResearchId); };
-  window.setDecision = async function(value){ if(!currentResearchId || !canSubmit()) return; const url = value === "REJECT" ? `/api/research/${encodeURIComponent(currentResearchId)}/archive` : `/api/research/${encodeURIComponent(currentResearchId)}/decision/make-active`; try{ await postJson(url, {idempotency_key:"ui-"+Date.now()}); }catch(error){ currentCompare = {available:false, reason:error.message || "Decision unavailable"}; renderCompare(); } await openResearchById(currentResearchId); };
+  window.runBacktest = async function(period){ if(!currentResearchId){ setResearchActionStatus("Research record unavailable.", "negative"); return; } if(!canSubmit()){ setResearchActionStatus("Operator command submission is unavailable.", "negative"); return; } const days = period === "90D" ? 90 : period === "30D" ? 30 : 7; const end = new Date(), start = new Date(end.getTime() - days * 86400000); try{ setResearchActionStatus("Running backtest...", "neutral"); await postJson(`/api/research/${encodeURIComponent(currentResearchId)}/backtests`, {research_start:start.toISOString(),research_end:end.toISOString()}); setResearchActionStatus("Backtest submitted.", "positive"); }catch(error){ currentCompare = {available:false, reason:error.message || "Backtest unavailable"}; setResearchActionStatus(error.message || "Backtest unavailable.", "negative"); renderCompare(); } await window.openResearchById(currentResearchId); };
+  window.runDemo = async function(){ if(!currentResearchId){ setResearchActionStatus("Research record unavailable.", "negative"); return; } if(!canSubmit()){ setResearchActionStatus("Operator command submission is unavailable.", "negative"); return; } try{ setResearchActionStatus("Starting demo...", "neutral"); await postJson(`/api/research/${encodeURIComponent(currentResearchId)}/demo/start`, {}); setResearchActionStatus("Demo submitted.", "positive"); }catch(error){ currentCompare = {available:false, reason:error.message || "Demo start unavailable"}; setResearchActionStatus(error.message || "Demo start unavailable.", "negative"); renderCompare(); } await window.openResearchById(currentResearchId); };
+  window.setDecision = async function(value){ if(!currentResearchId){ setResearchActionStatus("Research record unavailable.", "negative"); return; } if(!canSubmit()){ setResearchActionStatus("Operator command submission is unavailable.", "negative"); return; } const normalized = String(value || "").toUpperCase(); const url = normalized === "REJECT" ? `/api/research/${encodeURIComponent(currentResearchId)}/archive` : `/api/research/${encodeURIComponent(currentResearchId)}/decision/make-active`; try{ setResearchActionStatus("Submitting decision...", "neutral"); await postJson(url, {idempotency_key:"ui-"+Date.now()}); setResearchActionStatus("Decision submitted.", "positive"); }catch(error){ currentCompare = {available:false, reason:error.message || "Decision unavailable"}; setResearchActionStatus(error.message || "Decision unavailable.", "negative"); renderCompare(); } await window.openResearchById(currentResearchId); };
   window.exportResearch = function(){ const blob = new Blob([JSON.stringify({research:currentResearch, compare:currentCompare}, null, 2)], {type:"application/json"}); const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `${currentResearchId || "research"}-research.json`; a.click(); };
   function setupNewResearch(){
     const setSelect = q("#new-set", desktop) || q("#newResearchSet", desktop);
@@ -2188,7 +2348,7 @@ def _reference_backend_script(payload: str) -> str:
   window.openNewResearch = function(){ setupNewResearch(); q("#new-research-modal", desktop)?.classList.add("show"); };
   window.closeNewResearch = function(){ q("#new-research-modal", desktop)?.classList.remove("show"); };
   window.createResearch = async function(){
-    if(!canSubmit()) return;
+    if(!canSubmit()){ setNewResearchState("Operator command submission is unavailable."); return; }
     const setValue = (q("#new-set", desktop) || q("#newResearchSet", desktop))?.value || "";
     const rules_version_id = (q("#new-rules", desktop) || q("#newResearchRules", desktop))?.value || "";
     const [set_id, set_version] = setValue.split("|");
@@ -2199,7 +2359,7 @@ def _reference_backend_script(payload: str) -> str:
     try{
       const data = await postJson("/api/research", {set_id, set_version, rules_version_id});
       window.closeNewResearch();
-      await openResearchById(data.research?.research_id);
+      await window.openResearchById(data.research?.research_id);
     }catch(error){
       setNewResearchState(error.message || "Research creation failed.");
     }
@@ -2342,8 +2502,54 @@ def render_product_dashboard(
 }
 #config-rules .coins-footer{
   display:flex;
+  align-items:flex-start;
+  gap:8px;
   justify-content:flex-end;
   padding:0 14px 12px;
+}
+#config-rules .coin-combobox{
+  min-width:220px;
+  max-width:320px;
+  display:grid;
+  gap:4px;
+}
+#config-rules .coin-search-input{
+  width:100%;
+}
+#config-rules .coin-search-options{
+  max-height:154px;
+  overflow:auto;
+  border:1px solid var(--line);
+  border-radius:8px;
+  background:#fff;
+}
+#config-rules .coin-search-option{
+  width:100%;
+  min-height:30px;
+  padding:6px 9px;
+  border:0;
+  border-bottom:1px solid #eef1f4;
+  background:#fff;
+  color:#344054;
+  text-align:left;
+  font-size:10px;
+  font-weight:800;
+}
+#config-rules .coin-search-option:last-child{
+  border-bottom:0;
+}
+#config-rules .coin-search-option.active,
+#config-rules .coin-search-option:hover{
+  background:#f7faff;
+}
+#config-rules .coin-search-empty,
+#config-rules .coin-search-error{
+  padding:7px 9px;
+  color:#98a2b3;
+  font-size:10px;
+}
+#config-rules .coin-search-error{
+  color:#b42318;
 }
 @media(max-width:760px){
   body.tt-mobile-overview-active{background:#f5f7fb}

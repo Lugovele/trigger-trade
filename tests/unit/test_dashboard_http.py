@@ -7,7 +7,14 @@ from uuid import uuid4
 
 import pytest
 
-from triggertrade.dashboard.__main__ import DEFAULT_HOST, create_server, create_server_from_env, render_dashboard
+from triggertrade.dashboard.__main__ import (
+    DEFAULT_HOST,
+    LOCAL_DEV_OPERATOR_COOKIE,
+    LOCAL_DEV_OPERATOR_HEADER,
+    create_server,
+    create_server_from_env,
+    render_dashboard,
+)
 from triggertrade.dashboard.product_ui import render_product_dashboard
 from triggertrade.dashboard.read_model import DashboardReadModel
 from triggertrade.persistence import TraceStore
@@ -123,7 +130,8 @@ def test_operator_controls_are_protected_frontend_boundaries():
 
     assert "Pause Entries" in html
     assert "Close All" in html
-    assert "Pause new entries?" in html
+    assert "Confirm pause new entries." in html
+    assert "operatorCommandStatus" in html
     assert 'id="operatorPauseForm"' in html
     assert 'action="/operator/pause"' in html
     assert server.operator_control_token == ""
@@ -139,6 +147,133 @@ def test_product_renderer_never_emits_process_local_token_argument():
 
     assert "process-secret-token" not in html
     assert 'name="token"' not in html
+
+
+def test_local_dev_browser_commands_use_http_only_cookie_without_rendered_token():
+    tmp_path = _tmpdir()
+    db = _empty_db(tmp_path)
+    server = create_server(
+        port=0,
+        db_path=db,
+        operator_authorizer=OperatorCommandAuthorizer(db, auth_mode="local_dev_compat"),
+    )
+    host, port = server.server_address
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection(host, port, timeout=2)
+        conn.request("GET", "/overview")
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+        cookie = response.getheader("Set-Cookie") or ""
+
+        assert response.status == HTTPStatus.OK
+        assert LOCAL_DEV_OPERATOR_COOKIE in cookie
+        assert "HttpOnly" in cookie
+        assert "SameSite=Strict" in cookie
+        assert server.operator_control_token
+        assert server.operator_control_token not in body
+        assert '"canSubmitOperatorControl": true' in body
+        assert 'name="token"' not in body
+
+        conn.request(
+            "POST",
+            "/operator/pause",
+            body="confirm=yes",
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Cookie": cookie,
+                LOCAL_DEV_OPERATOR_HEADER: "1",
+                "Origin": f"http://{host}:{port}",
+                "Referer": f"http://{host}:{port}/overview",
+            },
+        )
+        pause = conn.getresponse()
+        pause.read()
+        assert pause.status == HTTPStatus.SEE_OTHER
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+    assert OperatorStateStore(db).get_trading_state().state.value == "TRADING_PAUSED"
+
+
+def test_local_dev_cookie_commands_require_same_origin_header():
+    tmp_path = _tmpdir()
+    db = _empty_db(tmp_path)
+    server = create_server(
+        port=0,
+        db_path=db,
+        operator_authorizer=OperatorCommandAuthorizer(db, auth_mode="local_dev_compat"),
+    )
+    host, port = server.server_address
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection(host, port, timeout=2)
+        conn.request("GET", "/overview")
+        response = conn.getresponse()
+        response.read()
+        cookie = response.getheader("Set-Cookie") or ""
+
+        conn.request(
+            "POST",
+            "/operator/pause",
+            body="confirm=yes",
+            headers={"Content-Type": "application/x-www-form-urlencoded", "Cookie": cookie},
+        )
+        missing_header = conn.getresponse()
+        missing_header.read()
+        assert missing_header.status == HTTPStatus.BAD_REQUEST
+
+        conn.request(
+            "POST",
+            "/operator/pause",
+            body="confirm=yes",
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Cookie": cookie,
+                LOCAL_DEV_OPERATOR_HEADER: "1",
+                "Origin": "http://evil.localhost",
+            },
+        )
+        bad_origin = conn.getresponse()
+        bad_origin.read()
+        assert bad_origin.status == HTTPStatus.BAD_REQUEST
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+    assert OperatorStateStore(db).get_trading_state().state.value == "TRADING_ENABLED"
+
+
+def test_local_dev_browser_cookie_is_loopback_only_when_binding_all_interfaces():
+    tmp_path = _tmpdir()
+    db = _empty_db(tmp_path)
+    server = create_server(
+        host="0.0.0.0",
+        port=0,
+        db_path=db,
+        operator_authorizer=OperatorCommandAuthorizer(db, auth_mode="local_dev_compat"),
+    )
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=2)
+        conn.request("GET", "/overview")
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+        assert response.status == HTTPStatus.OK
+        assert response.getheader("Set-Cookie") is None
+        assert server.operator_control_token == ""
+        assert '"canSubmitOperatorControl": false' in body
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
 
 
 def test_managed_oidc_operator_pause_does_not_require_local_token():

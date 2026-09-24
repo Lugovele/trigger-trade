@@ -162,7 +162,10 @@ def test_rules_ui_preserves_hidden_coins_leverage_and_disabled_thresholds(tmp_pa
         assert 'position_size_pct: ruleInputValue(body, "Position Size", pr.position_size_pct)' in html
         assert 'direction_mode: directionPayload(ruleSelectValue(body, "Direction", po.direction_mode))' in html
         assert "coins: coinPayload()" in html
-        assert "coin-add-select" in html
+        assert "coinSearchOpen" in html
+        assert "coin-search-input" in html
+        assert "Search or enter symbol..." in html
+        assert "ArrowDown" in html
         assert 'prompt("Coin symbol")' not in html
         assert '"direction_mode":' in html
         assert 'const directionSelect = qa(".rule-row", body).find' in html

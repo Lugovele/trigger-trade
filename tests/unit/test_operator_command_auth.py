@@ -168,5 +168,6 @@ def test_dashboard_server_mints_process_local_token_only_for_explicit_local_dev_
     try:
         assert server.operator_authorizer.auth_mode == LOCAL_DEV_AUTH_SOURCE
         assert server.operator_control_token
+        assert server.read_model.operator_command_submit_enabled is True
     finally:
         server.server_close()

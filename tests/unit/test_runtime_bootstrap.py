@@ -176,8 +176,8 @@ def test_dashboard_env_startup_requires_explicit_local_dev_compat_for_process_to
     try:
         html = render_dashboard(server.read_model)
         assert server.operator_authorizer.auth_mode == "local_dev_compat"
-        assert server.read_model.operator_command_submit_enabled is False
-        assert '"canSubmitOperatorControl": false' in html
+        assert server.read_model.operator_command_submit_enabled is True
+        assert '"canSubmitOperatorControl": true' in html
         assert server.operator_control_token not in html
         assert 'name="token"' not in html
     finally:

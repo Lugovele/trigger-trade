@@ -201,9 +201,13 @@ def test_trading_rules_coin_editor_uses_pending_allocations_and_existing_save_pa
     assert "coins: coinPayload()" in html
     assert "state.rules.coins" in html
     assert "prompt(\"Coin symbol\")" not in html
-    assert 'class="coin-add-select"' in html
-    assert "availableCoinSymbols()" in html
+    assert "coinSearchOpen" in html
+    assert "matchingCoinSymbols()" in html
+    assert 'class="coin-search-input"' in html
+    assert "Search or enter symbol..." in html
+    assert "ArrowDown" in html
     assert "Symbol is not available in the supported instrument catalog." in html
+    assert "availableCoinSymbols()" in html
     assert '<div class="coin-list">' in html
     assert 'class="coin-row"' in html
     assert 'class="coin-symbol"' in html
@@ -217,6 +221,9 @@ def test_trading_rules_coin_editor_uses_pending_allocations_and_existing_save_pa
     assert "#config-rules .coin-remove" in html
     assert "width:28px;" in html
     assert "height:28px;" in html
+    assert '"X-TriggerTrade-Local-Operator":"1"' in html
+    assert "Operator command submission is unavailable." in html
+    assert "researchActionStatus" in html
 
 
 def test_trigger_and_set_details_render_full_reference_structure_from_backend_data():

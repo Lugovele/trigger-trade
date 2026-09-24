@@ -65,7 +65,7 @@ class OperatorCommandAuthorizer:
 
     @property
     def browser_commands_supported(self) -> bool:
-        return self.auth_mode == MANAGED_OIDC_AUTH_SOURCE
+        return self.auth_mode in {MANAGED_OIDC_AUTH_SOURCE, LOCAL_DEV_AUTH_SOURCE}
 
     def authorize_http_command(
         self,
