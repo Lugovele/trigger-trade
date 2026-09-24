@@ -222,7 +222,8 @@ def test_dashboard_performance_uses_accounting_metrics_and_no_frontend_math(tmp_
     assert comparisons[0].available is True
     assert comparisons[0].candidate_set == "triggertrade-futures-candidate@v2-test"
     assert "Research" in html
-    assert "Compare to Active" in html
+    assert "Active PF" in html
+    assert "Δ PF" in html
     assert "Forward Test" not in html
     assert "no frontend financial calculations" not in html
     assert "BYBIT_API_SECRET" not in html
