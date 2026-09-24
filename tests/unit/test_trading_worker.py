@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from triggertrade.persistence import RuntimeHeartbeat
 from triggertrade.services.owner_dispatch import OwnerDispatchBlocked, OwnerDispatchResult
 from triggertrade.services.operator_execution_bridge import OPERATOR_EXECUTION_CONSUMER
+from triggertrade.services.research_demo_execution import RESEARCH_DEMO_CONSUMER
 from triggertrade.services.trading_worker import TargetTradingWorker
 
 
@@ -59,6 +60,7 @@ def test_target_trading_worker_hydrates_and_idles_without_legacy_runtime():
         "Position",
         "Lifecycle",
         OPERATOR_EXECUTION_CONSUMER,
+        RESEARCH_DEMO_CONSUMER,
     }
 
 

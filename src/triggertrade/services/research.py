@@ -88,6 +88,7 @@ class ResearchDemoExecutionHandoff(Protocol):
         isolation: ResearchDemoIsolation,
         started_at: str,
         pin_payload: dict[str, Any],
+        demo_run_id: str,
     ) -> ResearchDemoExecutionHandoffResult: ...
 
 
@@ -281,6 +282,7 @@ class ResearchService:
             blocked_reason=None,
             isolation=self._demo_isolation,
         )
+        run_id = _demo_run_id(research.research_id, run_pins, now)
         handoff = self._demo_execution_handoff
         if handoff is None or not getattr(handoff, "canonical_worker_handoff", False):
             return self._blocked_demo(
@@ -294,6 +296,7 @@ class ResearchService:
             isolation=self._demo_isolation,
             started_at=now,
             pin_payload=run_pins,
+            demo_run_id=run_id,
         )
         if handoff_result.execution_owner != "trading-worker" or not handoff_result.durable:
             return self._blocked_demo(
@@ -303,6 +306,7 @@ class ResearchService:
             )
         record = self._store.add_demo_run(
             research_id=research.research_id,
+            run_id=run_id,
             status=ResearchDemoStatus.RUNNING,
             started_at=now,
             execution_scope_id=scope,
@@ -1477,6 +1481,14 @@ def _demo_run_pins(
             "live_side_effects": "forbidden",
         },
     )
+
+
+def _demo_run_id(research_id: str, pin_payload: dict[str, Any], started_at: str) -> str:
+    digest = canonical_json_digest(pin_payload)
+    source = "|".join([research_id, digest, started_at])
+    from hashlib import sha256
+
+    return f"rdm-{sha256(source.encode('utf-8')).hexdigest()[:20]}"
 
 
 def _config_for_rules(config: AppConfig, rules: TradingRulesVersion) -> AppConfig:

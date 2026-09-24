@@ -25,6 +25,15 @@ from triggertrade.services.operator_execution_bridge import (
     OperatorExecutionDispatcher,
     OperatorExecutionExecutor,
 )
+from triggertrade.services.research_demo_execution import (
+    RESEARCH_DEMO_CONSUMER,
+    RESEARCH_DEMO_MESSAGE_TYPE,
+    RESEARCH_DEMO_MESSAGE_VERSION,
+    RESEARCH_DEMO_PRODUCER,
+    ResearchDemoExecutionDispatcher,
+    ResearchDemoExecutionExecutor,
+    ResearchDemoExecutionStore,
+)
 
 
 class OwnerDispatchBlocked(PostgresPersistenceError):
@@ -40,10 +49,17 @@ class OwnerDispatchResult:
 class CanonicalOwnerDispatcher:
     """Dispatch only routes whose downstream owner effect is source-complete."""
 
-    def __init__(self, connection, *, operator_executor: OperatorExecutionExecutor | None = None) -> None:
+    def __init__(
+        self,
+        connection,
+        *,
+        operator_executor: OperatorExecutionExecutor | None = None,
+        research_demo_executor: ResearchDemoExecutionExecutor | None = None,
+    ) -> None:
         self._connection = connection
         self._messages = DurableMessageStore(connection)
         self._operator_executor = operator_executor
+        self._research_demo_executor = research_demo_executor
 
     def dispatch(self, message: OutboxMessageRecord) -> OwnerDispatchResult:
         inbox, _ = self._messages.record_inbox(
@@ -78,6 +94,13 @@ class CanonicalOwnerDispatcher:
             OPERATOR_EXECUTION_MESSAGE_VERSION,
         ):
             return self._execute_operator_command(message.payload)
+        if route == (
+            RESEARCH_DEMO_PRODUCER,
+            RESEARCH_DEMO_CONSUMER,
+            RESEARCH_DEMO_MESSAGE_TYPE,
+            RESEARCH_DEMO_MESSAGE_VERSION,
+        ):
+            return self._execute_research_demo(message.payload)
         raise OwnerDispatchBlocked(
             f"handler_not_certified:{message.consumer}:{message.message_type}:{message.message_version}"
         )
@@ -89,6 +112,16 @@ class CanonicalOwnerDispatcher:
                 store=OperatorExecutionCommandStore(self._connection),
                 executor=self._operator_executor,
             ).dispatch(command_id)
+        except PostgresPersistenceError as exc:
+            raise OwnerDispatchBlocked(str(exc)) from exc
+
+    def _execute_research_demo(self, payload: dict[str, Any]) -> str:
+        demo_run_id = _body_text(payload, "research_demo", "demo_run_id")
+        try:
+            return ResearchDemoExecutionDispatcher(
+                store=ResearchDemoExecutionStore(self._connection),
+                executor=self._research_demo_executor,
+            ).dispatch(demo_run_id)
         except PostgresPersistenceError as exc:
             raise OwnerDispatchBlocked(str(exc)) from exc
 

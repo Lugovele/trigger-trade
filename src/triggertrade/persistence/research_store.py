@@ -352,6 +352,7 @@ class ResearchStore:
         *,
         research_id: str,
         status: ResearchDemoStatus,
+        run_id: str | None = None,
         started_at: str | None = None,
         stopped_at: str | None = None,
         execution_scope_id: str | None = None,
@@ -378,7 +379,7 @@ class ResearchStore:
                 },
             )
             pin_json, pin_digest = _pin_json_and_digest(pins)
-            run_id = _run_id("rdm", research_id, pin_digest, created_at)
+            run_id = _checked(run_id, "run_id") if run_id is not None else _run_id("rdm", research_id, pin_digest, created_at)
             conn.execute(
                 """
                 INSERT INTO research_demo_runs (

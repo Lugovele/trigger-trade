@@ -46,6 +46,7 @@ from triggertrade.services.operator_auth import (
 )
 from triggertrade.services.operator_execution_bridge import DashboardOperatorExecutionBridge
 from triggertrade.services.research import ResearchService, ResearchServiceError
+from triggertrade.services.research_demo_execution import PostgresResearchDemoExecutionHandoff
 
 
 DEFAULT_HOST = "127.0.0.1"
@@ -692,6 +693,7 @@ def create_server(
     readiness_env: dict[str, str] | None = None,
     postgres_health_probe=None,
     promotion_governance_store=None,
+    research_demo_handoff=None,
 ) -> DashboardServer:
     if host not in ALLOWED_HOSTS:
         raise ValueError("dashboard host must be one of: 127.0.0.1, 0.0.0.0")
@@ -709,6 +711,7 @@ def create_server(
         trading_rules_store=TradingRulesStore(db_path),
         message_store=message_store,
         promotion_governance_store=promotion_governance_store,
+        demo_execution_handoff=research_demo_handoff,
     )
     authorizer = operator_authorizer or operator_authorizer_from_env(db_path, {})
     command_boundary = DashboardCommandBoundary(
@@ -896,6 +899,7 @@ def create_server_from_env(
     authorizer = operator_authorizer_from_env(db_path, env)
     promotion_governance = _promotion_governance_from_env(env)
     operator_actions = _operator_execution_bridge_from_env(env)
+    research_demo_handoff = _research_demo_handoff_from_env(env)
     return create_server(
         host=host,
         port=port,
@@ -905,6 +909,7 @@ def create_server_from_env(
         operator_authorizer=authorizer,
         operator_actions=operator_actions,
         promotion_governance_store=promotion_governance,
+        research_demo_handoff=research_demo_handoff,
     ), bootstrap.db_path
 
 
@@ -945,6 +950,20 @@ def _operator_execution_bridge_from_env(env: dict[str, str]):
     settings = PostgresSettings.from_env(env)
     apply_postgres_migrations(dsn=settings.dsn, schema=settings.schema)
     return DashboardOperatorExecutionBridge(
+        factory=PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)
+    )
+
+
+def _research_demo_handoff_from_env(env: dict[str, str]):
+    if not env.get("TRIGGERTRADE_POSTGRES_DSN"):
+        return None
+    if _env_true(env.get("TRIGGERTRADE_ALLOW_PRODUCTION_SQLITE_DASHBOARD")):
+        return None
+    if not _env_true(env.get("TRIGGERTRADE_RESEARCH_DEMO_HANDOFF_ENABLED")):
+        return None
+    settings = PostgresSettings.from_env(env)
+    apply_postgres_migrations(dsn=settings.dsn, schema=settings.schema)
+    return PostgresResearchDemoExecutionHandoff(
         factory=PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)
     )
 

@@ -3,7 +3,7 @@ import sqlite3
 import pytest
 
 from triggertrade.config import ConfigError
-from triggertrade.dashboard.__main__ import create_server_from_env, render_dashboard
+from triggertrade.dashboard.__main__ import create_server_from_env, render_dashboard, _research_demo_handoff_from_env
 from triggertrade.dashboard.read_model import DashboardReadModel
 from triggertrade.persistence import CandleLifecycle, RuntimeStore, TriggerSetStore, TriggerSetStoreError, current_rule_definitions, current_testing_trigger_set, current_volume_recommendation
 from triggertrade.services.bootstrap import (
@@ -220,6 +220,12 @@ def test_production_dashboard_sqlite_compatibility_requires_explicit_opt_in(tmp_
         assert server.server_address[1] != 8765
     finally:
         server.server_close()
+
+
+def test_research_demo_handoff_requires_explicit_runtime_enablement(monkeypatch):
+    monkeypatch.setattr("triggertrade.dashboard.__main__.apply_postgres_migrations", lambda **kwargs: ())
+
+    assert _research_demo_handoff_from_env({"TRIGGERTRADE_POSTGRES_DSN": "postgresql://unit/db"}) is None
 
 
 def test_dashboard_env_startup_requires_explicit_local_dev_compat_for_process_token(tmp_path):
