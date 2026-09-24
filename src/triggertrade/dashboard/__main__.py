@@ -14,6 +14,7 @@ from pathlib import Path
 import secrets
 from urllib.parse import parse_qs, unquote, urlparse
 
+from triggertrade.config import ConfigError
 from triggertrade.dashboard.read_model import DashboardReadModel
 from triggertrade.dashboard.readiness import evaluate_dashboard_readiness
 from triggertrade.dashboard.commands import DashboardCommandBoundary, DashboardCommandError
@@ -880,6 +881,7 @@ def create_server_from_env(
     env_file: str | Path = ".env",
 ) -> tuple[DashboardServer, Path]:
     env = merged_runtime_env(os.environ if process_env is None else process_env, env_file=env_file)
+    _require_explicit_dashboard_persistence(env)
     config, bootstrap = ensure_runtime_registry_for_env(env)
     host = env.get("TRIGGERTRADE_DASHBOARD_HOST", DEFAULT_HOST)
     port = int(env.get("TRIGGERTRADE_DASHBOARD_PORT", str(DEFAULT_PORT)))
@@ -897,6 +899,27 @@ def create_server_from_env(
         operator_authorizer=authorizer,
         promotion_governance_store=promotion_governance,
     ), bootstrap.db_path
+
+
+def _require_explicit_dashboard_persistence(env: dict[str, str]) -> None:
+    runtime_mode = str(env.get("TRIGGERTRADE_RUNTIME_MODE") or "").strip().lower()
+    process_role = str(env.get("TRIGGERTRADE_PROCESS_ROLE") or env.get("TRIGGERTRADE_ROLE") or "").strip().lower().replace("_", "-")
+    production_dashboard = runtime_mode == "production" or process_role in {"web", "api", "dashboard"}
+    if not production_dashboard:
+        return
+    if _env_true(env.get("TRIGGERTRADE_ALLOW_PRODUCTION_SQLITE_DASHBOARD")):
+        return
+    if str(env.get("TRIGGERTRADE_POSTGRES_DSN") or "").strip():
+        raise ConfigError(
+            "production web role cannot use SQLite dashboard stores while TRIGGERTRADE_POSTGRES_DSN is configured; "
+            "deploy a PostgreSQL-backed dashboard store or set TRIGGERTRADE_ALLOW_PRODUCTION_SQLITE_DASHBOARD=1 "
+            "only for an explicitly accepted compatibility window"
+        )
+    raise ConfigError("production web role requires TRIGGERTRADE_POSTGRES_DSN")
+
+
+def _env_true(value: object) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _promotion_governance_from_env(env: dict[str, str]):

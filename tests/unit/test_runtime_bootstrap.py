@@ -163,6 +163,64 @@ def test_dashboard_env_startup_uses_managed_oidc_auth_by_default(tmp_path):
         server.server_close()
 
 
+def test_production_dashboard_requires_durable_postgres_configuration(tmp_path):
+    with pytest.raises(ConfigError, match="production web role requires TRIGGERTRADE_POSTGRES_DSN"):
+        create_server_from_env(
+            {
+                "TRIGGERTRADE_RUNTIME_MODE": "production",
+                "TRIGGERTRADE_RUNTIME_DB_PATH": str(tmp_path / "dashboard.sqlite3"),
+                "TRIGGERTRADE_DASHBOARD_PORT": "0",
+            },
+            env_file=tmp_path / "missing.env",
+        )
+
+
+def test_production_dashboard_rejects_implicit_sqlite_fallback_when_postgres_is_configured(tmp_path):
+    with pytest.raises(ConfigError, match="cannot use SQLite dashboard stores"):
+        create_server_from_env(
+            {
+                "TRIGGERTRADE_RUNTIME_MODE": "production",
+                "TRIGGERTRADE_POSTGRES_DSN": "postgresql://unit/db",
+                "TRIGGERTRADE_RUNTIME_DB_PATH": str(tmp_path / "dashboard.sqlite3"),
+                "TRIGGERTRADE_DASHBOARD_PORT": "0",
+            },
+            env_file=tmp_path / "missing.env",
+        )
+
+
+def test_web_process_role_rejects_implicit_sqlite_fallback_when_runtime_mode_is_absent(tmp_path):
+    with pytest.raises(ConfigError, match="cannot use SQLite dashboard stores"):
+        create_server_from_env(
+            {
+                "TRIGGERTRADE_PROCESS_ROLE": "web",
+                "TRIGGERTRADE_POSTGRES_DSN": "postgresql://unit/db",
+                "TRIGGERTRADE_RUNTIME_DB_PATH": str(tmp_path / "dashboard.sqlite3"),
+                "TRIGGERTRADE_DASHBOARD_PORT": "0",
+            },
+            env_file=tmp_path / "missing.env",
+        )
+
+
+def test_production_dashboard_sqlite_compatibility_requires_explicit_opt_in(tmp_path, monkeypatch):
+    monkeypatch.setattr("triggertrade.dashboard.__main__._promotion_governance_from_env", lambda env: None)
+    db = tmp_path / "dashboard-compat.sqlite3"
+    server, initialized_db = create_server_from_env(
+        {
+            "TRIGGERTRADE_RUNTIME_MODE": "production",
+            "TRIGGERTRADE_POSTGRES_DSN": "postgresql://unit/db",
+            "TRIGGERTRADE_ALLOW_PRODUCTION_SQLITE_DASHBOARD": "1",
+            "TRIGGERTRADE_RUNTIME_DB_PATH": str(db),
+            "TRIGGERTRADE_DASHBOARD_PORT": "0",
+        },
+        env_file=tmp_path / "missing.env",
+    )
+    try:
+        assert initialized_db == db
+        assert server.server_address[1] != 8765
+    finally:
+        server.server_close()
+
+
 def test_dashboard_env_startup_requires_explicit_local_dev_compat_for_process_token(tmp_path):
     db = tmp_path / "dashboard-local-auth.sqlite3"
     server, _initialized_db = create_server_from_env(
