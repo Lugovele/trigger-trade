@@ -565,7 +565,10 @@ def _position_payload(record: FuturesPositionRecord) -> dict[str, Any]:
 def _position_from_payload(payload: dict[str, Any]) -> FuturesPositionRecord:
     data = dict(payload)
     data["rule_snapshot"] = dict(data.get("rule_snapshot") or {})
-    data["instrument_snapshot"] = None if data.get("instrument_snapshot") in {None, ""} else dict(data.get("instrument_snapshot") or {})
+    instrument_snapshot = data.get("instrument_snapshot")
+    data["instrument_snapshot"] = (
+        None if instrument_snapshot is None or instrument_snapshot == "" else dict(instrument_snapshot)
+    )
     return FuturesPositionRecord(**data)
 
 
