@@ -19,6 +19,29 @@ jobs:
   deploy:
     name: Build and deploy TriggerTrade
     runs-on: ubuntu-latest
+    env:
+      ACR_LOGIN_SERVER: triggertradeacr-dcfmhtd6fmaubtac.azurecr.io
+      ACR_REPOSITORY: triggertrade-web
+      RESOURCE_GROUP: triggertrade-rg
+      WEB_APP: triggertrade-web-centralus
+      TRADING_WORKER_APP: triggertrade-trading-worker-centralus
+      SCHEDULER_APP: triggertrade-scheduler-centralus
+      USER_ASSIGNED_IDENTITY: triggertrade-pull-id
+      COMMON_ENV_VARS: >-
+        TRIGGERTRADE_RUNTIME_MODE=production
+        TRIGGERTRADE_TRADING_MODE=paper
+        TRIGGERTRADE_LIVE_TRADING_ENABLED=false
+        TRIGGERTRADE_EXECUTION_VENUE=bybit_demo_futures
+        TRIGGERTRADE_ACTIVE_EXECUTION_VENUE=bybit_demo_futures
+        TRIGGERTRADE_TEST_EXECUTION_VENUE=local_test_simulation
+        TRIGGERTRADE_EXCHANGE=bybit
+        TRIGGERTRADE_MARKET=linear
+        TRIGGERTRADE_CATEGORY=linear
+        TRIGGERTRADE_BYBIT_ENV=demo
+        BYBIT_BASE_URL=https://api-demo.bybit.com
+        TRIGGERTRADE_POSTGRES_DSN=secretref:postgres-dsn
+        TRIGGERTRADE_POSTGRES_SCHEMA=public
+        TRIGGERTRADE_RESEARCH_DEMO_HANDOFF_ENABLED=true
 
     steps:
       - name: Checkout repository
@@ -43,7 +66,7 @@ jobs:
           set -euo pipefail
 
           IMAGE_TAG="${GITHUB_SHA}"
-          IMAGE="triggertradeacr-dcfmhtd6fmaubtac.azurecr.io/triggertrade-web:${IMAGE_TAG}"
+          IMAGE="${ACR_LOGIN_SERVER}/${ACR_REPOSITORY}:${IMAGE_TAG}"
 
           echo "Building ${IMAGE}"
 
@@ -61,15 +84,50 @@ jobs:
           echo "Pushing ${IMAGE}"
           docker push "${IMAGE}"
 
+      - name: Resolve managed identity
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          UAMI_ID="$(az identity show \
+            --name "$USER_ASSIGNED_IDENTITY" \
+            --resource-group "$RESOURCE_GROUP" \
+            --query id \
+            -o tsv)"
+
+          if [[ -z "$UAMI_ID" ]]; then
+            echo "Unable to resolve managed identity $USER_ASSIGNED_IDENTITY" >&2
+            exit 1
+          fi
+
+          echo "UAMI_ID=${UAMI_ID}" >> "$GITHUB_ENV"
+
+      - name: Attach managed identities
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          for APP in "$WEB_APP" "$TRADING_WORKER_APP" "$SCHEDULER_APP"; do
+            az containerapp identity assign \
+              --name "$APP" \
+              --resource-group "$RESOURCE_GROUP" \
+              --user-assigned "$UAMI_ID" \
+              --only-show-errors \
+              -o none
+          done
+
       - name: Deploy web
         shell: bash
         run: |
           set -euo pipefail
 
           az containerapp update \
-            --name triggertrade-web \
-            --resource-group triggertrade-rg \
-            --image "$IMAGE"
+            --name "$WEB_APP" \
+            --resource-group "$RESOURCE_GROUP" \
+            --image "$IMAGE" \
+            --min-replicas 2 \
+            --max-replicas 4 \
+            --set-env-vars $COMMON_ENV_VARS TRIGGERTRADE_PROCESS_ROLE=web
 
       - name: Deploy trading worker
         shell: bash
@@ -77,9 +135,12 @@ jobs:
           set -euo pipefail
 
           az containerapp update \
-            --name triggertrade-trading-worker \
-            --resource-group triggertrade-rg \
-            --image "$IMAGE"
+            --name "$TRADING_WORKER_APP" \
+            --resource-group "$RESOURCE_GROUP" \
+            --image "$IMAGE" \
+            --min-replicas 1 \
+            --max-replicas 1 \
+            --set-env-vars $COMMON_ENV_VARS TRIGGERTRADE_PROCESS_ROLE=trading-worker TRIGGERTRADE_WORKER_ID=centralus-trading-worker-1 BYBIT_API_KEY=secretref:bybit-api-key BYBIT_API_SECRET=secretref:bybit-api-secret
 
       - name: Deploy scheduler
         shell: bash
@@ -87,9 +148,12 @@ jobs:
           set -euo pipefail
 
           az containerapp update \
-            --name triggertrade-scheduler \
-            --resource-group triggertrade-rg \
-            --image "$IMAGE"
+            --name "$SCHEDULER_APP" \
+            --resource-group "$RESOURCE_GROUP" \
+            --image "$IMAGE" \
+            --min-replicas 1 \
+            --max-replicas 1 \
+            --set-env-vars $COMMON_ENV_VARS TRIGGERTRADE_PROCESS_ROLE=scheduler
 
       - name: Verify deployed images
         shell: bash
@@ -98,22 +162,22 @@ jobs:
 
           echo "=== WEB ==="
           az containerapp show \
-            --name triggertrade-web \
-            --resource-group triggertrade-rg \
+            --name "$WEB_APP" \
+            --resource-group "$RESOURCE_GROUP" \
             --query "properties.template.containers[0].image" \
             -o tsv
 
           echo "=== TRADING WORKER ==="
           az containerapp show \
-            --name triggertrade-trading-worker \
-            --resource-group triggertrade-rg \
+            --name "$TRADING_WORKER_APP" \
+            --resource-group "$RESOURCE_GROUP" \
             --query "properties.template.containers[0].image" \
             -o tsv
 
           echo "=== SCHEDULER ==="
           az containerapp show \
-            --name triggertrade-scheduler \
-            --resource-group triggertrade-rg \
+            --name "$SCHEDULER_APP" \
+            --resource-group "$RESOURCE_GROUP" \
             --query "properties.template.containers[0].image" \
             -o tsv
 

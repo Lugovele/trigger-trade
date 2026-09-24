@@ -31,10 +31,23 @@ def test_deploy_script_can_target_web_worker_and_scheduler_roles():
 
     assert '[ValidateSet("web", "trading-worker", "scheduler")]' in script
     assert '[string[]] $Roles = @("web", "trading-worker", "scheduler")' in script
-    assert '"trading-worker" = "triggertrade-trading-worker"' in script
-    assert '"scheduler" = "triggertrade-scheduler"' in script
-    assert '"--set-env-vars", "TRIGGERTRADE_PROCESS_ROLE=$Role"' in script
+    assert '$AcrRepository = "triggertrade-web"' in script
+    assert '"web" = "triggertrade-web-centralus"' in script
+    assert '"trading-worker" = "triggertrade-trading-worker-centralus"' in script
+    assert '"scheduler" = "triggertrade-scheduler-centralus"' in script
+    assert '$UserAssignedIdentity = "triggertrade-pull-id"' in script
+    assert '"containerapp", "identity", "assign"' in script
+    assert '"--user-assigned", $UserAssignedIdentityId' in script
+    assert '"--min-replicas", [string] $Scale.min' in script
+    assert '"--max-replicas", [string] $Scale.max' in script
+    assert "TRIGGERTRADE_RUNTIME_MODE=production" in script
+    assert "TRIGGERTRADE_POSTGRES_DSN=secretref:postgres-dsn" in script
+    assert "BYBIT_API_KEY=secretref:bybit-api-key" in script
+    assert "BYBIT_API_SECRET=secretref:bybit-api-secret" in script
+    assert '"--set-env-vars"' in script
+    assert '$RoleEnvVars = @($CommonEnvVars + "TRIGGERTRADE_PROCESS_ROLE=$Role")' in script
     assert "Wait-ContainerAppReady" in script
+    assert "Custom domain and DNS cutover are intentionally not modified by this script." in script
 
 
 def test_web_container_health_uses_local_healthz_endpoint():

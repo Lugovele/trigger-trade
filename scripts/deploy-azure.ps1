@@ -9,13 +9,35 @@ $ErrorActionPreference = "Stop"
 $ResourceGroup = "triggertrade-rg"
 $AcrName = "triggertradeacr"
 $AcrLoginServer = "triggertradeacr-dcfmhtd6fmaubtac.azurecr.io"
-$AcrRepository = "triggertrade-runtime"
+$AcrRepository = "triggertrade-web"
+$ContainerAppsEnvironment = "triggertrade-env-centralus"
+$UserAssignedIdentity = "triggertrade-pull-id"
 $ContainerAppsByRole = @{
-    "web" = "triggertrade-web"
-    "trading-worker" = "triggertrade-trading-worker"
-    "scheduler" = "triggertrade-scheduler"
+    "web" = "triggertrade-web-centralus"
+    "trading-worker" = "triggertrade-trading-worker-centralus"
+    "scheduler" = "triggertrade-scheduler-centralus"
 }
-$CustomDomain = "tt.lugovele.com"
+$ScaleByRole = @{
+    "web" = @{ min = 2; max = 4 }
+    "trading-worker" = @{ min = 1; max = 1 }
+    "scheduler" = @{ min = 1; max = 1 }
+}
+$CommonEnvVars = @(
+    "TRIGGERTRADE_RUNTIME_MODE=production",
+    "TRIGGERTRADE_TRADING_MODE=paper",
+    "TRIGGERTRADE_LIVE_TRADING_ENABLED=false",
+    "TRIGGERTRADE_EXECUTION_VENUE=bybit_demo_futures",
+    "TRIGGERTRADE_ACTIVE_EXECUTION_VENUE=bybit_demo_futures",
+    "TRIGGERTRADE_TEST_EXECUTION_VENUE=local_test_simulation",
+    "TRIGGERTRADE_EXCHANGE=bybit",
+    "TRIGGERTRADE_MARKET=linear",
+    "TRIGGERTRADE_CATEGORY=linear",
+    "TRIGGERTRADE_BYBIT_ENV=demo",
+    "BYBIT_BASE_URL=https://api-demo.bybit.com",
+    "TRIGGERTRADE_POSTGRES_DSN=secretref:postgres-dsn",
+    "TRIGGERTRADE_POSTGRES_SCHEMA=public",
+    "TRIGGERTRADE_RESEARCH_DEMO_HANDOFF_ENABLED=true"
+)
 $HealthTimeoutSeconds = 300
 $HealthPollIntervalSeconds = 10
 
@@ -183,12 +205,12 @@ if ($IsInsideWorkTree -ne "true") {
     throw "Script location is not inside a git work tree: $RepoRoot"
 }
 
-$GitStatus = Get-CheckedCommandOutput -FilePath "git" -Arguments @("status", "--porcelain=v1") -FailureMessage "Unable to inspect git working tree."
+$GitStatus = Get-CheckedCommandOutput -FilePath "git" -Arguments @("status", "--porcelain=v1", "--untracked-files=no") -FailureMessage "Unable to inspect git working tree."
 if (-not [string]::IsNullOrWhiteSpace($GitStatus)) {
-    throw "Working tree is not clean. Commit, stash, or remove local changes before deploying so the image matches the git SHA."
+    throw "Tracked working tree is not clean. Commit or revert tracked changes before deploying so the image matches the git SHA."
 }
 
-$GitSha = Get-CheckedCommandOutput -FilePath "git" -Arguments @("rev-parse", "--short", "HEAD") -FailureMessage "Unable to determine current git SHA."
+$GitSha = Get-CheckedCommandOutput -FilePath "git" -Arguments @("rev-parse", "HEAD") -FailureMessage "Unable to determine current git SHA."
 $LocalImage = "${AcrRepository}:$GitSha"
 $RemoteImage = "${AcrLoginServer}/${AcrRepository}:$GitSha"
 
@@ -202,19 +224,53 @@ Write-Host "Pushing image $RemoteImage"
 Invoke-CheckedCommand -FilePath "docker" -Arguments @("tag", $LocalImage, $RemoteImage) -FailureMessage "Docker tag failed."
 Invoke-CheckedCommand -FilePath "docker" -Arguments @("push", $RemoteImage) -FailureMessage "Docker push failed."
 
+$UserAssignedIdentityId = Get-CheckedCommandOutput -FilePath "az" -Arguments @(
+    "identity", "show",
+    "--name", $UserAssignedIdentity,
+    "--resource-group", $ResourceGroup,
+    "--query", "id",
+    "--output", "tsv",
+    "--only-show-errors"
+) -FailureMessage "Unable to resolve user-assigned identity $UserAssignedIdentity."
+
 foreach ($Role in $Roles) {
     $ContainerAppName = $ContainerAppsByRole[$Role]
+    $Scale = $ScaleByRole[$Role]
     if ([string]::IsNullOrWhiteSpace($ContainerAppName)) {
         throw "No Azure Container App is configured for role $Role."
     }
+    if ($null -eq $Scale) {
+        throw "No scaling policy is configured for role $Role."
+    }
+
+    $RoleEnvVars = @($CommonEnvVars + "TRIGGERTRADE_PROCESS_ROLE=$Role")
+    if ($Role -eq "trading-worker") {
+        $RoleEnvVars += @(
+            "TRIGGERTRADE_WORKER_ID=centralus-trading-worker-1",
+            "BYBIT_API_KEY=secretref:bybit-api-key",
+            "BYBIT_API_SECRET=secretref:bybit-api-secret"
+        )
+    }
 
     Write-Host "Updating Azure Container App $ContainerAppName for role $Role to $RemoteImage"
+    Invoke-CheckedCommand -FilePath "az" -Arguments @(
+        "containerapp", "identity", "assign",
+        "--name", $ContainerAppName,
+        "--resource-group", $ResourceGroup,
+        "--user-assigned", $UserAssignedIdentityId,
+        "--only-show-errors",
+        "--output", "none"
+    ) -FailureMessage "Azure Container App identity assignment failed for role $Role."
+
     Invoke-CheckedCommand -FilePath "az" -Arguments @(
         "containerapp", "update",
         "--name", $ContainerAppName,
         "--resource-group", $ResourceGroup,
         "--image", $RemoteImage,
-        "--set-env-vars", "TRIGGERTRADE_PROCESS_ROLE=$Role",
+        "--min-replicas", [string] $Scale.min,
+        "--max-replicas", [string] $Scale.max,
+        "--set-env-vars"
+    ) + $RoleEnvVars + @(
         "--only-show-errors",
         "--output", "none"
     ) -FailureMessage "Azure Container App update failed for role $Role."
@@ -250,16 +306,10 @@ foreach ($Role in $Roles) {
         }
 
         $AzureHealthUri = "https://$AzureFqdn/healthz"
-        $CustomDomainHealthUri = "https://$CustomDomain/healthz"
-
         Write-Host "Polling $AzureHealthUri"
         $AzureHealthResult = Wait-Healthz -Uri $AzureHealthUri -TimeoutSeconds $HealthTimeoutSeconds -PollIntervalSeconds $HealthPollIntervalSeconds
 
-        Write-Host "Polling $CustomDomainHealthUri"
-        $CustomDomainHealthResult = Wait-Healthz -Uri $CustomDomainHealthUri -TimeoutSeconds $HealthTimeoutSeconds -PollIntervalSeconds $HealthPollIntervalSeconds
-
         Write-Host "Web Azure health: $AzureHealthResult"
-        Write-Host "Web custom-domain health: $CustomDomainHealthResult"
     }
 }
 
@@ -267,4 +317,7 @@ Write-Host ""
 Write-Host "Deployment summary"
 Write-Host "Git SHA: $GitSha"
 Write-Host "Image: $RemoteImage"
+Write-Host "Container Apps environment: $ContainerAppsEnvironment"
+Write-Host "User-assigned identity: $UserAssignedIdentity"
 Write-Host "Roles: $($Roles -join ', ')"
+Write-Host "Custom domain and DNS cutover are intentionally not modified by this script."
