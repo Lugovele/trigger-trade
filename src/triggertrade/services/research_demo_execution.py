@@ -9,6 +9,7 @@ from typing import Any, Protocol
 
 from triggertrade.canonical_json import canonical_json_digest
 from triggertrade.persistence.durable_messages import DurableMessageStore
+from triggertrade.persistence.postgres_research_registry import PostgresResearchConfigurationRegistry
 from triggertrade.persistence.postgres import (
     OwnerStateRecord,
     OwnerStateRevisionConflict,
@@ -19,6 +20,7 @@ from triggertrade.persistence.postgres import (
 )
 from triggertrade.persistence.research_store import ResearchRecord
 from triggertrade.rules import TradingRulesVersion
+from triggertrade.trigger_sets import TriggerSetVersion
 from triggertrade.services.research import (
     ResearchDemoExecutionHandoffResult,
     ResearchDemoIsolation,
@@ -74,6 +76,7 @@ class PostgresResearchDemoExecutionHandoff:
         self,
         *,
         research: ResearchRecord,
+        trigger_set: TriggerSetVersion,
         rules: TradingRulesVersion,
         isolation: ResearchDemoIsolation,
         started_at: str,
@@ -81,6 +84,11 @@ class PostgresResearchDemoExecutionHandoff:
         demo_run_id: str,
     ) -> ResearchDemoExecutionHandoffResult:
         with PostgresUnitOfWork(self._factory) as uow:
+            PostgresResearchConfigurationRegistry(uow.connection).put_configuration(
+                research=research,
+                trigger_set=trigger_set,
+                rules=rules,
+            )
             record = ResearchDemoExecutionStore(uow.connection).submit(
                 research=research,
                 rules=rules,

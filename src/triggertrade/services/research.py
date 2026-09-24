@@ -84,12 +84,23 @@ class ResearchDemoExecutionHandoff(Protocol):
         self,
         *,
         research: ResearchRecord,
+        trigger_set: TriggerSetVersion,
         rules: TradingRulesVersion,
         isolation: ResearchDemoIsolation,
         started_at: str,
         pin_payload: dict[str, Any],
         demo_run_id: str,
     ) -> ResearchDemoExecutionHandoffResult: ...
+
+
+class ResearchConfigurationRegistry(Protocol):
+    def put_configuration(
+        self,
+        *,
+        research: ResearchRecord,
+        trigger_set: TriggerSetVersion,
+        rules: TradingRulesVersion,
+    ) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -114,6 +125,7 @@ class ResearchService:
         instrument: FuturesInstrumentMetadata | None = None,
         demo_isolation: ResearchDemoIsolation | None = None,
         demo_execution_handoff: ResearchDemoExecutionHandoff | None = None,
+        research_config_registry: ResearchConfigurationRegistry | None = None,
         backtest_runner: BacktestRunner | None = None,
         promotion_governance_store: ResearchPromotionGovernanceStore | None = None,
         legacy_sqlite_promotion_enabled: bool = False,
@@ -127,6 +139,7 @@ class ResearchService:
         self._instrument = instrument
         self._demo_isolation = demo_isolation or ResearchDemoIsolation()
         self._demo_execution_handoff = demo_execution_handoff
+        self._research_config_registry = research_config_registry
         self._backtest_runner = backtest_runner or run_backtest
         self._promotion_governance_store = promotion_governance_store
         self._legacy_sqlite_promotion_enabled = legacy_sqlite_promotion_enabled
@@ -153,6 +166,11 @@ class ResearchService:
             created_source=created_source,
             pin_payload=pins,
             created_at=created_at,
+            before_insert=lambda candidate: self._persist_research_configuration(
+                candidate,
+                trigger_set=trigger_set,
+                rules=rules,
+            ),
         )
         self._audit_research_event(
             "RESEARCH_CREATED",
@@ -266,6 +284,7 @@ class ResearchService:
 
     def start_demo_run(self, research_id: str, *, created_at: str | None = None) -> ResearchDemoRunRecord:
         research = self._required_research(research_id)
+        trigger_set = self._exact_trigger_set(research.set_id, research.set_version)
         rules = self._exact_rules_version(research.rules_version_id)
         block_reason = self._demo_block_reason(rules)
         if block_reason is not None:
@@ -290,8 +309,10 @@ class ResearchService:
                 reason="research_demo_canonical_execution_handoff_unavailable",
                 created_at=created_at,
             )
+        self._persist_research_configuration(research, trigger_set=trigger_set, rules=rules)
         handoff_result = handoff.start_research_demo(
             research=research,
+            trigger_set=trigger_set,
             rules=rules,
             isolation=self._demo_isolation,
             started_at=now,
@@ -328,6 +349,21 @@ class ResearchService:
             },
         )
         return record
+
+    def _persist_research_configuration(
+        self,
+        research: ResearchRecord,
+        *,
+        trigger_set: TriggerSetVersion,
+        rules: TradingRulesVersion,
+    ) -> None:
+        if self._research_config_registry is None:
+            return
+        self._research_config_registry.put_configuration(
+            research=research,
+            trigger_set=trigger_set,
+            rules=rules,
+        )
 
     def stop_demo_run(self, research_id: str, run_id: str, *, stopped_at: str | None = None) -> ResearchDemoRunRecord:
         record = self._store.stop_demo_run(research_id, run_id, stopped_at=stopped_at)

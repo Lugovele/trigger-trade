@@ -163,6 +163,12 @@ from .research_promotion_governance import (
     ResearchPromotionGovernanceRecord,
     ResearchPromotionGovernanceStore,
 )
+from .postgres_research_registry import (
+    PostgresResearchConfigurationRegistry,
+    PostgresResearchConfigurationRegistryClient,
+    ResearchConfigurationRegistryError,
+    ResearchDemoConfiguration,
+)
 from .submit_authorization_store import (
     SubmitAuthorizationConflict,
     SubmitAuthorizationRecord,
@@ -336,6 +342,10 @@ __all__ = [
     "ResearchPromotionGovernanceClient",
     "ResearchPromotionGovernanceRecord",
     "ResearchPromotionGovernanceStore",
+    "PostgresResearchConfigurationRegistry",
+    "PostgresResearchConfigurationRegistryClient",
+    "ResearchConfigurationRegistryError",
+    "ResearchDemoConfiguration",
     "RuntimeCheckpoint",
     "RuntimeStore",
     "RuntimeStoreError",

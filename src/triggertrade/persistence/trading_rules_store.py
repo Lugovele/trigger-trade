@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import sqlite3
+from typing import Callable
 
 from triggertrade.rules.trading import (
     TRADING_RULES_SCHEMA_VERSION,
@@ -28,7 +29,14 @@ class TradingRulesStore:
             self.path.parent.mkdir(parents=True, exist_ok=True)
         self._init_schema()
 
-    def bootstrap_initial(self, draft: TradingRulesVersionDraft, *, created_at: str, created_source: str) -> TradingRulesVersion:
+    def bootstrap_initial(
+        self,
+        draft: TradingRulesVersionDraft,
+        *,
+        created_at: str,
+        created_source: str,
+        before_commit: Callable[[TradingRulesVersion], None] | None = None,
+    ) -> TradingRulesVersion:
         validate_rules_draft(draft)
         with self._connect() as conn:
             initial_hash = semantic_hash(draft)
@@ -58,6 +66,8 @@ class TradingRulesStore:
                 """,
                 (TRADING_RULES_SCOPE_LIVE, version.rules_version_id, created_at),
             )
+            if before_commit is not None:
+                before_commit(version)
         self._audit_rules_event("RULES_VERSION_BECAME_CURRENT", version, created_at, created_source, None)
         return self.get_current()  # type: ignore[return-value]
 
@@ -69,6 +79,7 @@ class TradingRulesStore:
         created_source: str,
         change_summary: str,
         created_at: str,
+        before_commit: Callable[[TradingRulesVersion], None] | None = None,
     ) -> TradingRulesVersion:
         validate_rules_draft(draft)
         with self._connect() as conn:
@@ -89,6 +100,8 @@ class TradingRulesStore:
                 "UPDATE trading_rules_current SET rules_version_id = ?, updated_at = ? WHERE scope = ?",
                 (version.rules_version_id, created_at, TRADING_RULES_SCOPE_LIVE),
             )
+            if before_commit is not None:
+                before_commit(version)
         self._audit_rules_event("RULES_VERSION_CREATED", version, created_at, created_source, created_from_version_id)
         self._audit_rules_event("RULES_VERSION_BECAME_CURRENT", version, created_at, created_source, created_from_version_id)
         return self.get_current()  # type: ignore[return-value]

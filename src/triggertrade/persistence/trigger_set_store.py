@@ -8,7 +8,7 @@ from hashlib import sha256
 import json
 import re
 import sqlite3
-from typing import Iterable
+from typing import Callable, Iterable, Protocol
 
 from triggertrade.trigger_sets import (
     TRIGGER_REGISTRY_SCHEMA_VERSION,
@@ -27,6 +27,10 @@ from triggertrade.persistence.trace_store import TraceStore
 
 class TriggerSetStoreError(RuntimeError):
     pass
+
+
+class TriggerSetVersionRegistry(Protocol):
+    def put_trigger_set_version(self, trigger_set: TriggerSetVersion) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -53,8 +57,14 @@ _LEGACY_UNVERIFIED_DEFINITION_HASH = "LEGACY_UNVERIFIED"
 
 
 class TriggerSetStore:
-    def __init__(self, path: str | Path = "runtime/triggertrade_paper.sqlite3") -> None:
+    def __init__(
+        self,
+        path: str | Path = "runtime/triggertrade_paper.sqlite3",
+        *,
+        version_registry: TriggerSetVersionRegistry | None = None,
+    ) -> None:
         self.path = Path(path)
+        self._version_registry = version_registry
         if self.path.parent != Path("."):
             self.path.parent.mkdir(parents=True, exist_ok=True)
         self._init_schema()
@@ -148,7 +158,7 @@ class TriggerSetStore:
         return "registered"
 
     def create_set(self, trigger_set: TriggerSetVersion) -> TriggerSetVersion:
-        self._create_set_result(trigger_set)
+        self._create_set_result(trigger_set, before_commit=self._persist_trigger_set_version)
         return trigger_set
 
     def register_trigger_sets(self, trigger_sets: Iterable[TriggerSetVersion]) -> RegistrySyncReport:
@@ -161,7 +171,7 @@ class TriggerSetStore:
         invalid: list[str] = []
         for trigger_set in trigger_sets:
             try:
-                result = self._create_set_result(trigger_set)
+                result = self._create_set_result(trigger_set, before_commit=self._persist_trigger_set_version)
             except TriggerSetStoreError as exc:
                 message = f"{trigger_set.set_id}@{trigger_set.version}: {exc}"
                 if "invalid" in str(exc) or "requires" in str(exc) or "unknown" in str(exc):
@@ -172,7 +182,16 @@ class TriggerSetStore:
                 (unchanged if result == "unchanged" else registered).append(f"{trigger_set.set_id}@{trigger_set.version}")
         return RegistrySyncReport(tuple(unchanged), tuple(registered), tuple(conflicts), tuple(invalid), ())
 
-    def _create_set_result(self, trigger_set: TriggerSetVersion) -> str:
+    def _persist_trigger_set_version(self, trigger_set: TriggerSetVersion) -> None:
+        if self._version_registry is not None:
+            self._version_registry.put_trigger_set_version(trigger_set)
+
+    def _create_set_result(
+        self,
+        trigger_set: TriggerSetVersion,
+        *,
+        before_commit: Callable[[TriggerSetVersion], None] | None = None,
+    ) -> str:
         if not trigger_set.version:
             raise TriggerSetStoreError("trigger set version is required")
         _validate_trigger_set_version(trigger_set)
@@ -208,6 +227,8 @@ class TriggerSetStore:
                         """,
                         (set_hash, TRIGGER_SET_REGISTRY_SCHEMA_VERSION, trigger_set.set_id, trigger_set.version),
                     )
+                if before_commit is not None:
+                    before_commit(trigger_set)
                 return "unchanged"
             if trigger_set.status is TriggerSetStatus.ACTIVE:
                 active = self.get_active_set(trigger_set.symbol, trigger_set.timeframe, conn)
@@ -248,6 +269,8 @@ class TriggerSetStore:
                     """,
                     (trigger_set.set_id, trigger_set.version, rule_id, rule_version, position),
                 )
+            if before_commit is not None:
+                before_commit(trigger_set)
         self._audit_set_event("SET_VERSION_REGISTERED", trigger_set, trigger_set.created_at, "REGISTERED", trigger_set.provenance)
         return "registered"
 

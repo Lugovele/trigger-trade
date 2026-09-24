@@ -66,12 +66,13 @@ def ensure_runtime_registry_initialized(
     *,
     config: AppConfig | None = None,
     created_at: str = "2026-09-05T00:00:00+00:00",
+    version_registry=None,
 ) -> RegistryBootstrapResult:
-    store = TriggerSetStore(db_path)
+    store = TriggerSetStore(db_path, version_registry=version_registry)
     sync_report = bootstrap_current_trigger_sets(store, created_at=created_at)
     rules_config = config or load_config({})
     trading_store = TradingRulesStore(db_path)
-    trading_rules = TradingRulesService(trading_store).ensure_initial_version(rules_config, created_at=created_at)
+    trading_rules = TradingRulesService(trading_store, version_registry=version_registry).ensure_initial_version(rules_config, created_at=created_at)
     return RegistryBootstrapResult(
         db_path=Path(db_path),
         rules_count=len(store.list_rules()),
@@ -87,10 +88,11 @@ def ensure_runtime_registry_for_env(
     env: Mapping[str, str],
     *,
     created_at: str = "2026-09-05T00:00:00+00:00",
+    version_registry=None,
 ) -> tuple[AppConfig, RegistryBootstrapResult]:
     config = load_config(env)
     db_path = runtime_db_path(config, env)
-    result = ensure_runtime_registry_initialized(db_path, config=config, created_at=created_at)
+    result = ensure_runtime_registry_initialized(db_path, config=config, created_at=created_at, version_registry=version_registry)
     return config, result
 
 

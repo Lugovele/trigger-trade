@@ -9,12 +9,16 @@ import pytest
 
 from triggertrade.persistence.durable_messages import DurableMessageStore
 from triggertrade.persistence.postgres import (
+    OwnerStateConflict,
+    OwnerStateRecord,
     PostgresConnectionFactory,
     PostgresPersistenceError,
     PostgresSettings,
     PostgresUnitOfWork,
     apply_postgres_migrations,
 )
+from triggertrade.canonical_json import canonical_json_digest
+from triggertrade.persistence.postgres_research_registry import PostgresResearchConfigurationRegistry
 from triggertrade.persistence.research_store import ResearchDecision, ResearchRecord, ResearchStatus
 from triggertrade.rules import CoinRule, DirectionMode, TakeProfitMode, TradingRulesVersion, TradingRulesVersionDraft
 from triggertrade.services.research import ResearchDemoIsolation
@@ -28,6 +32,7 @@ from triggertrade.services.research_demo_execution import (
     ResearchDemoExecutionRecord,
     ResearchDemoExecutionStore,
 )
+from triggertrade.trigger_sets import TriggerSetStatus, TriggerSetVersion
 
 
 def test_research_demo_dispatch_fails_closed_without_canonical_executor():
@@ -58,6 +63,71 @@ def test_research_demo_dispatch_marks_running_and_replays_terminal_result_once()
     assert executor.calls == [record.demo_run_id]
 
 
+def test_research_config_registry_round_trips_exact_versions_without_sqlite(monkeypatch):
+    stored: dict[tuple[str, str, str], OwnerStateRecord] = {}
+
+    class FakeOwnerStateStore:
+        def __init__(self, connection) -> None:
+            self._connection = connection
+
+        def put_if_absent(self, *, owner, state_type, state_id, payload):
+            digest = canonical_json_digest(payload)
+            key = (owner, state_type, state_id)
+            existing = stored.get(key)
+            if existing is not None:
+                if existing.payload_digest != digest:
+                    raise OwnerStateConflict("owner state identity already exists with different canonical content")
+                return existing, False
+            record = OwnerStateRecord(owner, state_type, state_id, 1, dict(payload), digest)
+            stored[key] = record
+            return record, True
+
+        def get(self, *, owner, state_type, state_id):
+            return stored.get((owner, state_type, state_id))
+
+    monkeypatch.setattr("triggertrade.persistence.postgres_research_registry.OwnerStateStore", FakeOwnerStateStore)
+    registry = PostgresResearchConfigurationRegistry(connection=object())
+    research = _research_record()
+    trigger_set = _trigger_set()
+    rules = _rules_version()
+
+    registry.put_configuration(research=research, trigger_set=trigger_set, rules=rules)
+    registry.put_configuration(research=research, trigger_set=trigger_set, rules=rules)
+    config = registry.get_research_demo_configuration(
+        research_id=research.research_id,
+        set_id=research.set_id,
+        set_version=research.set_version,
+        rules_version_id=rules.rules_version_id,
+    )
+
+    assert config.research == _immutable_research_view(research)
+    assert config.trigger_set == trigger_set
+    assert config.rules == _copy_rules_current_flag(rules, is_current=False)
+    mutable_research = ResearchRecord(
+        **{
+            **research.__dict__,
+            "updated_at": "2026-09-24T01:00:00Z",
+            "status": ResearchStatus.DEMO_RUNNING,
+            "selected_backtest_run_id": "rbt-unit",
+            "selected_demo_run_id": "rdm-unit",
+            "decision": ResearchDecision.PROMOTION_REQUESTED,
+            "decision_at": "2026-09-24T01:00:00Z",
+            "promotion_result_metadata": {"operator": "unit"},
+        }
+    )
+    registry.put_research(mutable_research)
+    assert registry.get_research(research.research_id) == _immutable_research_view(research)
+    with pytest.raises(OwnerStateConflict):
+        registry.put_research(
+            ResearchRecord(
+                **{
+                    **research.__dict__,
+                    "created_source": "changed-without-new-research-id",
+                }
+            )
+        )
+
+
 def test_research_demo_postgres_handoff_persists_state_outbox_and_idempotency():
     psycopg = pytest.importorskip("psycopg")
     settings = _settings()
@@ -66,12 +136,14 @@ def test_research_demo_postgres_handoff_persists_state_outbox_and_idempotency():
         factory = PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)
         handoff = PostgresResearchDemoExecutionHandoff(factory=factory)
         research = _research_record()
+        trigger_set = _trigger_set()
         rules = _rules_version()
         isolation = _isolation()
         pin_payload = {"pin": "research-demo", "research_id": research.research_id}
 
         first = handoff.start_research_demo(
             research=research,
+            trigger_set=trigger_set,
             rules=rules,
             isolation=isolation,
             started_at="2026-09-24T00:00:00+00:00",
@@ -80,6 +152,7 @@ def test_research_demo_postgres_handoff_persists_state_outbox_and_idempotency():
         )
         second = handoff.start_research_demo(
             research=research,
+            trigger_set=trigger_set,
             rules=rules,
             isolation=isolation,
             started_at="2026-09-24T00:00:00+00:00",
@@ -94,6 +167,12 @@ def test_research_demo_postgres_handoff_persists_state_outbox_and_idempotency():
         with PostgresUnitOfWork(factory) as uow:
             state = ResearchDemoExecutionStore(uow.connection).get("rdm-unit-1")
             outbox = DurableMessageStore(uow.connection).get_outbox(message_id=first.handoff_id)
+            config = PostgresResearchConfigurationRegistry(uow.connection).get_research_demo_configuration(
+                research_id=research.research_id,
+                set_id=research.set_id,
+                set_version=research.set_version,
+                rules_version_id=rules.rules_version_id,
+            )
 
         assert state is not None
         assert state.status == "PENDING"
@@ -106,6 +185,45 @@ def test_research_demo_postgres_handoff_persists_state_outbox_and_idempotency():
         assert outbox.message_type == RESEARCH_DEMO_MESSAGE_TYPE
         assert outbox.message_version == RESEARCH_DEMO_MESSAGE_VERSION
         assert outbox.dedupe_key == "RESEARCH_DEMO_START:rdm-unit-1"
+        assert config.research == _immutable_research_view(research)
+        assert config.trigger_set == trigger_set
+        assert config.rules == _copy_rules_current_flag(rules, is_current=False)
+    finally:
+        with psycopg.connect(settings.dsn, autocommit=True) as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(f'DROP SCHEMA IF EXISTS "{settings.schema}" CASCADE')
+
+
+def test_research_config_registry_rejects_immutable_conflicts():
+    psycopg = pytest.importorskip("psycopg")
+    settings = _settings()
+    try:
+        apply_postgres_migrations(dsn=settings.dsn, schema=settings.schema)
+        factory = PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)
+        research = _research_record()
+        trigger_set = _trigger_set()
+        rules = _rules_version()
+        with PostgresUnitOfWork(factory) as uow:
+            registry = PostgresResearchConfigurationRegistry(uow.connection)
+            registry.put_configuration(research=research, trigger_set=trigger_set, rules=rules)
+            registry.put_configuration(research=research, trigger_set=trigger_set, rules=rules)
+            changed_set = TriggerSetVersion(
+                **{**trigger_set.__dict__, "purpose": "changed without version bump"}
+            )
+            with pytest.raises(OwnerStateConflict):
+                registry.put_trigger_set_version(changed_set)
+            changed_rules = TradingRulesVersion(
+                **{**rules.__dict__, "change_summary": "changed without rules version bump"}
+            )
+            with pytest.raises(OwnerStateConflict):
+                registry.put_trading_rules_version(changed_rules)
+            with pytest.raises(PostgresPersistenceError, match="exact Research Demo configuration missing"):
+                registry.get_research_demo_configuration(
+                    research_id=research.research_id,
+                    set_id=research.set_id,
+                    set_version=research.set_version,
+                    rules_version_id="missing-rules",
+                )
     finally:
         with psycopg.connect(settings.dsn, autocommit=True) as conn:
             with conn.cursor() as cursor:
@@ -203,6 +321,46 @@ def _research_record() -> ResearchRecord:
     )
 
 
+def _immutable_research_view(research: ResearchRecord) -> ResearchRecord:
+    return ResearchRecord(
+        **{
+            **research.__dict__,
+            "updated_at": research.created_at,
+            "status": ResearchStatus.DRAFT,
+            "selected_backtest_run_id": None,
+            "selected_demo_run_id": None,
+            "decision": ResearchDecision.NONE,
+            "decision_at": None,
+            "archived_at": None,
+            "made_active_at": None,
+            "promoted_set_id": None,
+            "promoted_set_version": None,
+            "promoted_rules_version_id": None,
+            "previous_active_set_id": None,
+            "previous_active_set_version": None,
+            "previous_rules_version_id": None,
+            "promotion_result_metadata": {},
+        }
+    )
+
+
+def _trigger_set() -> TriggerSetVersion:
+    return TriggerSetVersion(
+        set_id="triggertrade-futures-core",
+        version="v1",
+        purpose="Unit Research Demo set",
+        status=TriggerSetStatus.TESTING,
+        symbol="BTCUSDT",
+        timeframe="1m",
+        rule_versions=(("TRG-001", "0.2.0"), ("STR-FUT-001", "0.1.0")),
+        strategy_version="STR-FUT-001@0.1.0",
+        risk_profile_version="RSK-FUTURES-001@0.1.0",
+        config_snapshot={"market": "linear", "execution": "bybit_demo_futures"},
+        created_at="2026-09-24T00:00:00Z",
+        provenance="unit",
+    )
+
+
 def _rules_version() -> TradingRulesVersion:
     return TradingRulesVersion(
         rules_version_id="rules-v1",
@@ -239,6 +397,15 @@ def _rules_version() -> TradingRulesVersion:
             coins=(CoinRule("BTCUSDT", True),),
         ),
     )
+
+
+def _copy_rules_current_flag(rules: TradingRulesVersion, *, is_current: bool) -> TradingRulesVersion:
+    values = dict(rules.__dict__)
+    values["is_current"] = is_current
+    draft_values = dict(rules.draft.__dict__)
+    draft_values["metadata"] = draft_values["metadata"] or {}
+    values["draft"] = TradingRulesVersionDraft(**draft_values)
+    return TradingRulesVersion(**values)
 
 
 def _isolation() -> ResearchDemoIsolation:

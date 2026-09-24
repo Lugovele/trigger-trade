@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 import re
 import sqlite3
-from typing import Any
+from typing import Any, Callable
 
 from triggertrade.canonical_json import canonical_json_digest, canonical_json_text
 from triggertrade.research_pins import (
@@ -172,6 +172,7 @@ class ResearchStore:
         created_source: str,
         pin_payload: dict[str, Any] | None = None,
         created_at: str | None = None,
+        before_insert: Callable[[ResearchRecord], None] | None = None,
     ) -> tuple[ResearchRecord, bool]:
         _validate_id(set_id, "set_id")
         _validate_id(set_version, "set_version")
@@ -193,6 +194,35 @@ class ResearchStore:
             existing = self._get_research(conn, research_id)
             if existing is not None:
                 return existing, False
+            record = ResearchRecord(
+                research_id=research_id,
+                created_at=created_at,
+                updated_at=created_at,
+                status=ResearchStatus.DRAFT,
+                set_id=set_id,
+                set_version=set_version,
+                rules_version_id=rules_version_id,
+                rules_display_version=clean_display_version,
+                selected_backtest_run_id=None,
+                selected_demo_run_id=None,
+                decision=ResearchDecision.NONE,
+                decision_at=None,
+                archived_at=None,
+                made_active_at=None,
+                promoted_set_id=None,
+                promoted_set_version=None,
+                promoted_rules_version_id=None,
+                previous_active_set_id=None,
+                previous_active_set_version=None,
+                previous_rules_version_id=None,
+                promotion_result_metadata={},
+                created_source=clean_source,
+                schema_version=RESEARCH_SCHEMA_VERSION,
+                pin_payload=pins,
+                pin_digest=pin_digest,
+            )
+            if before_insert is not None:
+                before_insert(record)
             conn.execute(
                 """
                 INSERT INTO research_entities (

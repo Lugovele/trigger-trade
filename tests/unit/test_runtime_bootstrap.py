@@ -38,6 +38,18 @@ def _optional_count(conn, table):
         return 0
 
 
+class _FakeResearchConfigRegistry:
+    def __init__(self):
+        self.trigger_sets = set()
+        self.rules_versions = set()
+
+    def put_trigger_set_version(self, trigger_set):
+        self.trigger_sets.add((trigger_set.set_id, trigger_set.version))
+
+    def put_trading_rules_version(self, rules):
+        self.rules_versions.add(rules.rules_version_id)
+
+
 def test_empty_runtime_db_bootstraps_canonical_registries_without_fake_evidence(tmp_path):
     db = tmp_path / "runtime.sqlite3"
 
@@ -58,6 +70,21 @@ def test_empty_runtime_db_bootstraps_canonical_registries_without_fake_evidence(
     assert model.get_test_overview().rule_set == "v2-test"
     assert model.list_set_performance() == ()
     assert _counts(db)["lane_lifecycles"] == 0
+
+
+def test_bootstrap_publishes_set_and_rules_versions_to_config_registry(tmp_path):
+    db = tmp_path / "runtime.sqlite3"
+    registry = _FakeResearchConfigRegistry()
+
+    result = ensure_runtime_registry_initialized(db, version_registry=registry)
+
+    assert result.trigger_sets_count == 4
+    assert result.trading_rules_versions_count == 1
+    assert ("triggertrade-core", "v1") in registry.trigger_sets
+    assert ("triggertrade-core-candidate", "v2-test") in registry.trigger_sets
+    assert ("triggertrade-futures-core", "v1") in registry.trigger_sets
+    assert ("triggertrade-futures-candidate", "v2-test") in registry.trigger_sets
+    assert result.current_rules_version_id in registry.rules_versions
 
 
 def test_bootstrap_is_idempotent_across_repeated_startups(tmp_path):

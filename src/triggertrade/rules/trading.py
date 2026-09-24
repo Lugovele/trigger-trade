@@ -8,7 +8,7 @@ from decimal import Decimal
 from enum import StrEnum
 from hashlib import sha256
 import json
-from typing import Callable, Mapping
+from typing import Callable, Mapping, Protocol
 
 from triggertrade.config import AppConfig
 
@@ -91,6 +91,10 @@ class TradingRulesUsage:
     created_at: str
 
 
+class TradingRulesVersionRegistry(Protocol):
+    def put_trading_rules_version(self, rules: TradingRulesVersion) -> None: ...
+
+
 @dataclass(frozen=True)
 class TradingRulesChange:
     changed: bool
@@ -101,13 +105,25 @@ class TradingRulesChange:
 class TradingRulesService:
     """Service boundary for immutable TradingRulesVersion lifecycle."""
 
-    def __init__(self, store, *, symbol_validator: Callable[[str], object] | None = None) -> None:
+    def __init__(
+        self,
+        store,
+        *,
+        symbol_validator: Callable[[str], object] | None = None,
+        version_registry: TradingRulesVersionRegistry | None = None,
+    ) -> None:
         self._store = store
         self._symbol_validator = symbol_validator
+        self._version_registry = version_registry
 
     def ensure_initial_version(self, config: AppConfig, *, created_at: str = "2026-09-07T00:00:00+00:00") -> TradingRulesVersion:
         draft = build_initial_trading_rules(config)
-        return self._store.bootstrap_initial(draft, created_at=created_at, created_source="config_bootstrap")
+        return self._store.bootstrap_initial(
+            draft,
+            created_at=created_at,
+            created_source="config_bootstrap",
+            before_commit=self._persist_version,
+        )
 
     def get_current_rules_version(self) -> TradingRulesVersion:
         current = self._store.get_current()
@@ -139,6 +155,7 @@ class TradingRulesService:
             created_source=created_source,
             change_summary=change_summary(current.draft, draft),
             created_at=created_at or datetime.now(UTC).isoformat(),
+            before_commit=self._persist_version,
         )
         return TradingRulesChange(True, version, version.change_summary)
 
@@ -153,6 +170,10 @@ class TradingRulesService:
 
     def get_rules_version_usage(self, rules_version_id: str) -> tuple[TradingRulesUsage, ...]:
         return self._store.list_usage(rules_version_id)
+
+    def _persist_version(self, version: TradingRulesVersion) -> None:
+        if self._version_registry is not None:
+            self._version_registry.put_trading_rules_version(version)
 
 
 def build_initial_trading_rules(config: AppConfig) -> TradingRulesVersionDraft:

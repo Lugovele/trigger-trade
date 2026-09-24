@@ -27,6 +27,7 @@ from triggertrade.persistence import (
     OperatorStateStore,
     PostgresConnectionFactory,
     PostgresSettings,
+    PostgresResearchConfigurationRegistryClient,
     ResearchPromotionGovernanceClient,
     ResearchStore,
     ResearchStoreError,
@@ -694,6 +695,7 @@ def create_server(
     postgres_health_probe=None,
     promotion_governance_store=None,
     research_demo_handoff=None,
+    research_config_registry=None,
 ) -> DashboardServer:
     if host not in ALLOWED_HOSTS:
         raise ValueError("dashboard host must be one of: 127.0.0.1, 0.0.0.0")
@@ -704,14 +706,16 @@ def create_server(
     rules_service = trading_rules_service or TradingRulesService(
         TradingRulesStore(db_path),
         symbol_validator=catalog_service.validate_symbol,
+        version_registry=research_config_registry,
     )
     research_boundary = research_service or ResearchService(
         store=ResearchStore(db_path),
-        trigger_set_store=TriggerSetStore(db_path),
+        trigger_set_store=TriggerSetStore(db_path, version_registry=research_config_registry),
         trading_rules_store=TradingRulesStore(db_path),
         message_store=message_store,
         promotion_governance_store=promotion_governance_store,
         demo_execution_handoff=research_demo_handoff,
+        research_config_registry=research_config_registry,
     )
     authorizer = operator_authorizer or operator_authorizer_from_env(db_path, {})
     command_boundary = DashboardCommandBoundary(
@@ -890,15 +894,20 @@ def create_server_from_env(
 ) -> tuple[DashboardServer, Path]:
     env = merged_runtime_env(os.environ if process_env is None else process_env, env_file=env_file)
     _require_explicit_dashboard_persistence(env)
-    config, bootstrap = ensure_runtime_registry_for_env(env)
+    research_config_registry = _research_config_registry_from_env(env)
+    config, bootstrap = ensure_runtime_registry_for_env(env, version_registry=research_config_registry)
     host = env.get("TRIGGERTRADE_DASHBOARD_HOST", DEFAULT_HOST)
     port = int(env.get("TRIGGERTRADE_DASHBOARD_PORT", str(DEFAULT_PORT)))
     db_path = runtime_db_path(config, env)
     catalog_service = InstrumentCatalogService(store=InstrumentCatalogStore(db_path), client=BybitDemoClient(config=config.bybit))
-    rules_service = TradingRulesService(TradingRulesStore(db_path), symbol_validator=catalog_service.validate_symbol)
     authorizer = operator_authorizer_from_env(db_path, env)
     promotion_governance = _promotion_governance_from_env(env)
     operator_actions = _operator_execution_bridge_from_env(env)
+    rules_service = TradingRulesService(
+        TradingRulesStore(db_path),
+        symbol_validator=catalog_service.validate_symbol,
+        version_registry=research_config_registry,
+    )
     research_demo_handoff = _research_demo_handoff_from_env(env)
     return create_server(
         host=host,
@@ -910,6 +919,7 @@ def create_server_from_env(
         operator_actions=operator_actions,
         promotion_governance_store=promotion_governance,
         research_demo_handoff=research_demo_handoff,
+        research_config_registry=research_config_registry,
     ), bootstrap.db_path
 
 
@@ -951,6 +961,18 @@ def _operator_execution_bridge_from_env(env: dict[str, str]):
     apply_postgres_migrations(dsn=settings.dsn, schema=settings.schema)
     return DashboardOperatorExecutionBridge(
         factory=PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)
+    )
+
+
+def _research_config_registry_from_env(env: dict[str, str]):
+    if not env.get("TRIGGERTRADE_POSTGRES_DSN"):
+        return None
+    if _env_true(env.get("TRIGGERTRADE_ALLOW_PRODUCTION_SQLITE_DASHBOARD")):
+        return None
+    settings = PostgresSettings.from_env(env)
+    apply_postgres_migrations(dsn=settings.dsn, schema=settings.schema)
+    return PostgresResearchConfigurationRegistryClient(
+        PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)
     )
 
 

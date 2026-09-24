@@ -1088,11 +1088,13 @@ class _FakeResearchDemoExecutionHandoff:
     def __init__(self) -> None:
         self.requests = []
 
-    def start_research_demo(self, *, research, rules, isolation, started_at, pin_payload, demo_run_id):
+    def start_research_demo(self, *, research, trigger_set, rules, isolation, started_at, pin_payload, demo_run_id):
         self.requests.append(
             {
                 "demo_run_id": demo_run_id,
                 "research_id": research.research_id,
+                "set_id": trigger_set.set_id,
+                "set_version": trigger_set.version,
                 "rules_version_id": rules.rules_version_id,
                 "execution_scope_id": isolation.execution_scope_id,
                 "started_at": started_at,
