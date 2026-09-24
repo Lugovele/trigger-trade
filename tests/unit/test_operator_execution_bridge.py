@@ -111,7 +111,7 @@ def test_close_all_partial_outcome_is_not_marked_succeeded():
 
     assert detail.startswith("operator_command_partial:CLOSE_ALL")
     assert store.transitions == ["EXECUTING", "PARTIAL"]
-    assert executor.calls == [("close_all_positions", {"scope": "ACTIVE"})]
+    assert executor.calls == [("close_all_positions", {"scope": "ACTIVE", "operation_id": "operator-command-1"})]
     assert store.record.result["failures"] == ["pos-2:ExecutionError"]
 
 

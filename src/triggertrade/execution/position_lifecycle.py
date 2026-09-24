@@ -526,6 +526,8 @@ class FuturesPositionLifecycleService:
         entry = tuple(fill for fill in fills if fill.action in {PositionAction.OPEN_LONG.value, PositionAction.OPEN_SHORT.value})
         exits = tuple(fill for fill in fills if fill.action in {PositionAction.CLOSE_LONG.value, PositionAction.CLOSE_SHORT.value})
         closed = close_futures_trade(trade_id=position.trade_id, entry_fills=entry, exit_fills=exits, leverage=Decimal(position.leverage))
+        if closed.quantity != Decimal(position.current_qty):
+            raise ExecutionError("closed trade quantity must match current position quantity before CLOSED transition")
         self._accounting_store.record_closed_trade(closed)
         realized_pct = Decimal("0") if Decimal(position.position_value) == 0 else closed.net_pnl / Decimal(position.position_value) * Decimal("100")
         now = datetime.now(UTC).isoformat()

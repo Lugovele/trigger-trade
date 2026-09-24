@@ -610,6 +610,14 @@ def runtime_state_store_from_env(env: dict[str, str], db_path):
 def build_canonical_runtime_from_env(env: dict[str, str]):
     from triggertrade.persistence import PostgresConnectionFactory, PostgresSettings, apply_postgres_migrations
     from triggertrade.persistence.postgres_runtime_store import PostgresRuntimeStore
+    from triggertrade.persistence.postgres_futures_stores import (
+        PostgresFuturesAccountingStore,
+        PostgresFuturesExecutionStore,
+        PostgresFuturesPositionStore,
+        PostgresOperatorStateStore,
+    )
+    from triggertrade.execution.bybit_futures import BybitFuturesExecutionAdapter
+    from triggertrade.services.futures_runtime import FuturesOperatorExecutionRuntime
     from triggertrade.services.runtime_storage import require_canonical_durable_runtime_state
     from triggertrade.services.trading_worker import build_target_trading_worker
 
@@ -621,10 +629,22 @@ def build_canonical_runtime_from_env(env: dict[str, str]):
     settings = PostgresSettings.from_env(runtime_env)
     apply_postgres_migrations(dsn=settings.dsn, schema=settings.schema)
     factory = PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)
+    credentials = load_bybit_credentials(runtime_env)
+    market_client = BybitDemoClient(config=config.bybit, credentials=credentials)
+    operator_executor = FuturesOperatorExecutionRuntime(
+        config=config,
+        market_client=market_client,
+        futures_execution_store=PostgresFuturesExecutionStore(factory),
+        accounting_store=PostgresFuturesAccountingStore(factory),
+        position_store=PostgresFuturesPositionStore(factory),
+        operator_state_store=PostgresOperatorStateStore(factory),
+        instrument_catalog=_BybitRuntimeInstrumentCatalog(market_client),
+        active_adapter=BybitFuturesExecutionAdapter(market_client),
+    )
     return build_target_trading_worker(
         factory=factory,
         runtime_store=PostgresRuntimeStore(factory),
-        operator_executor=None,
+        operator_executor=operator_executor,
         worker_id=str(runtime_env.get("TRIGGERTRADE_WORKER_ID") or "").strip() or None,
         poll_seconds=_poll_seconds(runtime_env, key="TRIGGERTRADE_WORKER_POLL_SECONDS", default="5"),
     )
@@ -685,6 +705,40 @@ def _poll_seconds(env: dict[str, str], *, key: str, default: str) -> float:
     if value <= 0:
         raise ConfigError(f"{key} must be positive")
     return min(value, 300.0)
+
+
+class _BybitRuntimeInstrumentCatalog:
+    """Runtime-only Bybit instrument resolver without a SQLite cache dependency."""
+
+    def __init__(self, client: BybitDemoClient) -> None:
+        self._client = client
+        self._cache: dict[str, object] = {}
+
+    def ensure_available(self):
+        return None
+
+    def validate_symbol(self, symbol: str):
+        normalized = symbol.strip().upper()
+        if normalized not in self._cache:
+            from triggertrade.instruments import CatalogError, instrument_from_bybit
+
+            response = self._client.linear_instrument_metadata(normalized)
+            items = response.result.get("list") or []
+            if not items:
+                raise CatalogError("instrument is not present in Bybit Demo catalog")
+            instrument = instrument_from_bybit(
+                items[0],
+                updated_at=datetime.now(UTC).isoformat(),
+            )
+            if not instrument.is_tradeable:
+                raise CatalogError("instrument is not tradeable")
+            self._cache[normalized] = instrument
+        return self._cache[normalized]
+
+    def metadata_for_symbol(self, symbol: str):
+        from triggertrade.instruments import instrument_to_metadata
+
+        return instrument_to_metadata(self.validate_symbol(symbol))
 
 
 def main() -> int:

@@ -1393,10 +1393,10 @@ class FuturesOperatorExecutionRuntime:
             "position_status": result.position.status,
         }
 
-    def close_all_positions(self, *, scope: str = "ACTIVE") -> dict[str, object]:
+    def close_all_positions(self, *, scope: str = "ACTIVE", operation_id: str | None = None) -> dict[str, object]:
         if scope != "ACTIVE":
             raise ExecutionError("close all supports only ACTIVE scope")
-        close_all_id = f"closeall-{datetime.now(UTC).strftime('%Y%m%d%H%M%S%f')}"
+        close_all_id = operation_id or f"closeall-{datetime.now(UTC).strftime('%Y%m%d%H%M%S%f')}"
         self._position_store.begin_close_all(close_all_id)
         positions = self._position_store.list_open_positions(include_unknown=True)
         results: list[dict[str, object]] = []
@@ -1419,10 +1419,13 @@ class FuturesOperatorExecutionRuntime:
                 )
             except Exception as exc:  # noqa: BLE001 - partial Close All must persist factual item failures.
                 failures.append(f"{position.position_id}:{exc.__class__.__name__}")
-        self._position_store.complete_close_all(close_all_id, "completed_with_failures" if failures else "completed")
+        terminal = not failures and all(str(row.get("position_status") or "").upper() == "CLOSED" for row in results)
+        status = "completed" if terminal else "in_progress"
+        self._position_store.complete_close_all(close_all_id, status)
         return {
             "scope": scope,
             "close_all_id": close_all_id,
+            "terminal": terminal,
             "target_count": len(positions),
             "closed_count": len(results),
             "results": results,

@@ -283,7 +283,10 @@ class OperatorExecutionDispatcher:
             )
             return _result_payload(result)
         if record.command_type == "CLOSE_ALL":
-            result = self._executor.close_all_positions(scope=_required_text(record.payload.get("scope"), field="scope"))
+            result = self._executor.close_all_positions(
+                scope=_required_text(record.payload.get("scope"), field="scope"),
+                operation_id=record.command_id,
+            )
             return _result_payload(result)
         raise PostgresPersistenceError(f"unsupported operator command type: {record.command_type}")
 

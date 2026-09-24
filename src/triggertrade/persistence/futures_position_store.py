@@ -279,15 +279,16 @@ class FuturesPositionStore:
             )
 
     def complete_close_all(self, close_all_id: str, status: str) -> None:
+        completed_at = "datetime('now')" if status in {"completed", "completed_with_failures"} else "NULL"
         with self._connect() as conn:
             conn.execute(
-                "UPDATE futures_close_all_operations SET status = ?, completed_at = datetime('now') WHERE close_all_id = ?",
+                f"UPDATE futures_close_all_operations SET status = ?, completed_at = {completed_at} WHERE close_all_id = ?",
                 (status, close_all_id),
             )
 
     def close_all_running(self) -> bool:
         with self._connect() as conn:
-            row = conn.execute("SELECT 1 FROM futures_close_all_operations WHERE status = 'RUNNING' LIMIT 1").fetchone()
+            row = conn.execute("SELECT 1 FROM futures_close_all_operations WHERE UPPER(status) IN ('RUNNING', 'IN_PROGRESS') LIMIT 1").fetchone()
         return row is not None
 
     def _init_schema(self) -> None:
