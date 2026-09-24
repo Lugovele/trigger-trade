@@ -45,6 +45,8 @@ class TradingRulesStore:
                 raise TradingRulesError("immutable v1 trading rules version conflicts with configured bootstrap")
             current = self._get_current(conn)
             if current is not None:
+                if before_commit is not None:
+                    before_commit(current)
                 return current
             if existing_v1 is not None:
                 version = _row_to_version(existing_v1, existing_v1["rules_version_id"])

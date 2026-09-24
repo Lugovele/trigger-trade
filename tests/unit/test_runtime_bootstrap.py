@@ -1,11 +1,25 @@
 import sqlite3
+import os
+import uuid
 
 import pytest
 
 from triggertrade.config import ConfigError
 from triggertrade.dashboard.__main__ import create_server_from_env, render_dashboard, _research_demo_handoff_from_env
 from triggertrade.dashboard.read_model import DashboardReadModel
-from triggertrade.persistence import CandleLifecycle, RuntimeStore, TriggerSetStore, TriggerSetStoreError, current_rule_definitions, current_testing_trigger_set, current_volume_recommendation
+from triggertrade.persistence import (
+    CandleLifecycle,
+    PostgresConnectionFactory,
+    PostgresResearchConfigurationRegistry,
+    PostgresSettings,
+    PostgresUnitOfWork,
+    RuntimeStore,
+    TriggerSetStore,
+    TriggerSetStoreError,
+    current_rule_definitions,
+    current_testing_trigger_set,
+    current_volume_recommendation,
+)
 from triggertrade.services.bootstrap import (
     ensure_configured_runtime_registry,
     ensure_runtime_registry_initialized,
@@ -85,6 +99,18 @@ def test_bootstrap_publishes_set_and_rules_versions_to_config_registry(tmp_path)
     assert ("triggertrade-futures-core", "v1") in registry.trigger_sets
     assert ("triggertrade-futures-candidate", "v2-test") in registry.trigger_sets
     assert result.current_rules_version_id in registry.rules_versions
+
+
+def test_bootstrap_republishes_existing_sqlite_rules_version_to_config_registry(tmp_path):
+    db = tmp_path / "runtime.sqlite3"
+    ensure_runtime_registry_initialized(db)
+    registry = _FakeResearchConfigRegistry()
+
+    result = ensure_runtime_registry_initialized(db, version_registry=registry)
+
+    assert result.current_rules_version_id is not None
+    assert result.current_rules_version_id in registry.rules_versions
+    assert ("triggertrade-futures-core", "v1") in registry.trigger_sets
 
 
 def test_bootstrap_is_idempotent_across_repeated_startups(tmp_path):
@@ -202,8 +228,63 @@ def test_production_dashboard_requires_durable_postgres_configuration(tmp_path):
         )
 
 
-def test_production_dashboard_rejects_implicit_sqlite_fallback_when_postgres_is_configured(tmp_path):
-    with pytest.raises(ConfigError, match="cannot use SQLite dashboard stores"):
+def test_production_dashboard_wires_canonical_postgres_configuration_registry(tmp_path, monkeypatch):
+    registry = _FakeResearchConfigRegistry()
+    monkeypatch.setattr("triggertrade.dashboard.__main__._research_config_registry_from_env", lambda env: registry)
+    monkeypatch.setattr("triggertrade.dashboard.__main__._promotion_governance_from_env", lambda env: None)
+    monkeypatch.setattr("triggertrade.dashboard.__main__._operator_execution_bridge_from_env", lambda env: None)
+    monkeypatch.setattr("triggertrade.dashboard.__main__._research_demo_handoff_from_env", lambda env: None)
+    db = tmp_path / "dashboard-production.sqlite3"
+    server, initialized_db = create_server_from_env(
+        {
+            "TRIGGERTRADE_RUNTIME_MODE": "production",
+            "TRIGGERTRADE_POSTGRES_DSN": "postgresql://unit/db",
+            "TRIGGERTRADE_RUNTIME_DB_PATH": str(db),
+            "TRIGGERTRADE_DASHBOARD_PORT": "0",
+        },
+        env_file=tmp_path / "missing.env",
+    )
+    try:
+        assert initialized_db == db
+        assert server.research_service._research_config_registry is registry
+        assert server.research_service._trigger_set_store._version_registry is registry
+        assert server.trading_rules_service._version_registry is registry
+        assert ("triggertrade-futures-core", "v1") in registry.trigger_sets
+        assert initialized_db.exists()
+    finally:
+        server.server_close()
+
+
+def test_web_process_role_wires_canonical_postgres_configuration_registry(tmp_path, monkeypatch):
+    registry = _FakeResearchConfigRegistry()
+    monkeypatch.setattr("triggertrade.dashboard.__main__._research_config_registry_from_env", lambda env: registry)
+    monkeypatch.setattr("triggertrade.dashboard.__main__._promotion_governance_from_env", lambda env: None)
+    monkeypatch.setattr("triggertrade.dashboard.__main__._operator_execution_bridge_from_env", lambda env: None)
+    monkeypatch.setattr("triggertrade.dashboard.__main__._research_demo_handoff_from_env", lambda env: None)
+    server, _initialized_db = create_server_from_env(
+        {
+            "TRIGGERTRADE_PROCESS_ROLE": "web",
+            "TRIGGERTRADE_POSTGRES_DSN": "postgresql://unit/db",
+            "TRIGGERTRADE_RUNTIME_DB_PATH": str(tmp_path / "dashboard.sqlite3"),
+            "TRIGGERTRADE_DASHBOARD_PORT": "0",
+        },
+        env_file=tmp_path / "missing.env",
+    )
+    try:
+        assert server.research_service._research_config_registry is registry
+        assert server.research_service._trigger_set_store._version_registry is registry
+        assert server.trading_rules_service._version_registry is registry
+    finally:
+        server.server_close()
+
+
+def test_production_dashboard_fails_closed_when_registry_wiring_is_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr("triggertrade.dashboard.__main__._research_config_registry_from_env", lambda env: None)
+    monkeypatch.setattr("triggertrade.dashboard.__main__._promotion_governance_from_env", lambda env: None)
+    monkeypatch.setattr("triggertrade.dashboard.__main__._operator_execution_bridge_from_env", lambda env: None)
+    monkeypatch.setattr("triggertrade.dashboard.__main__._research_demo_handoff_from_env", lambda env: None)
+
+    with pytest.raises(ConfigError, match="PostgreSQL Research configuration registry"):
         create_server_from_env(
             {
                 "TRIGGERTRADE_RUNTIME_MODE": "production",
@@ -215,38 +296,57 @@ def test_production_dashboard_rejects_implicit_sqlite_fallback_when_postgres_is_
         )
 
 
-def test_web_process_role_rejects_implicit_sqlite_fallback_when_runtime_mode_is_absent(tmp_path):
-    with pytest.raises(ConfigError, match="cannot use SQLite dashboard stores"):
-        create_server_from_env(
+def test_production_dashboard_real_postgres_write_path_reconstructs_exact_config(tmp_path):
+    psycopg = pytest.importorskip("psycopg")
+    dsn = os.environ.get("TRIGGERTRADE_POSTGRES_DSN")
+    if not dsn:
+        pytest.skip("TRIGGERTRADE_POSTGRES_DSN is not configured")
+    schema = f"tt_prod_registry_{uuid.uuid4().hex[:16]}"
+    db = tmp_path / "dashboard-production.sqlite3"
+    server = None
+    try:
+        server, _initialized_db = create_server_from_env(
             {
-                "TRIGGERTRADE_PROCESS_ROLE": "web",
-                "TRIGGERTRADE_POSTGRES_DSN": "postgresql://unit/db",
-                "TRIGGERTRADE_RUNTIME_DB_PATH": str(tmp_path / "dashboard.sqlite3"),
+                "TRIGGERTRADE_RUNTIME_MODE": "production",
+                "TRIGGERTRADE_POSTGRES_DSN": dsn,
+                "TRIGGERTRADE_POSTGRES_SCHEMA": schema,
+                "TRIGGERTRADE_RUNTIME_DB_PATH": str(db),
                 "TRIGGERTRADE_DASHBOARD_PORT": "0",
             },
             env_file=tmp_path / "missing.env",
         )
-
-
-def test_production_dashboard_sqlite_compatibility_requires_explicit_opt_in(tmp_path, monkeypatch):
-    monkeypatch.setattr("triggertrade.dashboard.__main__._promotion_governance_from_env", lambda env: None)
-    monkeypatch.setattr("triggertrade.dashboard.__main__._operator_execution_bridge_from_env", lambda env: None)
-    db = tmp_path / "dashboard-compat.sqlite3"
-    server, initialized_db = create_server_from_env(
-        {
-            "TRIGGERTRADE_RUNTIME_MODE": "production",
-            "TRIGGERTRADE_POSTGRES_DSN": "postgresql://unit/db",
-            "TRIGGERTRADE_ALLOW_PRODUCTION_SQLITE_DASHBOARD": "1",
-            "TRIGGERTRADE_RUNTIME_DB_PATH": str(db),
-            "TRIGGERTRADE_DASHBOARD_PORT": "0",
-        },
-        env_file=tmp_path / "missing.env",
-    )
-    try:
-        assert initialized_db == db
-        assert server.server_address[1] != 8765
-    finally:
+        rules = server.trading_rules_service.get_current_rules_version()
+        research = server.research_service.create_research(
+            set_id="triggertrade-futures-core",
+            set_version="v1",
+            rules_version_id=rules.rules_version_id,
+            created_source="postgres-production-write-path-test",
+            created_at="2026-09-24T00:00:00+00:00",
+        )
         server.server_close()
+        server = None
+
+        settings = PostgresSettings(dsn=dsn, schema=schema)
+        factory = PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)
+        with PostgresUnitOfWork(factory) as uow:
+            config = PostgresResearchConfigurationRegistry(uow.connection).get_research_demo_configuration(
+                research_id=research.research_id,
+                set_id=research.set_id,
+                set_version=research.set_version,
+                rules_version_id=research.rules_version_id,
+            )
+
+        assert config.research.research_id == research.research_id
+        assert config.research.status.value == "DRAFT"
+        assert config.trigger_set.set_id == "triggertrade-futures-core"
+        assert config.trigger_set.version == "v1"
+        assert config.rules.rules_version_id == rules.rules_version_id
+    finally:
+        if server is not None:
+            server.server_close()
+        with psycopg.connect(dsn, autocommit=True) as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
 
 
 def test_research_demo_handoff_requires_explicit_runtime_enablement(monkeypatch):

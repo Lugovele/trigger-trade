@@ -909,7 +909,7 @@ def create_server_from_env(
         version_registry=research_config_registry,
     )
     research_demo_handoff = _research_demo_handoff_from_env(env)
-    return create_server(
+    server = create_server(
         host=host,
         port=port,
         db_path=db_path,
@@ -920,7 +920,14 @@ def create_server_from_env(
         promotion_governance_store=promotion_governance,
         research_demo_handoff=research_demo_handoff,
         research_config_registry=research_config_registry,
-    ), bootstrap.db_path
+    )
+    _require_production_postgres_configuration_path(
+        env,
+        research_config_registry=research_config_registry,
+        research_demo_handoff=research_demo_handoff,
+        server=server,
+    )
+    return server, bootstrap.db_path
 
 
 def _require_explicit_dashboard_persistence(env: dict[str, str]) -> None:
@@ -929,15 +936,36 @@ def _require_explicit_dashboard_persistence(env: dict[str, str]) -> None:
     production_dashboard = runtime_mode == "production" or process_role in {"web", "api", "dashboard"}
     if not production_dashboard:
         return
-    if _env_true(env.get("TRIGGERTRADE_ALLOW_PRODUCTION_SQLITE_DASHBOARD")):
-        return
     if str(env.get("TRIGGERTRADE_POSTGRES_DSN") or "").strip():
-        raise ConfigError(
-            "production web role cannot use SQLite dashboard stores while TRIGGERTRADE_POSTGRES_DSN is configured; "
-            "deploy a PostgreSQL-backed dashboard store or set TRIGGERTRADE_ALLOW_PRODUCTION_SQLITE_DASHBOARD=1 "
-            "only for an explicitly accepted compatibility window"
-        )
+        return
     raise ConfigError("production web role requires TRIGGERTRADE_POSTGRES_DSN")
+
+
+def _require_production_postgres_configuration_path(
+    env: dict[str, str],
+    *,
+    research_config_registry,
+    research_demo_handoff,
+    server: DashboardServer,
+) -> None:
+    runtime_mode = str(env.get("TRIGGERTRADE_RUNTIME_MODE") or "").strip().lower()
+    process_role = str(env.get("TRIGGERTRADE_PROCESS_ROLE") or env.get("TRIGGERTRADE_ROLE") or "").strip().lower().replace("_", "-")
+    production_dashboard = runtime_mode == "production" or process_role in {"web", "api", "dashboard"}
+    if not production_dashboard:
+        return
+    if research_config_registry is None:
+        raise ConfigError("production web role requires PostgreSQL Research configuration registry")
+    research_service = server.research_service
+    if getattr(research_service, "_research_config_registry", None) is not research_config_registry:
+        raise ConfigError("production Research writes are not wired to PostgreSQL configuration registry")
+    trigger_set_store = getattr(research_service, "_trigger_set_store", None)
+    if getattr(trigger_set_store, "_version_registry", None) is not research_config_registry:
+        raise ConfigError("production Trigger Set writes are not wired to PostgreSQL configuration registry")
+    rules_service = server.trading_rules_service
+    if getattr(rules_service, "_version_registry", None) is not research_config_registry:
+        raise ConfigError("production Trading Rules writes are not wired to PostgreSQL configuration registry")
+    if _env_true(env.get("TRIGGERTRADE_RESEARCH_DEMO_HANDOFF_ENABLED")) and research_demo_handoff is None:
+        raise ConfigError("production Research Demo handoff is enabled but PostgreSQL handoff is unavailable")
 
 
 def _env_true(value: object) -> bool:
@@ -967,8 +995,6 @@ def _operator_execution_bridge_from_env(env: dict[str, str]):
 def _research_config_registry_from_env(env: dict[str, str]):
     if not env.get("TRIGGERTRADE_POSTGRES_DSN"):
         return None
-    if _env_true(env.get("TRIGGERTRADE_ALLOW_PRODUCTION_SQLITE_DASHBOARD")):
-        return None
     settings = PostgresSettings.from_env(env)
     apply_postgres_migrations(dsn=settings.dsn, schema=settings.schema)
     return PostgresResearchConfigurationRegistryClient(
@@ -978,8 +1004,6 @@ def _research_config_registry_from_env(env: dict[str, str]):
 
 def _research_demo_handoff_from_env(env: dict[str, str]):
     if not env.get("TRIGGERTRADE_POSTGRES_DSN"):
-        return None
-    if _env_true(env.get("TRIGGERTRADE_ALLOW_PRODUCTION_SQLITE_DASHBOARD")):
         return None
     if not _env_true(env.get("TRIGGERTRADE_RESEARCH_DEMO_HANDOFF_ENABLED")):
         return None
