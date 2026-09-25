@@ -105,7 +105,7 @@ def test_research_api_create_list_detail_and_blocked_demo_are_backend_backed(tmp
 
 def test_managed_oidc_research_create_and_demo_use_same_production_auth_context(tmp_path):
     db, rules = _research_db(tmp_path)
-    authorizer = OperatorCommandAuthorizer(db, auth_mode="managed_oidc", allowed_principals=("operator-1",))
+    authorizer = OperatorCommandAuthorizer(db, auth_mode="managed_oidc", allowed_principals=("azure-object-id",))
     server = create_server(port=0, db_path=db, operator_authorizer=authorizer)
     host, port = server.server_address
     thread = _start(server)
@@ -123,6 +123,8 @@ def test_managed_oidc_research_create_and_demo_use_same_production_auth_context(
                 "idempotency_key": "research-create-managed",
             },
             expected=HTTPStatus.CREATED,
+            principal_id="azure-object-id",
+            encoded_claim_id="mapped-claim-object-id",
         )["research"]
         demo = _managed_json_request(
             host,
@@ -131,6 +133,8 @@ def test_managed_oidc_research_create_and_demo_use_same_production_auth_context(
             f"/api/research/{created['research_id']}/demo/start",
             {"idempotency_key": "research-demo-managed"},
             expected=HTTPStatus.CONFLICT,
+            principal_id="azure-object-id",
+            encoded_claim_id="mapped-claim-object-id",
         )["demo"]
         anonymous = _json_request(
             host,
@@ -484,12 +488,28 @@ def test_research_registry_unavailable_renders_unavailable_state_not_empty_succe
     assert "node.disabled = commandUnavailable" in html
 
 
-def _managed_json_request(host, port, method, path, payload=None, *, expected=HTTPStatus.OK):
+def _managed_json_request(
+    host,
+    port,
+    method,
+    path,
+    payload=None,
+    *,
+    expected=HTTPStatus.OK,
+    principal_id="operator-1",
+    encoded_claim_id=None,
+):
     conn = HTTPConnection(host, port, timeout=3)
     body = None if payload is None else json.dumps(payload).encode("utf-8")
     headers = {
         "Content-Type": "application/json",
-        **_managed_principal_headers("operator-1"),
+        **_managed_principal_headers(
+            principal_id,
+            encoded_claims=[
+                {"typ": "oid", "val": encoded_claim_id or principal_id},
+                {"typ": "roles", "val": "TriggerTrade.Operator"},
+            ],
+        ),
     }
     conn.request(method, path, body=body, headers=headers)
     response = conn.getresponse()

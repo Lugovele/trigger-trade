@@ -41,6 +41,82 @@ def test_managed_oidc_operator_command_is_durably_authorized_without_token(tmp_p
     assert "process-secret-token" not in str(events[0].safe_metadata)
 
 
+def test_managed_oidc_uses_azure_principal_id_when_encoded_claim_id_differs(tmp_path):
+    db = tmp_path / "auth.sqlite3"
+    authorizer = OperatorCommandAuthorizer(db, auth_mode="managed_oidc", allowed_principals=("azure-object-id",))
+
+    command = authorizer.authorize_http_command(
+        "RESEARCH_CREATE",
+        headers=_managed_principal_headers(
+            "azure-object-id",
+            encoded_claims=[
+                {"typ": "oid", "val": "mapped-claim-object-id"},
+                {"typ": "sub", "val": "mapped-subject-id"},
+                {"typ": "roles", "val": "TriggerTrade.Operator"},
+            ],
+        ),
+        payload={},
+        local_dev_token="process-secret-token",
+        scope="RESEARCH",
+        target="RESEARCH",
+        authorized_at="2026-09-15T00:00:01+00:00",
+    )
+
+    assert command.principal.principal_id == "azure-object-id"
+    assert command.principal.auth_source == MANAGED_OIDC_AUTH_SOURCE
+    event = TraceStore(db).list_audit_events(event_type=OPERATOR_AUTH_EVENT_TYPE)[0]
+    assert event.source_id == "azure-object-id"
+    assert "mapped-claim-object-id" not in str(event.safe_metadata)
+
+
+def test_managed_oidc_without_principal_id_uses_unambiguous_authoritative_claim(tmp_path):
+    db = tmp_path / "auth.sqlite3"
+    authorizer = OperatorCommandAuthorizer(db, auth_mode="managed_oidc", allowed_principals=("claim-object-id",))
+
+    headers = _managed_principal_headers(
+        "ignored-header-id",
+        encoded_claims=[
+            {"typ": "oid", "val": "claim-object-id"},
+            {"typ": "http://schemas.microsoft.com/identity/claims/objectidentifier", "val": "claim-object-id"},
+            {"typ": "roles", "val": "TriggerTrade.Operator"},
+        ],
+    )
+    headers.pop("X-MS-CLIENT-PRINCIPAL-ID")
+
+    command = authorizer.authorize_http_command(
+        "PAUSE_ENTRIES",
+        headers=headers,
+        payload={},
+        local_dev_token="process-secret-token",
+    )
+
+    assert command.principal.principal_id == "claim-object-id"
+
+
+def test_managed_oidc_without_principal_id_rejects_ambiguous_identity_claims(tmp_path):
+    authorizer = OperatorCommandAuthorizer(
+        tmp_path / "auth.sqlite3",
+        auth_mode="managed_oidc",
+        allowed_principals=("claim-object-id",),
+    )
+    headers = _managed_principal_headers(
+        "ignored-header-id",
+        encoded_claims=[
+            {"typ": "oid", "val": "claim-object-id"},
+            {"typ": "sub", "val": "different-subject-id"},
+        ],
+    )
+    headers.pop("X-MS-CLIENT-PRINCIPAL-ID")
+
+    with pytest.raises(OperatorAuthorizationError, match="ambiguous principal id"):
+        authorizer.authorize_http_command(
+            "PAUSE_ENTRIES",
+            headers=headers,
+            payload={},
+            local_dev_token="process-secret-token",
+        )
+
+
 def test_managed_oidc_requires_app_level_authorization(tmp_path):
     authorizer = OperatorCommandAuthorizer(tmp_path / "auth.sqlite3", auth_mode="managed_oidc")
 
@@ -65,6 +141,39 @@ def test_managed_oidc_rejects_forged_loose_role_headers(tmp_path):
         authorizer.authorize_http_command(
             "PAUSE_ENTRIES",
             headers={"X-MS-CLIENT-PRINCIPAL-ID": "operator-1", "X-MS-CLIENT-PRINCIPAL-ROLES": "TriggerTrade.Operator"},
+            payload={},
+            local_dev_token="process-secret-token",
+        )
+
+
+def test_managed_oidc_rejects_malformed_principal_payload(tmp_path):
+    authorizer = OperatorCommandAuthorizer(
+        tmp_path / "auth.sqlite3",
+        auth_mode="managed_oidc",
+        allowed_principals=("operator-1",),
+    )
+
+    with pytest.raises(OperatorAuthorizationError, match="invalid managed operator principal assertion"):
+        authorizer.authorize_http_command(
+            "PAUSE_ENTRIES",
+            headers={"X-MS-CLIENT-PRINCIPAL": "not-base64-json", "X-MS-CLIENT-PRINCIPAL-ID": "operator-1"},
+            payload={},
+            local_dev_token="process-secret-token",
+        )
+
+
+def test_managed_oidc_rejects_missing_decoded_identity_context(tmp_path):
+    authorizer = OperatorCommandAuthorizer(
+        tmp_path / "auth.sqlite3",
+        auth_mode="managed_oidc",
+        allowed_principals=("operator-1",),
+    )
+    empty_payload = base64.b64encode(b"{}").decode("ascii").rstrip("=")
+
+    with pytest.raises(OperatorAuthorizationError, match="missing authenticated identity context"):
+        authorizer.authorize_http_command(
+            "PAUSE_ENTRIES",
+            headers={"X-MS-CLIENT-PRINCIPAL": empty_payload, "X-MS-CLIENT-PRINCIPAL-ID": "operator-1"},
             payload={},
             local_dev_token="process-secret-token",
         )
@@ -219,13 +328,17 @@ def test_dashboard_server_mints_process_local_token_only_for_explicit_local_dev_
         server.server_close()
 
 
-def _managed_principal_headers(principal_id: str) -> dict[str, str]:
+def _managed_principal_headers(
+    principal_id: str,
+    *,
+    encoded_claims: list[dict[str, str]] | None = None,
+) -> dict[str, str]:
     payload = {
         "auth_typ": "aad",
         "name_typ": "name",
         "role_typ": "roles",
         "userId": principal_id,
-        "claims": [{"typ": "roles", "val": "TriggerTrade.Operator"}],
+        "claims": encoded_claims or [{"typ": "roles", "val": "TriggerTrade.Operator"}],
     }
     encoded = base64.b64encode(json.dumps(payload).encode("utf-8")).decode("ascii").rstrip("=")
     return {

@@ -116,11 +116,10 @@ class OperatorCommandAuthorizer:
         if encoded is None:
             return None
         principal_payload = _decode_managed_principal(encoded)
-        principal_id = _managed_principal_id(principal_payload)
-        roles = _managed_principal_roles(principal_payload)
+        _validate_managed_principal_context(principal_payload)
         header_id = _first_header(headers, "X-MS-CLIENT-PRINCIPAL-ID")
-        if header_id is not None and _clean_principal(header_id) != principal_id:
-            raise OperatorAuthorizationError("managed operator principal header mismatch")
+        principal_id = _clean_principal(header_id) if header_id is not None else _managed_principal_id(principal_payload)
+        roles = _managed_principal_roles(principal_payload)
         header_roles = _split_roles(_first_header(headers, "X-MS-CLIENT-PRINCIPAL-ROLES") or "")
         if header_roles:
             roles = tuple(dict.fromkeys((*roles, *header_roles)))
@@ -256,15 +255,31 @@ def _decode_managed_principal(value: str) -> dict[str, object]:
 
 
 def _managed_principal_id(payload: Mapping[str, object]) -> str:
-    for key in ("userId", "user_id", "principal_id", "id"):
-        value = payload.get(key)
-        if value:
-            return _clean_principal(str(value))
+    candidates: list[str] = []
     for claim in _managed_claims(payload):
         claim_type = str(claim.get("typ") or claim.get("type") or "").lower()
-        if claim_type.endswith("/nameidentifier") or claim_type in {"sub", "oid", "nameidentifier"}:
-            return _clean_principal(str(claim.get("val") or claim.get("value") or ""))
+        if _is_authoritative_identity_claim(claim_type):
+            value = str(claim.get("val") or claim.get("value") or "").strip()
+            if value:
+                candidates.append(_clean_principal(value))
+    distinct = tuple(dict.fromkeys(candidates))
+    if len(distinct) == 1:
+        return distinct[0]
+    if len(distinct) > 1:
+        raise OperatorAuthorizationError("managed operator principal assertion has ambiguous principal id")
     raise OperatorAuthorizationError("managed operator principal assertion is missing principal id")
+
+
+def _validate_managed_principal_context(payload: Mapping[str, object]) -> None:
+    auth_type = str(payload.get("auth_typ") or payload.get("authType") or "").strip()
+    has_identity_field = any(str(payload.get(key) or "").strip() for key in ("userId", "user_id", "principal_id", "id"))
+    has_identity_claim = any(
+        _is_authoritative_identity_claim(str(claim.get("typ") or claim.get("type") or "").lower())
+        and str(claim.get("val") or claim.get("value") or "").strip()
+        for claim in _managed_claims(payload)
+    )
+    if not auth_type and not has_identity_field and not has_identity_claim:
+        raise OperatorAuthorizationError("managed operator principal assertion is missing authenticated identity context")
 
 
 def _managed_principal_roles(payload: Mapping[str, object]) -> tuple[str, ...]:
@@ -287,6 +302,16 @@ def _managed_claims(payload: Mapping[str, object]) -> tuple[Mapping[str, object]
     if not isinstance(claims, Sequence) or isinstance(claims, (str, bytes)):
         return ()
     return tuple(claim for claim in claims if isinstance(claim, Mapping))
+
+
+def _is_authoritative_identity_claim(claim_type: str) -> bool:
+    if claim_type in {"oid", "objectidentifier", "nameidentifier", "sub"}:
+        return True
+    return (
+        claim_type.endswith("/oid")
+        or claim_type.endswith("/objectidentifier")
+        or claim_type.endswith("/nameidentifier")
+    )
 
 
 def _clean_auth_mode(value: str) -> str:
