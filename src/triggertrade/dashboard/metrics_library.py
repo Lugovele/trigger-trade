@@ -4,14 +4,15 @@ from __future__ import annotations
 
 from copy import deepcopy
 from functools import lru_cache
+from importlib import resources
 import json
-from pathlib import Path
 from typing import Any
 
 
 FAMILY_ORDER = ("F", "A", "M", "N", "S")
 EXPECTED_COUNTS = {"F": 16, "A": 9, "M": 8, "N": 8, "S": 6}
-METRICS_LIBRARY_PATH = Path(__file__).resolve().parents[3] / "docs" / "metrics_library_v1.json"
+METRICS_LIBRARY_PACKAGE = "triggertrade.dashboard.data"
+METRICS_LIBRARY_RESOURCE = "metrics_library_v1.json"
 
 
 def _metric_sort_key(metric: dict[str, Any]) -> tuple[int, int]:
@@ -42,7 +43,8 @@ def _validate_metrics_registry(payload: dict[str, Any]) -> None:
 
 @lru_cache(maxsize=1)
 def _load_metrics_registry() -> dict[str, Any]:
-    payload = json.loads(METRICS_LIBRARY_PATH.read_text(encoding="utf-8"))
+    registry = resources.files(METRICS_LIBRARY_PACKAGE).joinpath(METRICS_LIBRARY_RESOURCE)
+    payload = json.loads(registry.read_text(encoding="utf-8"))
     _validate_metrics_registry(payload)
     payload["metrics"] = sorted(payload["metrics"], key=_metric_sort_key)
     return payload

@@ -3,13 +3,21 @@ from __future__ import annotations
 from http import HTTPStatus
 from http.client import HTTPConnection
 import json
+import os
 from pathlib import Path
 import subprocess
+import sys
 import threading
 from uuid import uuid4
 
 from triggertrade.dashboard.__main__ import create_server, render_dashboard
-from triggertrade.dashboard.metrics_library import get_metric, metrics_payload
+from triggertrade.dashboard.metrics_library import (
+    METRICS_LIBRARY_PACKAGE,
+    METRICS_LIBRARY_RESOURCE,
+    get_metric,
+    metrics_payload,
+)
+from importlib import resources
 from triggertrade.dashboard.product_ui import render_product_dashboard
 from triggertrade.dashboard.read_model import DashboardReadModel
 
@@ -75,6 +83,17 @@ def test_metrics_registry_exposes_exact_approved_population():
         if isinstance(value, str)
         for family in ("F", "A", "M", "N", "S")
     )
+
+
+def test_packaged_metrics_registry_matches_docs_structured_registry_bytes():
+    docs_registry = Path("docs/metrics_library_v1.json").read_bytes()
+    runtime_registry = (
+        resources.files(METRICS_LIBRARY_PACKAGE)
+        .joinpath(METRICS_LIBRARY_RESOURCE)
+        .read_bytes()
+    )
+
+    assert runtime_registry == docs_registry
 
 
 def test_metrics_registry_preserves_targeted_semantic_boundaries():
@@ -348,3 +367,117 @@ def test_product_renderer_injects_metrics_without_frontend_mutation_api():
     assert '"type": "NOT_A_FORMULA"' in html
     assert "/api/metrics" not in html
     assert "postJson(\"/api/metrics" not in html
+
+
+def test_installed_package_metrics_registry_and_dashboard_routes_do_not_depend_on_docs():
+    root = Path(".tt-tmp") / f"installed-metrics-{uuid4().hex}"
+    wheelhouse = root / "wheelhouse"
+    venv = root / "venv"
+    runtime = root / "runtime"
+    wheelhouse.mkdir(parents=True, exist_ok=True)
+    runtime.mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ)
+    env["TEMP"] = str(root.resolve())
+    env["TMP"] = str(root.resolve())
+
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "wheel",
+            ".",
+            "--no-deps",
+            "-w",
+            str(wheelhouse),
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+        env=env,
+    )
+    wheel = next(wheelhouse.glob("trigger_trade-*.whl"))
+    subprocess.run(
+        [sys.executable, "-m", "venv", "--system-site-packages", str(venv)],
+        check=True,
+        text=True,
+        capture_output=True,
+        env=env,
+    )
+    python = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    subprocess.run(
+        [str(python), "-m", "pip", "install", "--no-deps", "--force-reinstall", str(wheel)],
+        check=True,
+        text=True,
+        capture_output=True,
+        env=env,
+    )
+
+    assert not (runtime / "docs").exists()
+    check = r"""
+from http import HTTPStatus
+from http.client import HTTPConnection
+import json
+from pathlib import Path
+import threading
+
+from triggertrade.dashboard.__main__ import create_server
+from triggertrade.dashboard.metrics_library import metrics_payload
+
+payload = metrics_payload()
+ids = [metric["id"] for metric in payload["metrics"]]
+assert len(ids) == 47
+assert len(set(ids)) == 47
+assert sum(metric_id.startswith("F-") for metric_id in ids) == 16
+assert sum(metric_id.startswith("A-") for metric_id in ids) == 9
+assert sum(metric_id.startswith("M-") for metric_id in ids) == 8
+assert sum(metric_id.startswith("N-") for metric_id in ids) == 8
+assert sum(metric_id.startswith("S-") for metric_id in ids) == 6
+assert not any(metric_id.startswith("T-") for metric_id in ids)
+assert not Path("docs").exists()
+
+server = create_server(port=0, db_path=Path("dashboard.sqlite3"))
+host, port = server.server_address
+thread = threading.Thread(target=server.serve_forever, daemon=True)
+thread.start()
+try:
+    def request(path):
+        conn = HTTPConnection(host, port, timeout=3)
+        try:
+            conn.request("GET", path)
+            response = conn.getresponse()
+            data = response.read().decode("utf-8")
+            return response.status, data
+        finally:
+            conn.close()
+
+    for path in ("/", "/research", "/research/installed-package-check"):
+        status, body = request(path)
+        assert status == HTTPStatus.OK, (path, status, body[:200])
+        assert "FileNotFoundError" not in body
+
+    status, body = request("/api/metrics")
+    assert status == HTTPStatus.OK, (status, body[:200])
+    api_payload = json.loads(body)
+    assert len(api_payload["metrics"]) == 47
+    assert api_payload["counts"] == {"total": 47, "F": 16, "A": 9, "M": 8, "N": 8, "S": 6, "T": 0}
+
+    status, body = request("/api/metrics/F-002")
+    assert status == HTTPStatus.OK, (status, body[:200])
+    assert json.loads(body)["metric"]["id"] == "F-002"
+finally:
+    server.shutdown()
+    server.server_close()
+    thread.join(timeout=2)
+"""
+    env.pop("PYTHONPATH", None)
+    result = subprocess.run(
+        [str(python), "-c", check],
+        cwd=runtime,
+        env=env,
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 0
