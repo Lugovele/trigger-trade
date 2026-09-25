@@ -2335,16 +2335,27 @@ def _reference_backend_script(payload: str) -> str:
       return [metric.id, metric.name].some(value => String(value || "").toLowerCase().includes(needle));
     });
   }
+  function bindMetricsInteractions(){
+    const search = q("#metricSearch", desktop);
+    if(search && search.dataset.metricsBound !== "1"){
+      search.dataset.metricsBound = "1";
+      search.addEventListener("input", renderMetrics);
+    }
+    qa(".metric-family-filter", desktop).forEach(button => {
+      if(button.dataset.metricsBound === "1") return;
+      button.dataset.metricsBound = "1";
+      button.addEventListener("click", () => {
+        metricFamilyFilter = button.dataset.family || "ALL";
+        renderMetrics();
+      });
+    });
+  }
   function setupMetricsShell(){
     const header = q("#config-metrics .panel-header", desktop);
     if(header && !q("#metricFamilyFilters", header)){
       header.innerHTML = `<div class="toolbar metric-toolbar"><input class="search" id="metricSearch" placeholder="Search by ID or name"><div class="segment" id="metricFamilyFilters">${["ALL","F","A","M","N","S"].map(family => `<button type="button" class="metric-family-filter" data-family="${family}">${family}</button>`).join("")}</div></div>`;
-      q("#metricSearch", header)?.addEventListener("input", renderMetrics);
-      qa(".metric-family-filter", header).forEach(button => button.addEventListener("click", () => {
-        metricFamilyFilter = button.dataset.family || "ALL";
-        renderMetrics();
-      }));
     }
+    bindMetricsInteractions();
     const head = q("#config-metrics thead", desktop);
     if(head){
       head.innerHTML = "<tr><th>ID</th><th>Name</th><th>Family</th><th>Type</th><th>Status</th></tr>";

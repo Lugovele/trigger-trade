@@ -4,6 +4,7 @@ from http import HTTPStatus
 from http.client import HTTPConnection
 import json
 from pathlib import Path
+import subprocess
 import threading
 from uuid import uuid4
 
@@ -171,6 +172,172 @@ def test_final_rendered_dashboard_contains_backend_backed_metrics_library():
     assert "computeMetric" not in html
     assert "eval(" not in html
     assert "new Function" not in html
+
+
+def test_final_rendered_metrics_ui_filters_and_search_are_interactive():
+    html = render_dashboard(DashboardReadModel(_tmp_db_path()), initial_page="config")
+    script_start = html.index('<script id="triggertrade-reference-backend-wiring">')
+    script_start = html.index(">", script_start) + 1
+    script_end = html.index("</script>", script_start)
+    script = html[script_start:script_end]
+    state_start = script.index("const state = ") + len("const state = ")
+    state_end = script.index(";\n  const desktop", state_start)
+    state = json.loads(script[state_start:state_end])
+    metrics_start = script.index("  const metricsRegistry = state.metrics || {metrics: []};")
+    metrics_end = script.index("  function renderTriggers()", metrics_start)
+    metrics_script = script[metrics_start:metrics_end]
+
+    harness = r"""
+const fs = require("fs");
+const payload = JSON.parse(fs.readFileSync(0, "utf8"));
+const state = payload.state;
+const window = {};
+
+function assert(condition, message){
+  if(!condition) throw new Error(message);
+}
+function h(value){
+  return String(value ?? "").replace(/[&<>"']/g, c => ({
+    "&":"&amp;",
+    "<":"&lt;",
+    ">":"&gt;",
+    '"':"&quot;",
+    "'":"&#39;"
+  })[c]);
+}
+function badge(value){ return `<span class="badge">${h(value)}</span>`; }
+
+const nodesById = new Map();
+let metricRowNodes = [];
+
+class FakeElement {
+  constructor({id="", dataset={}, className=""} = {}){
+    this.id = id;
+    this.dataset = {...dataset};
+    this.value = "";
+    this.listeners = {};
+    this.children = [];
+    this._innerHTML = "";
+    this.classes = new Set(className ? className.split(/\s+/).filter(Boolean) : []);
+    this.classList = {
+      toggle: (name, force) => {
+        const enabled = force === undefined ? !this.classes.has(name) : Boolean(force);
+        if(enabled) this.classes.add(name);
+        else this.classes.delete(name);
+        return enabled;
+      },
+      contains: name => this.classes.has(name)
+    };
+    if(id) nodesById.set(id, this);
+  }
+  addEventListener(type, handler){
+    if(!this.listeners[type]) this.listeners[type] = [];
+    this.listeners[type].push(handler);
+  }
+  dispatch(type){
+    for(const handler of this.listeners[type] || []) handler({target:this});
+  }
+  click(){
+    this.dispatch("click");
+    if(typeof this.onclick === "function") this.onclick({target:this});
+  }
+  set innerHTML(value){
+    this._innerHTML = String(value);
+    if(this.id === "metrics-body"){
+      metricRowNodes = [];
+      const pattern = /<tr class="catalog-row" data-metric="([^"]+)">/g;
+      let match;
+      while((match = pattern.exec(this._innerHTML))){
+        metricRowNodes.push(new FakeElement({dataset:{metric: match[1]}, className:"catalog-row"}));
+      }
+    }
+  }
+  get innerHTML(){ return this._innerHTML; }
+  querySelector(selector){ return querySelector(selector, this); }
+  querySelectorAll(selector){ return querySelectorAll(selector, this); }
+}
+
+const desktop = new FakeElement({id:"tt-desktop-reference"});
+const header = new FakeElement();
+const familyFilters = new FakeElement({id:"metricFamilyFilters"});
+const search = new FakeElement({id:"metricSearch"});
+const thead = new FakeElement();
+const metricsBody = new FakeElement({id:"metrics-body"});
+const metricDetails = new FakeElement({id:"metric-details"});
+const filterButtons = ["ALL", "F", "A", "M", "N", "S"].map(family =>
+  new FakeElement({dataset:{family}, className:"metric-family-filter" + (family === "ALL" ? " active" : "")})
+);
+
+function querySelector(selector, root){
+  if(selector === "#config-metrics .panel-header") return header;
+  if(selector === "#config-metrics thead") return thead;
+  if(selector === "#config-metrics tbody") return metricsBody;
+  if(selector === ".metric-family-filter") return filterButtons[0] || null;
+  if(selector.startsWith("#")) return nodesById.get(selector.slice(1)) || null;
+  return null;
+}
+function querySelectorAll(selector, root){
+  if(selector === ".metric-family-filter") return filterButtons;
+  if(selector === "[data-metric]") return metricRowNodes;
+  return [];
+}
+const document = {
+  getElementById: id => nodesById.get(id) || null,
+  querySelector,
+  querySelectorAll
+};
+function q(selector, root=document){ return root.querySelector(selector); }
+function qa(selector, root=document){ return Array.from(root.querySelectorAll(selector)); }
+function ids(){ return metricRowNodes.map(row => row.dataset.metric); }
+function clickFamily(family, expectedCount){
+  const button = filterButtons.find(candidate => candidate.dataset.family === family);
+  assert(button, `missing ${family} filter`);
+  button.click();
+  const visible = ids();
+  assert(visible.length === expectedCount, `${family} expected ${expectedCount}, got ${visible.length}`);
+  if(family !== "ALL"){
+    assert(visible.every(id => id.startsWith(`${family}-`)), `${family} filter leaked ids: ${visible.join(",")}`);
+  }
+}
+
+eval(payload.metricsScript + `
+setupMetricsShell();
+setupMetricsShell();
+assert((search.listeners.input || []).length === 1, "search handler must be bound exactly once");
+filterButtons.forEach(button => assert((button.listeners.click || []).length === 1, button.dataset.family + " handler must be bound exactly once"));
+renderMetrics();
+assert(ids().length === 47, "ALL render should expose 47 metrics");
+clickFamily("F", 16);
+clickFamily("A", 9);
+clickFamily("M", 8);
+clickFamily("N", 8);
+clickFamily("S", 6);
+clickFamily("ALL", 47);
+clickFamily("F", 16);
+search.value = "F-002";
+search.dispatch("input");
+assert(ids().length === 1 && ids()[0] === "F-002", "search should reduce F-filtered rows to F-002");
+search.value = "";
+search.dispatch("input");
+assert(ids().length === 16 && ids().every(id => id.startsWith("F-")), "clearing search should restore current family filter");
+`);
+
+console.log(JSON.stringify({
+  counts: {ALL:47, F:16, A:9, M:8, N:8, S:6},
+  search: "PASS",
+  duplicateListenerProtection: "PASS"
+}));
+"""
+
+    result = subprocess.run(
+        ["node", "-e", harness],
+        input=json.dumps({"state": state, "metricsScript": metrics_script}),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert json.loads(result.stdout)["duplicateListenerProtection"] == "PASS"
 
 
 def test_product_renderer_injects_metrics_without_frontend_mutation_api():
