@@ -50,6 +50,33 @@ def test_deploy_script_can_target_web_worker_and_scheduler_roles():
     assert "Custom domain and DNS cutover are intentionally not modified by this script." in script
 
 
+def test_github_workflow_has_cloud_build_only_mode_before_deploy():
+    workflow = _read(".github/workflows/deploy-production.yml")
+
+    assert "workflow_dispatch:" in workflow
+    assert "deploy:" in workflow
+    assert "type: boolean" in workflow
+    assert "default: false" in workflow
+    assert "triggertradeacr-dcfmhtd6fmaubtac.azurecr.io" in workflow
+    assert "ACR_REPOSITORY: triggertrade-web" in workflow
+    assert 'IMAGE_TAG="${GITHUB_SHA}"' in workflow
+    assert "docker build" in workflow
+    assert "docker push" in workflow
+    assert "docker buildx imagetools inspect" in workflow
+    assert '--format \'{{.Digest}}\'' in workflow
+    assert "Build-only mode complete" in workflow
+    assert "Container Apps were not modified" in workflow
+    assert "if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.deploy != 'true' }}" in workflow
+    assert workflow.count("if: ${{ github.event_name == 'push' || github.event.inputs.deploy == 'true' }}") >= 6
+    assert "triggertrade-web-centralus" in workflow
+    assert "triggertrade-trading-worker-centralus" in workflow
+    assert "triggertrade-scheduler-centralus" in workflow
+    assert "BYBIT_API_KEY=secretref:bybit-api-key" in workflow
+    assert "BYBIT_API_SECRET=secretref:bybit-api-secret" in workflow
+    assert "custom domain" not in workflow.lower()
+    assert "dns" not in workflow.lower()
+
+
 def test_web_container_health_uses_local_healthz_endpoint():
     captured: dict[str, object] = {}
 
