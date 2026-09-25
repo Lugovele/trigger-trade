@@ -30,7 +30,7 @@ jobs:
       ACR_REPOSITORY: triggertrade-web
       RESOURCE_GROUP: triggertrade-rg
       WEB_APP: triggertrade-web-centralus
-      TRADING_WORKER_APP: triggertrade-trading-worker-centralus
+      TRADING_WORKER_APP: triggertrade-worker-uae
       SCHEDULER_APP: triggertrade-scheduler-centralus
       USER_ASSIGNED_IDENTITY: triggertrade-pull-id
       COMMON_ENV_VARS: >-
@@ -178,7 +178,7 @@ jobs:
             --image "$IMAGE" \
             --min-replicas 1 \
             --max-replicas 1 \
-            --set-env-vars $COMMON_ENV_VARS TRIGGERTRADE_PROCESS_ROLE=trading-worker TRIGGERTRADE_WORKER_ID=centralus-trading-worker-1 BYBIT_API_KEY=secretref:bybit-api-key BYBIT_API_SECRET=secretref:bybit-api-secret
+            --set-env-vars $COMMON_ENV_VARS TRIGGERTRADE_PROCESS_ROLE=trading-worker TRIGGERTRADE_WORKER_ID=uae-trading-worker-1 BYBIT_API_KEY=secretref:bybit-api-key BYBIT_API_SECRET=secretref:bybit-api-secret
 
       - name: Deploy scheduler
         if: ${{ github.event_name == 'push' || github.event.inputs.deploy == 'true' }}
@@ -200,26 +200,28 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "=== WEB ==="
-          az containerapp show \
-            --name "$WEB_APP" \
-            --resource-group "$RESOURCE_GROUP" \
-            --query "properties.template.containers[0].image" \
-            -o tsv
+          verify_image() {
+            local label="$1"
+            local app="$2"
 
-          echo "=== TRADING WORKER ==="
-          az containerapp show \
-            --name "$TRADING_WORKER_APP" \
-            --resource-group "$RESOURCE_GROUP" \
-            --query "properties.template.containers[0].image" \
-            -o tsv
+            echo "=== ${label} ==="
+            local actual_image
+            actual_image="$(az containerapp show \
+              --name "$app" \
+              --resource-group "$RESOURCE_GROUP" \
+              --query "properties.template.containers[0].image" \
+              -o tsv)"
 
-          echo "=== SCHEDULER ==="
-          az containerapp show \
-            --name "$SCHEDULER_APP" \
-            --resource-group "$RESOURCE_GROUP" \
-            --query "properties.template.containers[0].image" \
-            -o tsv
+            echo "$actual_image"
+            if [[ "$actual_image" != "$IMAGE" ]]; then
+              echo "$app is running $actual_image, expected $IMAGE" >&2
+              exit 1
+            fi
+          }
+
+          verify_image "WEB" "$WEB_APP"
+          verify_image "TRADING WORKER" "$TRADING_WORKER_APP"
+          verify_image "SCHEDULER" "$SCHEDULER_APP"
 
       - name: Azure logout
         if: always()

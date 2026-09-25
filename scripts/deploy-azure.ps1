@@ -14,7 +14,7 @@ $ContainerAppsEnvironment = "triggertrade-env-centralus"
 $UserAssignedIdentity = "triggertrade-pull-id"
 $ContainerAppsByRole = @{
     "web" = "triggertrade-web-centralus"
-    "trading-worker" = "triggertrade-trading-worker-centralus"
+    "trading-worker" = "triggertrade-worker-uae"
     "scheduler" = "triggertrade-scheduler-centralus"
 }
 $ScaleByRole = @{
@@ -246,7 +246,7 @@ foreach ($Role in $Roles) {
     $RoleEnvVars = @($CommonEnvVars + "TRIGGERTRADE_PROCESS_ROLE=$Role")
     if ($Role -eq "trading-worker") {
         $RoleEnvVars += @(
-            "TRIGGERTRADE_WORKER_ID=centralus-trading-worker-1",
+            "TRIGGERTRADE_WORKER_ID=uae-trading-worker-1",
             "BYBIT_API_KEY=secretref:bybit-api-key",
             "BYBIT_API_SECRET=secretref:bybit-api-secret"
         )
