@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import base64
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+import json
 from pathlib import Path
-from typing import Mapping, Sequence
 import re
 
 from triggertrade.persistence.trace_store import TraceStore, TraceStoreError
@@ -65,7 +67,9 @@ class OperatorCommandAuthorizer:
 
     @property
     def browser_commands_supported(self) -> bool:
-        return self.auth_mode in {MANAGED_OIDC_AUTH_SOURCE, LOCAL_DEV_AUTH_SOURCE}
+        if self.auth_mode == MANAGED_OIDC_AUTH_SOURCE:
+            return bool(self._allowed_principals)
+        return self.auth_mode == LOCAL_DEV_AUTH_SOURCE
 
     def authorize_http_command(
         self,
@@ -108,17 +112,20 @@ class OperatorCommandAuthorizer:
         return command
 
     def _principal_from_headers(self, headers: Mapping[str, str]) -> OperatorPrincipal | None:
-        principal_id = _first_header(
-            headers,
-            "X-TriggerTrade-Principal",
-            "X-MS-CLIENT-PRINCIPAL-ID",
-            "X-MS-CLIENT-PRINCIPAL-NAME",
-        )
-        if principal_id is None:
+        encoded = _first_header(headers, "X-MS-CLIENT-PRINCIPAL")
+        if encoded is None:
             return None
-        roles = _split_roles(_first_header(headers, "X-TriggerTrade-Roles", "X-MS-CLIENT-PRINCIPAL-ROLES") or "")
+        principal_payload = _decode_managed_principal(encoded)
+        principal_id = _managed_principal_id(principal_payload)
+        roles = _managed_principal_roles(principal_payload)
+        header_id = _first_header(headers, "X-MS-CLIENT-PRINCIPAL-ID")
+        if header_id is not None and _clean_principal(header_id) != principal_id:
+            raise OperatorAuthorizationError("managed operator principal header mismatch")
+        header_roles = _split_roles(_first_header(headers, "X-MS-CLIENT-PRINCIPAL-ROLES") or "")
+        if header_roles:
+            roles = tuple(dict.fromkeys((*roles, *header_roles)))
         return OperatorPrincipal(
-            principal_id=_clean_principal(principal_id),
+            principal_id=principal_id,
             auth_source=MANAGED_OIDC_AUTH_SOURCE,
             roles=roles,
         )
@@ -129,6 +136,7 @@ class OperatorCommandAuthorizer:
             "X-TriggerTrade-Principal",
             "X-MS-CLIENT-PRINCIPAL-ID",
             "X-MS-CLIENT-PRINCIPAL-NAME",
+            "X-MS-CLIENT-PRINCIPAL",
             "X-TriggerTrade-Roles",
             "X-MS-CLIENT-PRINCIPAL-ROLES",
         ) is not None
@@ -148,7 +156,7 @@ class OperatorCommandAuthorizer:
             return self.auth_mode != MANAGED_OIDC_AUTH_SOURCE
         if principal.principal_id in self._allowed_principals:
             return True
-        return bool({role.lower() for role in principal.roles} & _OPERATOR_ROLES)
+        return False
 
     def _audit_command(self, command: AuthorizedOperatorCommand) -> None:
         event_id = _event_id(command)
@@ -192,11 +200,20 @@ class OperatorCommandAuthorizer:
 
 
 def operator_authorizer_from_env(trace_store: TraceStore | str | Path, env: Mapping[str, str]) -> OperatorCommandAuthorizer:
+    auth_mode = env.get("TRIGGERTRADE_AUTH_MODE", MANAGED_OIDC_AUTH_SOURCE)
+    if _production_runtime(env) and _clean_auth_mode(auth_mode) == LOCAL_DEV_AUTH_SOURCE:
+        raise OperatorAuthorizationError("production operator auth cannot use local_dev_compat")
     return OperatorCommandAuthorizer(
         trace_store,
-        auth_mode=env.get("TRIGGERTRADE_AUTH_MODE", MANAGED_OIDC_AUTH_SOURCE),
+        auth_mode=auth_mode,
         allowed_principals=_split_csv(env.get("TRIGGERTRADE_OPERATOR_PRINCIPALS", "")),
     )
+
+
+def _production_runtime(env: Mapping[str, str]) -> bool:
+    runtime_mode = str(env.get("TRIGGERTRADE_RUNTIME_MODE") or "").strip().lower()
+    process_role = str(env.get("TRIGGERTRADE_PROCESS_ROLE") or env.get("TRIGGERTRADE_ROLE") or "").strip().lower().replace("_", "-")
+    return runtime_mode == "production" or process_role in {"web", "api", "dashboard"}
 
 
 def _event_id(command: AuthorizedOperatorCommand) -> str:
@@ -224,6 +241,52 @@ def _split_roles(raw: str) -> tuple[str, ...]:
 
 def _split_csv(raw: str) -> tuple[str, ...]:
     return tuple(part.strip() for part in raw.split(",") if part.strip())
+
+
+def _decode_managed_principal(value: str) -> dict[str, object]:
+    try:
+        padded = value + "=" * (-len(value) % 4)
+        raw = base64.b64decode(padded.encode("ascii"), validate=True)
+        payload = json.loads(raw.decode("utf-8"))
+    except Exception as exc:  # noqa: BLE001 - malformed auth context must fail closed.
+        raise OperatorAuthorizationError("invalid managed operator principal assertion") from exc
+    if not isinstance(payload, dict):
+        raise OperatorAuthorizationError("invalid managed operator principal assertion")
+    return payload
+
+
+def _managed_principal_id(payload: Mapping[str, object]) -> str:
+    for key in ("userId", "user_id", "principal_id", "id"):
+        value = payload.get(key)
+        if value:
+            return _clean_principal(str(value))
+    for claim in _managed_claims(payload):
+        claim_type = str(claim.get("typ") or claim.get("type") or "").lower()
+        if claim_type.endswith("/nameidentifier") or claim_type in {"sub", "oid", "nameidentifier"}:
+            return _clean_principal(str(claim.get("val") or claim.get("value") or ""))
+    raise OperatorAuthorizationError("managed operator principal assertion is missing principal id")
+
+
+def _managed_principal_roles(payload: Mapping[str, object]) -> tuple[str, ...]:
+    roles: list[str] = []
+    raw_roles = payload.get("roles")
+    if isinstance(raw_roles, str):
+        roles.extend(_split_roles(raw_roles))
+    elif isinstance(raw_roles, Sequence):
+        roles.extend(_clean_role(str(role)) for role in raw_roles if str(role).strip())
+    for claim in _managed_claims(payload):
+        claim_type = str(claim.get("typ") or claim.get("type") or "").lower()
+        if claim_type.endswith("/role") or claim_type in {"role", "roles"}:
+            value = str(claim.get("val") or claim.get("value") or "")
+            roles.extend(_split_roles(value))
+    return tuple(dict.fromkeys(roles))
+
+
+def _managed_claims(payload: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    claims = payload.get("claims")
+    if not isinstance(claims, Sequence) or isinstance(claims, (str, bytes)):
+        return ()
+    return tuple(claim for claim in claims if isinstance(claim, Mapping))
 
 
 def _clean_auth_mode(value: str) -> str:

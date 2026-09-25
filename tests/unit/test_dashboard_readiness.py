@@ -37,9 +37,12 @@ def test_readiness_reports_running_when_runtime_and_postgres_are_reachable(tmp_p
         DashboardReadModel(db),
         env={
             "TRIGGERTRADE_POSTGRES_DSN": "postgresql://unit.invalid/db",
+            "TRIGGERTRADE_OPERATOR_PRINCIPALS": "operator-1",
             **_bybit_demo_env(),
         },
         postgres_probe=_running_postgres_probe,
+        postgres_runtime_probe=_running_runtime_probe,
+        postgres_registry_probe=_running_registry_probe,
         execution_bridge=_CertifiedBridge(),
     )
 
@@ -60,9 +63,12 @@ def test_readiness_rejects_uncertified_execution_bridge_stub(tmp_path):
         DashboardReadModel(db),
         env={
             "TRIGGERTRADE_POSTGRES_DSN": "postgresql://unit.invalid/db",
+            "TRIGGERTRADE_OPERATOR_PRINCIPALS": "operator-1",
             **_bybit_demo_env(),
         },
         postgres_probe=_running_postgres_probe,
+        postgres_runtime_probe=_running_runtime_probe,
+        postgres_registry_probe=_running_registry_probe,
         execution_bridge=object(),
     )
 
@@ -110,10 +116,13 @@ def test_readiness_api_exposes_dependency_aware_report_without_secrets(tmp_path)
         db_path=db,
         readiness_env={
             "TRIGGERTRADE_POSTGRES_DSN": "postgresql://unit:secret@example.invalid/db",
+            "TRIGGERTRADE_OPERATOR_PRINCIPALS": "operator-1",
             **_bybit_demo_env(),
         },
         operator_actions=_CertifiedBridge(),
         postgres_health_probe=_running_postgres_probe,
+        postgres_runtime_probe=_running_runtime_probe,
+        postgres_registry_probe=_running_registry_probe,
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -140,9 +149,132 @@ def test_readiness_api_exposes_dependency_aware_report_without_secrets(tmp_path)
     assert "postgresql://" not in text
 
 
+def test_production_readiness_uses_distributed_postgres_heartbeat_not_local_sqlite(tmp_path):
+    db = tmp_path / "missing-local-dashboard.sqlite3"
+
+    report = evaluate_dashboard_readiness(
+        DashboardReadModel(db),
+        env={
+            "TRIGGERTRADE_POSTGRES_DSN": "postgresql://unit.invalid/db",
+            "TRIGGERTRADE_OPERATOR_PRINCIPALS": "operator-1",
+            **_bybit_demo_env(),
+        },
+        postgres_probe=_running_postgres_probe,
+        postgres_runtime_probe=_running_runtime_probe,
+        postgres_registry_probe=_running_registry_probe,
+        execution_bridge=_CertifiedBridge(),
+    )
+
+    checks = {check.name: check for check in report.checks}
+    assert checks["postgres_persistence"].status == "RUNNING"
+    assert checks["heartbeat:trading-worker"].status == "RUNNING"
+    assert checks["worker_safety"].status == "RUNNING"
+    assert checks["web_read_model"].status == "DEGRADED"
+    assert "database" not in checks
+    assert "heartbeat" not in checks
+    assert "postgres_persistence" not in report.unavailable_dependencies
+    assert "worker_safety" not in report.unavailable_dependencies
+
+
+def test_production_readiness_blocks_when_operator_principal_allowlist_missing(tmp_path):
+    db = _runtime_ready_db(tmp_path)
+
+    report = evaluate_dashboard_readiness(
+        DashboardReadModel(db),
+        env={
+            "TRIGGERTRADE_RUNTIME_MODE": "production",
+            "TRIGGERTRADE_POSTGRES_DSN": "postgresql://unit.invalid/db",
+            **_bybit_demo_env(),
+        },
+        postgres_probe=_running_postgres_probe,
+        postgres_runtime_probe=_running_runtime_probe,
+        postgres_registry_probe=_running_registry_probe,
+        execution_bridge=_CertifiedBridge(),
+    )
+
+    checks = {check.name: check for check in report.checks}
+    assert report.ready is False
+    assert checks["operator_auth_boundary"].status == "BLOCKED"
+    assert "allowlist" in checks["operator_auth_boundary"].detail
+
+
+def test_production_readiness_blocks_local_dev_auth_mode(tmp_path):
+    db = _runtime_ready_db(tmp_path)
+
+    report = evaluate_dashboard_readiness(
+        DashboardReadModel(db),
+        env={
+            "TRIGGERTRADE_RUNTIME_MODE": "production",
+            "TRIGGERTRADE_AUTH_MODE": "local_dev_compat",
+            "TRIGGERTRADE_POSTGRES_DSN": "postgresql://unit.invalid/db",
+            "TRIGGERTRADE_OPERATOR_PRINCIPALS": "operator-1",
+            **_bybit_demo_env(),
+        },
+        postgres_probe=_running_postgres_probe,
+        postgres_runtime_probe=_running_runtime_probe,
+        postgres_registry_probe=_running_registry_probe,
+        execution_bridge=_CertifiedBridge(),
+    )
+
+    checks = {check.name: check for check in report.checks}
+    assert checks["operator_auth_boundary"].status == "BLOCKED"
+    assert "local_dev_compat" in checks["operator_auth_boundary"].detail
+
+
+def test_readiness_redacts_secret_like_distributed_heartbeat_details(tmp_path):
+    db = _runtime_ready_db(tmp_path)
+
+    def secret_runtime_probe(env):
+        return (
+            DashboardReadinessCheck(
+                "heartbeat:trading-worker",
+                "DEGRADED",
+                "worker detail contained postgresql://user:secret@example/db token=abc123",
+                datetime.now(UTC).isoformat(),
+            ),
+        )
+
+    report = evaluate_dashboard_readiness(
+        DashboardReadModel(db),
+        env={
+            "TRIGGERTRADE_POSTGRES_DSN": "postgresql://unit.invalid/db",
+            "TRIGGERTRADE_OPERATOR_PRINCIPALS": "operator-1",
+            **_bybit_demo_env(),
+        },
+        postgres_probe=_running_postgres_probe,
+        postgres_runtime_probe=secret_runtime_probe,
+        postgres_registry_probe=_running_registry_probe,
+        execution_bridge=_CertifiedBridge(),
+    )
+
+    text = json.dumps(report.to_payload())
+    assert "postgresql://" not in text
+    assert "token=abc123" not in text
+    assert "redacted" in text
+
+
 def _running_postgres_probe(env):
     assert env.get("TRIGGERTRADE_POSTGRES_DSN")
     return DashboardReadinessCheck("postgres_persistence", "RUNNING", "PostgreSQL persistence reachable")
+
+
+def _running_runtime_probe(env):
+    return (
+        DashboardReadinessCheck(
+            "heartbeat:trading-worker",
+            "RUNNING",
+            "worker hydrated durable state",
+            datetime.now(UTC).isoformat(),
+        ),
+    )
+
+
+def _running_registry_probe(env):
+    return DashboardReadinessCheck(
+        "research_config_registry",
+        "RUNNING",
+        "PostgreSQL Research configuration registry reachable; research=1, sets=1, rules=1",
+    )
 
 
 def _bybit_demo_env():

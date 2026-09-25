@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from typing import Any, Protocol
 
 from triggertrade.persistence.postgres import (
@@ -49,6 +50,7 @@ class PostgresResearchConfigurationRegistry:
     """Exact-version Research/Set/Rules registry backed by owner-state records."""
 
     def __init__(self, connection) -> None:
+        self._connection = connection
         self._store = OwnerStateStore(connection)
 
     def put_configuration(
@@ -83,6 +85,12 @@ class PostgresResearchConfigurationRegistry:
         )
         return None if record is None else _research_from_owner(record)
 
+    def list_research(self) -> tuple[ResearchRecord, ...]:
+        return tuple(
+            _research_from_owner(record)
+            for record in self._list_records(state_type=RESEARCH_STATE_TYPE)
+        )
+
     def put_trigger_set_version(self, trigger_set: TriggerSetVersion) -> tuple[TriggerSetVersion, bool]:
         record, created = self._store.put_if_absent(
             owner=RESEARCH_CONFIG_OWNER,
@@ -116,6 +124,42 @@ class PostgresResearchConfigurationRegistry:
             state_id=_required_text(rules_version_id, field="rules_version_id"),
         )
         return None if record is None else _rules_from_owner(record)
+
+    def list_trigger_set_versions(self) -> tuple[TriggerSetVersion, ...]:
+        return tuple(
+            _trigger_set_from_owner(record)
+            for record in self._list_records(state_type=TRIGGER_SET_STATE_TYPE)
+        )
+
+    def list_trading_rules_versions(self) -> tuple[TradingRulesVersion, ...]:
+        return tuple(
+            _rules_from_owner(record)
+            for record in self._list_records(state_type=TRADING_RULES_STATE_TYPE)
+        )
+
+    def _list_records(self, *, state_type: str) -> tuple[OwnerStateRecord, ...]:
+        with self._connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT owner, state_type, state_id, revision, payload_json::text, payload_digest
+                FROM triggertrade_owner_state_records
+                WHERE owner = %s AND state_type = %s
+                ORDER BY payload_json->>'created_at' DESC, state_id
+                """,
+                (RESEARCH_CONFIG_OWNER, state_type),
+            )
+            rows = cursor.fetchall()
+        return tuple(
+            OwnerStateRecord(
+                owner=str(row[0]),
+                state_type=str(row[1]),
+                state_id=str(row[2]),
+                revision=int(row[3]),
+                payload=json.loads(str(row[4])),
+                payload_digest=str(row[5]),
+            )
+            for row in rows
+        )
 
     def get_research_demo_configuration(
         self,
@@ -191,6 +235,22 @@ class PostgresResearchConfigurationRegistryClient:
                 set_version=set_version,
                 rules_version_id=rules_version_id,
             )
+
+    def get_research(self, research_id: str) -> ResearchRecord | None:
+        with PostgresUnitOfWork(self._factory) as uow:
+            return PostgresResearchConfigurationRegistry(uow.connection).get_research(research_id)
+
+    def list_research(self) -> tuple[ResearchRecord, ...]:
+        with PostgresUnitOfWork(self._factory) as uow:
+            return PostgresResearchConfigurationRegistry(uow.connection).list_research()
+
+    def list_trigger_set_versions(self) -> tuple[TriggerSetVersion, ...]:
+        with PostgresUnitOfWork(self._factory) as uow:
+            return PostgresResearchConfigurationRegistry(uow.connection).list_trigger_set_versions()
+
+    def list_trading_rules_versions(self) -> tuple[TradingRulesVersion, ...]:
+        with PostgresUnitOfWork(self._factory) as uow:
+            return PostgresResearchConfigurationRegistry(uow.connection).list_trading_rules_versions()
 
 
 def _research_payload(research: ResearchRecord) -> dict[str, Any]:

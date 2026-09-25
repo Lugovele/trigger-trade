@@ -15,7 +15,14 @@ import secrets
 from urllib.parse import parse_qs, unquote, urlparse
 
 from triggertrade.config import ConfigError
-from triggertrade.dashboard.read_model import DashboardReadModel
+from triggertrade.dashboard.read_model import (
+    DashboardReadModel,
+    ResearchSummaryRow,
+    SetSummaryView,
+    TriggerSetMembershipView,
+    _rules_version_payload,
+    _rules_version_summary_payload,
+)
 from triggertrade.dashboard.readiness import evaluate_dashboard_readiness
 from triggertrade.dashboard.commands import DashboardCommandBoundary, DashboardCommandError
 from triggertrade.exchanges import BybitDemoClient
@@ -57,6 +64,10 @@ LOCAL_DEV_OPERATOR_COOKIE = "tt_local_operator"
 LOCAL_DEV_OPERATOR_HEADER = "X-TriggerTrade-Local-Operator"
 
 
+class DashboardRegistryUnavailable(RuntimeError):
+    """Raised when configured production registry reads are unavailable."""
+
+
 class DashboardServer(ThreadingHTTPServer):
     def __init__(
         self,
@@ -74,6 +85,9 @@ class DashboardServer(ThreadingHTTPServer):
         operator_actions=None,
         readiness_env=None,
         postgres_health_probe=None,
+        postgres_runtime_probe=None,
+        postgres_registry_probe=None,
+        research_config_registry=None,
     ) -> None:
         super().__init__(server_address, handler_class)
         self.read_model = read_model
@@ -92,6 +106,9 @@ class DashboardServer(ThreadingHTTPServer):
         )
         self.readiness_env = dict(os.environ if readiness_env is None else readiness_env)
         self.postgres_health_probe = postgres_health_probe
+        self.postgres_runtime_probe = postgres_runtime_probe
+        self.postgres_registry_probe = postgres_registry_probe
+        self.research_config_registry = research_config_registry
 
 
 class DashboardHandler(BaseHTTPRequestHandler):
@@ -100,18 +117,29 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == "/api/rules/current":
-            payload = self.server.read_model.get_current_rules_version_payload()
+            try:
+                payload = _current_rules_payload(self.server)
+            except DashboardRegistryUnavailable as exc:
+                self._send_json({"error": str(exc)}, HTTPStatus.SERVICE_UNAVAILABLE)
+                return
             if payload is None:
                 self._send_json({"error": "current trading rules version is unavailable"}, HTTPStatus.SERVICE_UNAVAILABLE)
             else:
                 self._send_json(payload)
             return
         if parsed.path == "/api/rules/history":
-            self._send_json({"versions": self.server.read_model.list_rules_version_payloads()})
+            try:
+                self._send_json({"versions": _rules_history_payloads(self.server)})
+            except DashboardRegistryUnavailable as exc:
+                self._send_json({"error": str(exc)}, HTTPStatus.SERVICE_UNAVAILABLE)
             return
         if parsed.path.startswith("/api/rules/version/"):
             identity = unquote(parsed.path.removeprefix("/api/rules/version/"))
-            payload = self.server.read_model.get_rules_version_payload(identity)
+            try:
+                payload = _rules_version_detail_payload(self.server, identity)
+            except DashboardRegistryUnavailable as exc:
+                self._send_json({"error": str(exc)}, HTTPStatus.SERVICE_UNAVAILABLE)
+                return
             if payload is None:
                 self._send_json({"error": "trading rules version not found"}, HTTPStatus.NOT_FOUND)
             else:
@@ -140,12 +168,19 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._send_json(_readiness_payload(self.server))
             return
         if parsed.path == "/api/research":
-            self._send_json({"research": [_research_summary_payload(row) for row in self.server.read_model.list_research_summaries(limit=50)]})
+            try:
+                self._send_json({"research": [_research_summary_payload(row) for row in _research_summaries(self.server)]})
+            except DashboardRegistryUnavailable as exc:
+                self._send_json({"error": str(exc)}, HTTPStatus.SERVICE_UNAVAILABLE)
             return
         if parsed.path.startswith("/api/research/"):
             parts = [unquote(part) for part in parsed.path.strip("/").split("/")]
             if len(parts) == 3 and parts[0] == "api" and parts[1] == "research":
-                payload = self.server.read_model.get_research_detail(parts[2])
+                try:
+                    payload = _research_detail_payload(self.server, parts[2])
+                except DashboardRegistryUnavailable as exc:
+                    self._send_json({"error": str(exc)}, HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
                 if payload is None:
                     self._send_json({"error": "research id not found"}, HTTPStatus.NOT_FOUND)
                 else:
@@ -156,10 +191,22 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
         if parsed.path == "/api/instruments/search":
             query = parse_qs(parsed.query).get("q", [""])[0]
+            try:
+                registry_coins = _registry_rules_coins(_current_rules_payload(self.server))
+            except DashboardRegistryUnavailable as exc:
+                self._send_json({"error": str(exc)}, HTTPStatus.SERVICE_UNAVAILABLE)
+                return
+            if query and registry_coins:
+                normalized_query = query.strip().upper()
+                registry_coins = tuple(
+                    item for item in registry_coins if normalized_query in str(item.get("symbol") or "")
+                )
             self._send_json(
                 {
                     "catalog": _catalog_state_payload(self.server.read_model),
-                    "coins": self.server.read_model.search_rules_catalog_coins(query),
+                    "coins": registry_coins
+                    if self.server.research_config_registry is not None
+                    else self.server.read_model.search_rules_catalog_coins(query),
                 }
             )
             return
@@ -180,7 +227,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
             "/analytics": "research",
         }
         if parsed.path in product_pages:
-            self._send_html(render_dashboard(self.server.read_model, initial_page=product_pages[parsed.path]))
+            self._send_html(
+                render_dashboard(
+                    self.server.read_model,
+                    initial_page=product_pages[parsed.path],
+                    research_config_registry=self.server.research_config_registry,
+                )
+            )
             return
         if parsed.path.startswith("/set/"):
             parts = [unquote(part) for part in parsed.path.strip("/").split("/")]
@@ -189,7 +242,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if not set_id or not version or self.server.read_model.get_trigger_set(set_id, version) is None:
                 self._send_html(render_not_found(parsed.path), HTTPStatus.NOT_FOUND)
                 return
-            self._send_html(render_dashboard(self.server.read_model, initial_page="sets"))
+            self._send_html(
+                render_dashboard(
+                    self.server.read_model,
+                    initial_page="sets",
+                    research_config_registry=self.server.research_config_registry,
+                )
+            )
             return
         if parsed.path.startswith("/triggers/"):
             parts = [unquote(part) for part in parsed.path.strip("/").split("/")]
@@ -204,14 +263,27 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     initial_page="trigger-detail",
                     selected_trigger_id=trigger_id,
                     selected_trigger_version=version,
+                    research_config_registry=self.server.research_config_registry,
                 )
             )
             return
         if parsed.path.startswith("/rules-version/"):
-            self._send_html(render_dashboard(self.server.read_model, initial_page="rules-version"))
+            self._send_html(
+                render_dashboard(
+                    self.server.read_model,
+                    initial_page="rules-version",
+                    research_config_registry=self.server.research_config_registry,
+                )
+            )
             return
         if parsed.path.startswith("/research/"):
-            self._send_html(render_dashboard(self.server.read_model, initial_page="research-detail"))
+            self._send_html(
+                render_dashboard(
+                    self.server.read_model,
+                    initial_page="research-detail",
+                    research_config_registry=self.server.research_config_registry,
+                )
+            )
             return
         if parsed.path.startswith("/rules/"):
             parts = [unquote(part) for part in parsed.path.strip("/").split("/")]
@@ -622,11 +694,12 @@ def render_dashboard(
     *,
     selected_trigger_id: str | None = None,
     selected_trigger_version: str | None = None,
+    research_config_registry=None,
 ) -> str:
     from triggertrade.dashboard.product_ui import render_product_dashboard
 
     operator_state = getattr(read_model, "get_operator_trading_state", lambda: None)()
-    operator_control_token = ""
+    operator_control_token = str(getattr(read_model, "operator_control_token", "") or "")
     operator_command_submit_enabled = bool(getattr(read_model, "operator_command_submit_enabled", False))
     open_positions = read_model.list_portfolio_open_positions()
     closed_positions = read_model.list_portfolio_closed_positions()
@@ -643,24 +716,52 @@ def render_dashboard(
             ),
         },
     }
+    registry_error = ""
+    try:
+        registry_set_summaries = _registry_set_summaries(research_config_registry)
+    except DashboardRegistryUnavailable as exc:
+        registry_error = str(exc)
+        registry_set_summaries = ()
     registry = {
-        "sets": read_model.list_set_summaries(),
+        "sets": registry_set_summaries if research_config_registry is not None else read_model.list_set_summaries(),
         "triggers": read_model.list_trigger_catalog(),
         "selected_trigger": read_model.get_trigger_detail(selected_trigger_id, selected_trigger_version)
         if selected_trigger_id
         else None,
-        "integrity_errors": read_model.get_registry_integrity_errors(),
+        "integrity_errors": (*read_model.get_registry_integrity_errors(), *((registry_error,) if registry_error else ())),
     }
+    try:
+        registry_rules_versions = _registry_rules_versions(research_config_registry)
+    except DashboardRegistryUnavailable as exc:
+        registry_error = registry_error or str(exc)
+        registry_rules_versions = ()
+    registry_rules_payloads = tuple(_rules_version_payload(version, ()) for version in registry_rules_versions)
     rules = {
-        "current": read_model.get_current_rules_version_payload(),
-        "history": read_model.list_rules_version_payloads(),
+        "current": registry_rules_payloads[0]
+        if registry_rules_payloads
+        else (None if research_config_registry is not None else read_model.get_current_rules_version_payload()),
+        "history": tuple(_rules_version_summary_payload(version, ()) for version in registry_rules_versions)
+        if research_config_registry is not None
+        else read_model.list_rules_version_payloads(),
         "catalog": _catalog_state_payload(read_model),
-        "coins": read_model.search_rules_catalog_coins(),
+        "coins": _registry_rules_coins(registry_rules_payloads[0] if registry_rules_payloads else None)
+        if research_config_registry is not None
+        else read_model.search_rules_catalog_coins(),
     }
     messages = _messages_payload_from_model(read_model)
+    try:
+        research_summaries = _registry_research_summaries(research_config_registry)
+    except DashboardRegistryUnavailable as exc:
+        registry_error = registry_error or str(exc)
+        research_summaries = ()
     research = {
-        "summaries": tuple(_research_summary_payload(row) for row in read_model.list_research_summaries(limit=50)),
+        "summaries": tuple(_research_summary_payload(row) for row in research_summaries)
+        if research_config_registry is not None
+        else tuple(_research_summary_payload(row) for row in read_model.list_research_summaries(limit=50)),
+        "unavailable_reason": registry_error,
     }
+    if registry_error:
+        registry["integrity_errors"] = (*read_model.get_registry_integrity_errors(), registry_error)
     return render_product_dashboard(
         initial_page=initial_page,
         operator_state=operator_state,
@@ -672,6 +773,151 @@ def render_dashboard(
         messages=messages,
         research=research,
     )
+
+
+def _registry_set_summaries(registry) -> tuple[SetSummaryView, ...]:
+    if registry is None or not callable(getattr(registry, "list_trigger_set_versions", None)):
+        return ()
+    try:
+        versions = registry.list_trigger_set_versions()
+    except Exception as exc:
+        raise DashboardRegistryUnavailable("PostgreSQL Research configuration registry unavailable") from exc
+    summaries: list[SetSummaryView] = []
+    for version in versions:
+        summaries.append(
+            SetSummaryView(
+                set_id=version.set_id,
+                display_name=version.set_id,
+                version=version.version,
+                status=getattr(version.status, "value", str(version.status)),
+                trigger_versions=tuple(
+                    TriggerSetMembershipView(
+                        trigger_id=rule_id,
+                        display_name=rule_id,
+                        version=rule_version,
+                    )
+                    for rule_id, rule_version in version.rule_versions
+                ),
+                created_at=version.created_at,
+                updated_at=None,
+                is_active=getattr(version.status, "value", str(version.status)) == "ACTIVE",
+                symbol=version.symbol,
+                timeframe=version.timeframe,
+                integrity_errors=(),
+            )
+        )
+    return tuple(summaries)
+
+
+def _registry_rules_versions(registry):
+    if registry is None or not callable(getattr(registry, "list_trading_rules_versions", None)):
+        return ()
+    try:
+        return tuple(registry.list_trading_rules_versions())
+    except Exception as exc:
+        raise DashboardRegistryUnavailable("PostgreSQL Research configuration registry unavailable") from exc
+
+
+def _registry_research_records(registry):
+    if registry is None or not callable(getattr(registry, "list_research", None)):
+        return ()
+    try:
+        return tuple(registry.list_research())
+    except Exception as exc:
+        raise DashboardRegistryUnavailable("PostgreSQL Research configuration registry unavailable") from exc
+
+
+def _registry_research_summaries(registry) -> tuple[ResearchSummaryRow, ...]:
+    return tuple(_research_summary_from_record(record) for record in _registry_research_records(registry))
+
+
+def _research_summaries(server: DashboardServer) -> tuple[ResearchSummaryRow, ...]:
+    if server.research_config_registry is not None:
+        return _registry_research_summaries(server.research_config_registry)
+    return server.read_model.list_research_summaries(limit=50)
+
+
+def _research_detail_payload(server: DashboardServer, research_id: str) -> dict[str, object] | None:
+    if server.research_config_registry is None:
+        return server.read_model.get_research_detail(research_id)
+    if not callable(getattr(server.research_config_registry, "get_research", None)):
+        raise DashboardRegistryUnavailable("PostgreSQL Research configuration registry unavailable")
+    try:
+        record = server.research_config_registry.get_research(research_id)
+    except Exception as exc:
+        raise DashboardRegistryUnavailable("PostgreSQL Research configuration registry unavailable") from exc
+    if record is None:
+        return None
+    return {
+        "research": _research_record_payload(record),
+        "backtests": (),
+        "demos": (),
+        "compare": {"available": False, "reason": "canonical Research run results unavailable in registry projection"},
+    }
+
+
+def _research_summary_from_record(record) -> ResearchSummaryRow:
+    return ResearchSummaryRow(
+        research_id=record.research_id,
+        status=record.status.value,
+        set_id=record.set_id,
+        set_version=record.set_version,
+        rules_version_id=record.rules_version_id,
+        rules_display_version=record.rules_display_version,
+        selected_backtest_profit_factor=None,
+        selected_backtest_trades=None,
+        selected_demo_profit_factor=None,
+        selected_demo_trades=None,
+        compare_to_active="Unavailable",
+        selected_backtest_run_id=record.selected_backtest_run_id,
+        selected_demo_run_id=record.selected_demo_run_id,
+        decision=record.decision.value,
+        updated_at=record.updated_at,
+    )
+
+
+def _registry_rules_coins(rules_payload: dict[str, object] | None) -> tuple[dict[str, str | None], ...]:
+    if not rules_payload:
+        return ()
+    coins = rules_payload.get("coins")
+    if not isinstance(coins, (list, tuple)):
+        return ()
+    return tuple(
+        {
+            "symbol": str(item.get("symbol") or "").upper(),
+            "base_coin": str(item.get("symbol") or "").upper().removesuffix("USDT"),
+            "quote_coin": "USDT",
+            "status": "TRADING",
+            "max_leverage": None,
+            "updated_at": None,
+        }
+        for item in coins
+        if isinstance(item, dict) and str(item.get("symbol") or "").strip()
+    )
+
+
+def _current_rules_payload(server: DashboardServer) -> dict[str, object] | None:
+    versions = _registry_rules_versions(server.research_config_registry)
+    if server.research_config_registry is not None:
+        return _rules_version_payload(versions[0], ()) if versions else None
+    return server.read_model.get_current_rules_version_payload()
+
+
+def _rules_history_payloads(server: DashboardServer) -> tuple[dict[str, object], ...]:
+    versions = _registry_rules_versions(server.research_config_registry)
+    if server.research_config_registry is not None:
+        return tuple(_rules_version_summary_payload(version, ()) for version in versions)
+    return server.read_model.list_rules_version_payloads()
+
+
+def _rules_version_detail_payload(server: DashboardServer, identity: str) -> dict[str, object] | None:
+    versions = _registry_rules_versions(server.research_config_registry)
+    if server.research_config_registry is not None:
+        for version in versions:
+            if identity in {version.rules_version_id, version.version}:
+                return _rules_version_payload(version, ())
+        return None
+    return server.read_model.get_rules_version_payload(identity)
 
 
 
@@ -693,6 +939,8 @@ def create_server(
     operator_actions=None,
     readiness_env: dict[str, str] | None = None,
     postgres_health_probe=None,
+    postgres_runtime_probe=None,
+    postgres_registry_probe=None,
     promotion_governance_store=None,
     research_demo_handoff=None,
     research_config_registry=None,
@@ -741,6 +989,9 @@ def create_server(
         operator_actions=operator_actions,
         readiness_env=readiness_env,
         postgres_health_probe=postgres_health_probe,
+        postgres_runtime_probe=postgres_runtime_probe,
+        postgres_registry_probe=postgres_registry_probe,
+        research_config_registry=research_config_registry,
     )
     read_model.operator_control_token = server.operator_control_token
     read_model.operator_command_submit_enabled = authorizer.browser_commands_supported and (
@@ -1044,6 +1295,8 @@ def _readiness_report(server: DashboardServer):
         server.read_model,
         env=server.readiness_env,
         postgres_probe=server.postgres_health_probe,
+        postgres_runtime_probe=server.postgres_runtime_probe,
+        postgres_registry_probe=server.postgres_registry_probe,
         execution_bridge=server.operator_actions,
     )
 

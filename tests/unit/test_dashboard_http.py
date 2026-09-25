@@ -21,6 +21,7 @@ from triggertrade.persistence import TraceStore
 from triggertrade.persistence.operator_state_store import OperatorStateStore
 from triggertrade.services.operator_auth import OPERATOR_AUTH_EVENT_TYPE, OperatorCommandAuthorizer
 from tests.unit.test_dashboard_read_model import _empty_db, _save_no_signal
+from tests.unit.test_operator_command_auth import _managed_principal_headers
 
 
 def _tmpdir():
@@ -282,7 +283,7 @@ def test_local_dev_browser_cookie_is_loopback_only_when_binding_all_interfaces()
 def test_managed_oidc_operator_pause_does_not_require_local_token():
     tmp_path = _tmpdir()
     db = _empty_db(tmp_path)
-    authorizer = OperatorCommandAuthorizer(db, auth_mode="managed_oidc")
+    authorizer = OperatorCommandAuthorizer(db, auth_mode="managed_oidc", allowed_principals=("operator-1",))
     server = create_server(port=0, db_path=db, operator_authorizer=authorizer)
     host, port = server.server_address
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -295,8 +296,7 @@ def test_managed_oidc_operator_pause_does_not_require_local_token():
             body="confirm=yes",
             headers={
                 "Content-Type": "application/x-www-form-urlencoded",
-                "X-MS-CLIENT-PRINCIPAL-ID": "operator-1",
-                "X-MS-CLIENT-PRINCIPAL-ROLES": "TriggerTrade.Operator",
+                **_managed_principal_headers("operator-1"),
             },
         )
         response = conn.getresponse()

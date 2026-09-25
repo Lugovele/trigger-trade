@@ -65,7 +65,12 @@ def _operator_forms_html() -> str:
     )
 
 
-def _server_boundary_script(state: str, operator_command_submit_enabled: bool, state_available: bool) -> str:
+def _server_boundary_script(
+    state: str,
+    operator_command_submit_enabled: bool,
+    state_available: bool,
+    local_dev_operator_controls: bool = False,
+) -> str:
     state_json = json.dumps(state)
     return """
 <script id="triggertrade-server-boundaries">
@@ -73,6 +78,7 @@ def _server_boundary_script(state: str, operator_command_submit_enabled: bool, s
   const operatorState = %s;
   const operatorStateAvailable = %s;
   const canSubmitOperatorControl = %s;
+  const localDevOperatorControls = %s;
   let serverControlAction = null;
   let serverClosePosition = null;
 
@@ -199,6 +205,14 @@ def _server_boundary_script(state: str, operator_command_submit_enabled: bool, s
     return String(text || "Command failed").replace(/<[^>]*>/g, " ").replace(/\\s+/g, " ").trim().slice(0, 180) || "Command failed";
   }
 
+  function commandHeaders(contentType){
+    const headers = {"Content-Type": contentType};
+    if(localDevOperatorControls){
+      headers["X-TriggerTrade-Local-Operator"] = "1";
+    }
+    return headers;
+  }
+
   function successMessageForForm(form){
     if(!form) return "Command submitted.";
     if(form.id === "operatorPauseForm") return "Entries paused.";
@@ -229,7 +243,8 @@ def _server_boundary_script(state: str, operator_command_submit_enabled: bool, s
     try{
       const response = await fetch(form.action, {
         method: "POST",
-        headers: {"Content-Type": "application/x-www-form-urlencoded", "X-TriggerTrade-Local-Operator": "1"},
+        credentials: "same-origin",
+        headers: commandHeaders("application/x-www-form-urlencoded"),
         body
       });
       const text = await response.text();
@@ -277,6 +292,10 @@ def _server_boundary_script(state: str, operator_command_submit_enabled: bool, s
   const originalOpenControlModal = window.openControlModal;
   const originalConfirmControlAction = window.confirmControlAction;
   window.openSingleCloseById = function(positionId, symbol){
+    if(!canSubmitOperatorControl){
+      setOperatorStatus("Operator command submission is unavailable.", "negative");
+      return;
+    }
     serverClosePosition = {positionId, symbol};
     serverControlAction = "single-close";
     setModalText(
@@ -289,11 +308,19 @@ def _server_boundary_script(state: str, operator_command_submit_enabled: bool, s
     openBoundaryModal();
   };
   window.closePosition = function(positionId, symbol){
+    if(!canSubmitOperatorControl){
+      setOperatorStatus("Operator command submission is unavailable.", "negative");
+      return;
+    }
     window.openSingleCloseById(positionId, symbol);
   };
   window.closeOne = window.closePosition;
 
   window.openControlModal = function(action){
+    if(!canSubmitOperatorControl){
+      setOperatorStatus("Operator command submission is unavailable.", "negative");
+      return;
+    }
     const normalizedAction = action === "pause" && operatorState === "TRADING_PAUSED" ? "resume" : action;
     serverControlAction = normalizedAction;
     if(normalizedAction === "pause"){
@@ -416,6 +443,7 @@ def _server_boundary_script(state: str, operator_command_submit_enabled: bool, s
         state_json,
         "true" if state_available else "false",
         "true" if operator_command_submit_enabled else "false",
+        "true" if local_dev_operator_controls else "false",
     )
 
 
@@ -1633,7 +1661,7 @@ def render_product_dashboard(
         + "".join(startup)
         + "</script>\n"
         + _operator_forms_html()
-        + _server_boundary_script(state, operator_command_submit_enabled, state_available)
+        + _server_boundary_script(state, operator_command_submit_enabled, state_available, bool(operator_control_token))
         + _portfolio_wiring_script(portfolio)
         + _registry_wiring_script(registry)
         + _rules_wiring_script(rules, operator_control_token)
@@ -1888,11 +1916,37 @@ def _reference_backend_script(payload: str) -> str:
   const qa = (sel, root=document) => Array.from(root.querySelectorAll(sel));
 
   function canSubmit(){ return !!state.canSubmitOperatorControl; }
+  function researchRegistryUnavailable(){ return !!(state.research && state.research.unavailable_reason); }
+  function commandUnavailableMessage(){ return "Operator command submission is unavailable."; }
+  function commandHeaders(contentType){
+    const headers = {"Content-Type": contentType};
+    if(state.localDevOperatorControls){
+      headers["X-TriggerTrade-Local-Operator"] = "1";
+    }
+    return headers;
+  }
+  function commandIdempotencyKey(prefix){
+    return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  }
   async function postJson(url, body){
-    const response = await fetch(url, {method:"POST", headers:{"Content-Type":"application/json","X-TriggerTrade-Local-Operator":"1"}, body:JSON.stringify(body || {})});
+    const response = await fetch(url, {method:"POST", credentials:"same-origin", headers:commandHeaders("application/json"), body:JSON.stringify(body || {})});
     const data = await response.json().catch(() => ({}));
     if(!response.ok) throw new Error(data.error || data.reason || "Request failed");
     return data;
+  }
+  function applyCommandAvailability(){
+    const commandUnavailable = !canSubmit();
+    qa(".stop-new, .close-all, .row-close, button[onclick*=\"confirmPauseEntries\"], button[onclick*=\"confirmCloseAll\"], button[onclick*=\"action('pause')\"], button[onclick*=\"action('close')\"]", document).forEach(node => {
+      node.disabled = commandUnavailable;
+      node.setAttribute("aria-disabled", commandUnavailable ? "true" : "false");
+      if(commandUnavailable) node.title = commandUnavailableMessage();
+    });
+    qa('button[onclick^="runBacktest"], button[onclick="runDemo()"], button[onclick^="setDecision"], button[onclick="openNewResearch()"]', desktop).forEach(node => {
+      const unavailable = commandUnavailable || researchRegistryUnavailable();
+      node.disabled = unavailable;
+      node.setAttribute("aria-disabled", unavailable ? "true" : "false");
+      if(unavailable) node.title = researchRegistryUnavailable() ? state.research.unavailable_reason : commandUnavailableMessage();
+    });
   }
   function normalizeCoinAllocation(v){
     if(v === null || v === undefined) return "";
@@ -2005,7 +2059,7 @@ def _reference_backend_script(payload: str) -> str:
   }
   async function submitOperatorForm(id, fill, successMessage, afterSuccess){
     const form = document.getElementById(id);
-    if(!canSubmit()){ setOperatorStatus("Operator command submission is unavailable.", "negative"); return false; }
+    if(!canSubmit()){ setOperatorStatus(commandUnavailableMessage(), "negative"); return false; }
     if(!form){ setOperatorStatus("Operator command form is unavailable.", "negative"); return false; }
     if(fill) fill(form);
     const key = form.querySelector('[name="idempotency_key"]');
@@ -2013,7 +2067,7 @@ def _reference_backend_script(payload: str) -> str:
     const body = new URLSearchParams(new FormData(form));
     setOperatorStatus("Submitting...", "neutral");
     try{
-      const response = await fetch(form.action, {method:"POST", headers:{"Content-Type":"application/x-www-form-urlencoded","X-TriggerTrade-Local-Operator":"1"}, body});
+      const response = await fetch(form.action, {method:"POST", credentials:"same-origin", headers:commandHeaders("application/x-www-form-urlencoded"), body});
       const text = await response.text();
       if(!response.ok) throw new Error(publicFormError(text));
       if(afterSuccess) afterSuccess();
@@ -2025,6 +2079,7 @@ def _reference_backend_script(payload: str) -> str:
     }
   }
   window.confirmPauseEntries = function(){
+    if(!canSubmit()){ setOperatorStatus(commandUnavailableMessage(), "negative"); return; }
     if(typeof window.openControlModal === "function"){
       window.openControlModal("pause");
       return;
@@ -2032,6 +2087,7 @@ def _reference_backend_script(payload: str) -> str:
     setOperatorStatus("Operator control boundary is unavailable.", "negative");
   };
   window.confirmCloseAll = function(){
+    if(!canSubmit()){ setOperatorStatus(commandUnavailableMessage(), "negative"); return; }
     if(typeof window.openControlModal === "function"){
       window.openControlModal("close");
       return;
@@ -2039,6 +2095,7 @@ def _reference_backend_script(payload: str) -> str:
     setOperatorStatus("Operator control boundary is unavailable.", "negative");
   };
   window.closePosition = function(id, symbol){
+    if(!canSubmit()){ setOperatorStatus(commandUnavailableMessage(), "negative"); return; }
     if(typeof window.openSingleCloseById === "function"){
       window.openSingleCloseById(id, symbol);
       return;
@@ -2461,8 +2518,14 @@ def _reference_backend_script(payload: str) -> str:
       return (!search || haystack.includes(search)) && (!demoFilter || demo === demoFilter) && (!decisionFilter || decision === decisionFilter);
     });
     if(!body) return;
+    if(researchRegistryUnavailable()){
+      body.innerHTML = `<tr><td colspan="8" class="empty">Research registry unavailable: ${h(state.research.unavailable_reason)}</td></tr>`;
+      applyCommandAvailability();
+      return;
+    }
     body.innerHTML = rows.length ? rows.map(r => `<tr class="research-row" data-research-id="${h(r.research_id)}"><td><div class="research-id">${h(r.research_id)}</div></td><td>${h(r.set_id)}<div class="panel-meta">${h(r.set_version)}</div></td><td>${h(r.rules_display_version)}<div class="panel-meta">${h(r.rules_version_id)}</div></td><td>${h(demoState(r).replace(/^./, c => c.toUpperCase()))}</td><td>${h(r.selected_demo_profit_factor ?? "—")}</td><td>${h(r.compare_to_active || "—")}</td><td>—</td><td>${badge(r.decision || r.status || "NONE")}</td></tr>`).join("") : '<tr><td colspan="8" class="empty">No Research records.</td></tr>';
     qa("[data-research-id]", desktop).forEach(row => row.onclick = () => window.openResearchById(row.dataset.researchId));
+    applyCommandAvailability();
   }
   window.openResearchById = async function(id){
     currentResearchId = id;
@@ -2491,6 +2554,7 @@ def _reference_backend_script(payload: str) -> str:
       workflowDecisionCard.classList.toggle("done", decisionValue !== "NONE");
       workflowDecisionCard.classList.toggle("reject-done", decisionValue === "REJECT" || decisionValue === "ARCHIVE" || decisionValue === "ARCHIVED");
     }
+    applyCommandAvailability();
   }
   async function loadCompare(){
     if(!currentResearchId) return;
@@ -2553,9 +2617,9 @@ def _reference_backend_script(payload: str) -> str:
     qa(".compare-period", desktop).forEach(node => node.classList.toggle("active", (node.textContent || "").trim() === comparePeriod));
     renderCompare();
   };
-  window.runBacktest = async function(period){ if(!currentResearchId){ setResearchActionStatus("Research record unavailable.", "negative"); return; } if(!canSubmit()){ setResearchActionStatus("Operator command submission is unavailable.", "negative"); return; } const days = period === "90D" ? 90 : period === "30D" ? 30 : 7; const end = new Date(), start = new Date(end.getTime() - days * 86400000); try{ setResearchActionStatus("Running backtest...", "neutral"); await postJson(`/api/research/${encodeURIComponent(currentResearchId)}/backtests`, {research_start:start.toISOString(),research_end:end.toISOString()}); setResearchActionStatus("Backtest submitted.", "positive"); }catch(error){ currentCompare = {available:false, reason:error.message || "Backtest unavailable"}; setResearchActionStatus(error.message || "Backtest unavailable.", "negative"); renderCompare(); } await window.openResearchById(currentResearchId); };
-  window.runDemo = async function(){ if(!currentResearchId){ setResearchActionStatus("Research record unavailable.", "negative"); return; } if(!canSubmit()){ setResearchActionStatus("Operator command submission is unavailable.", "negative"); return; } try{ setResearchActionStatus("Starting demo...", "neutral"); await postJson(`/api/research/${encodeURIComponent(currentResearchId)}/demo/start`, {}); setResearchActionStatus("Demo submitted.", "positive"); }catch(error){ currentCompare = {available:false, reason:error.message || "Demo start unavailable"}; setResearchActionStatus(error.message || "Demo start unavailable.", "negative"); renderCompare(); } await window.openResearchById(currentResearchId); };
-  window.setDecision = async function(value){ if(!currentResearchId){ setResearchActionStatus("Research record unavailable.", "negative"); return; } if(!canSubmit()){ setResearchActionStatus("Operator command submission is unavailable.", "negative"); return; } const normalized = String(value || "").toUpperCase(); const url = normalized === "REJECT" ? `/api/research/${encodeURIComponent(currentResearchId)}/archive` : `/api/research/${encodeURIComponent(currentResearchId)}/decision/make-active`; try{ setResearchActionStatus("Submitting decision...", "neutral"); await postJson(url, {idempotency_key:"ui-"+Date.now()}); setResearchActionStatus("Decision submitted.", "positive"); }catch(error){ currentCompare = {available:false, reason:error.message || "Decision unavailable"}; setResearchActionStatus(error.message || "Decision unavailable.", "negative"); renderCompare(); } await window.openResearchById(currentResearchId); };
+  window.runBacktest = async function(period){ if(!currentResearchId){ setResearchActionStatus("Research record unavailable.", "negative"); return; } if(!canSubmit()){ setResearchActionStatus(commandUnavailableMessage(), "negative"); return; } if(researchRegistryUnavailable()){ setResearchActionStatus(state.research.unavailable_reason, "negative"); return; } const days = period === "90D" ? 90 : period === "30D" ? 30 : 7; const end = new Date(), start = new Date(end.getTime() - days * 86400000); try{ setResearchActionStatus("Running backtest...", "neutral"); await postJson(`/api/research/${encodeURIComponent(currentResearchId)}/backtests`, {research_start:start.toISOString(),research_end:end.toISOString(),idempotency_key:commandIdempotencyKey("research-backtest")}); setResearchActionStatus("Backtest submitted.", "positive"); }catch(error){ currentCompare = {available:false, reason:error.message || "Backtest unavailable"}; setResearchActionStatus(error.message || "Backtest unavailable.", "negative"); renderCompare(); } await window.openResearchById(currentResearchId); };
+  window.runDemo = async function(){ if(!currentResearchId){ setResearchActionStatus("Research record unavailable.", "negative"); return; } if(!canSubmit()){ setResearchActionStatus(commandUnavailableMessage(), "negative"); return; } if(researchRegistryUnavailable()){ setResearchActionStatus(state.research.unavailable_reason, "negative"); return; } try{ setResearchActionStatus("Starting demo...", "neutral"); await postJson(`/api/research/${encodeURIComponent(currentResearchId)}/demo/start`, {idempotency_key:commandIdempotencyKey("research-demo")}); setResearchActionStatus("Demo submitted.", "positive"); }catch(error){ currentCompare = {available:false, reason:error.message || "Demo start unavailable"}; setResearchActionStatus(error.message || "Demo start unavailable.", "negative"); renderCompare(); } await window.openResearchById(currentResearchId); };
+  window.setDecision = async function(value){ if(!currentResearchId){ setResearchActionStatus("Research record unavailable.", "negative"); return; } if(!canSubmit()){ setResearchActionStatus(commandUnavailableMessage(), "negative"); return; } if(researchRegistryUnavailable()){ setResearchActionStatus(state.research.unavailable_reason, "negative"); return; } const normalized = String(value || "").toUpperCase(); const url = normalized === "REJECT" ? `/api/research/${encodeURIComponent(currentResearchId)}/archive` : `/api/research/${encodeURIComponent(currentResearchId)}/decision/make-active`; try{ setResearchActionStatus("Submitting decision...", "neutral"); await postJson(url, {idempotency_key:"ui-"+Date.now()}); setResearchActionStatus("Decision submitted.", "positive"); }catch(error){ currentCompare = {available:false, reason:error.message || "Decision unavailable"}; setResearchActionStatus(error.message || "Decision unavailable.", "negative"); renderCompare(); } await window.openResearchById(currentResearchId); };
   window.exportResearch = function(){ const blob = new Blob([JSON.stringify({research:currentResearch, compare:currentCompare}, null, 2)], {type:"application/json"}); const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `${currentResearchId || "research"}-research.json`; a.click(); };
   function setupNewResearch(){
     const setSelect = q("#new-set", desktop) || q("#newResearchSet", desktop);
@@ -2566,10 +2630,11 @@ def _reference_backend_script(payload: str) -> str:
     if(rulesSelect) rulesSelect.innerHTML = rules.length ? rules.map(r => `<option value="${h(r.rules_version_id)}">${h(r.label || r.rules_version_id)}</option>`).join("") : '<option value="">Rules unavailable</option>';
     setNewResearchState(sets.length && rules.length ? "" : "Backend Set and Rules versions are unavailable.");
   }
-  window.openNewResearch = function(){ setupNewResearch(); q("#new-research-modal", desktop)?.classList.add("show"); };
+  window.openNewResearch = function(){ if(researchRegistryUnavailable()){ setNewResearchState(state.research.unavailable_reason); return; } setupNewResearch(); q("#new-research-modal", desktop)?.classList.add("show"); };
   window.closeNewResearch = function(){ q("#new-research-modal", desktop)?.classList.remove("show"); };
   window.createResearch = async function(){
-    if(!canSubmit()){ setNewResearchState("Operator command submission is unavailable."); return; }
+    if(!canSubmit()){ setNewResearchState(commandUnavailableMessage()); return; }
+    if(researchRegistryUnavailable()){ setNewResearchState(state.research.unavailable_reason); return; }
     const setValue = (q("#new-set", desktop) || q("#newResearchSet", desktop))?.value || "";
     const rules_version_id = (q("#new-rules", desktop) || q("#newResearchRules", desktop))?.value || "";
     const [set_id, set_version] = setValue.split("|");
@@ -2578,7 +2643,7 @@ def _reference_backend_script(payload: str) -> str:
       return;
     }
     try{
-      const data = await postJson("/api/research", {set_id, set_version, rules_version_id});
+      const data = await postJson("/api/research", {set_id, set_version, rules_version_id, idempotency_key:commandIdempotencyKey("research-create")});
       window.closeNewResearch();
       await window.openResearchById(data.research?.research_id);
     }catch(error){
@@ -2586,7 +2651,7 @@ def _reference_backend_script(payload: str) -> str:
     }
   };
 
-  setupFilters(); applyOperatorState(); setupKpis(); renderPositions(); renderMetrics(); renderTriggers(); renderSets(); renderRules(); renderResearchSummary();
+  setupFilters(); applyOperatorState(); setupKpis(); renderPositions(); renderMetrics(); renderTriggers(); renderSets(); renderRules(); renderResearchSummary(); applyCommandAvailability();
   showPage(state.page === "config" ? "configuration" : state.page || "overview");
 })();
 </script>
@@ -2631,6 +2696,7 @@ def render_product_dashboard(
             "operatorState": raw_state if state_available else "UNKNOWN",
             "operatorStateAvailable": state_available,
             "canSubmitOperatorControl": bool(operator_command_submit_enabled),
+            "localDevOperatorControls": bool(operator_control_token),
             "portfolio": _safe_payload(portfolio or {}),
             "registry": _safe_payload(registry or {}),
             "rules": _safe_payload(rules or {}),
@@ -2805,6 +2871,11 @@ def render_product_dashboard(
         + "</div>\n"
         + forms
         + _reference_backend_script(payload)
-        + _server_boundary_script(raw_state if state_available else "UNKNOWN", operator_command_submit_enabled, state_available)
+        + _server_boundary_script(
+            raw_state if state_available else "UNKNOWN",
+            operator_command_submit_enabled,
+            state_available,
+            bool(operator_control_token),
+        )
         + "\n</body>\n</html>"
     )

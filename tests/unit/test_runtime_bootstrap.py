@@ -209,9 +209,10 @@ def test_dashboard_env_startup_uses_managed_oidc_auth_by_default(tmp_path):
     try:
         html = render_dashboard(server.read_model)
         assert server.operator_authorizer.auth_mode == "managed_oidc"
-        assert server.read_model.operator_command_submit_enabled is True
+        assert server.read_model.operator_command_submit_enabled is False
         assert server.operator_control_token == ""
         assert 'name="token"' not in html
+        assert '"canSubmitOperatorControl": false' in html
     finally:
         server.server_close()
 

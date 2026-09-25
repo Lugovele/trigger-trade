@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import json
 import pytest
 
 from triggertrade.persistence import TraceStore
@@ -16,11 +18,11 @@ from triggertrade.dashboard.__main__ import create_server
 
 def test_managed_oidc_operator_command_is_durably_authorized_without_token(tmp_path):
     db = tmp_path / "auth.sqlite3"
-    authorizer = OperatorCommandAuthorizer(db, auth_mode="managed_oidc")
+    authorizer = OperatorCommandAuthorizer(db, auth_mode="managed_oidc", allowed_principals=("operator-1",))
 
     command = authorizer.authorize_http_command(
         "PAUSE_ENTRIES",
-        headers={"X-MS-CLIENT-PRINCIPAL-ID": "operator-1", "X-MS-CLIENT-PRINCIPAL-ROLES": "TriggerTrade.Operator"},
+        headers=_managed_principal_headers("operator-1"),
         payload={},
         local_dev_token="process-secret-token",
         target="ACTIVE",
@@ -42,10 +44,27 @@ def test_managed_oidc_operator_command_is_durably_authorized_without_token(tmp_p
 def test_managed_oidc_requires_app_level_authorization(tmp_path):
     authorizer = OperatorCommandAuthorizer(tmp_path / "auth.sqlite3", auth_mode="managed_oidc")
 
+    assert authorizer.browser_commands_supported is False
     with pytest.raises(OperatorAuthorizationError, match="not authorized"):
         authorizer.authorize_http_command(
             "PAUSE_ENTRIES",
-            headers={"X-MS-CLIENT-PRINCIPAL-ID": "viewer-1", "X-MS-CLIENT-PRINCIPAL-ROLES": "Reader"},
+            headers=_managed_principal_headers("viewer-1"),
+            payload={},
+            local_dev_token="process-secret-token",
+        )
+
+
+def test_managed_oidc_rejects_forged_loose_role_headers(tmp_path):
+    authorizer = OperatorCommandAuthorizer(
+        tmp_path / "auth.sqlite3",
+        auth_mode="managed_oidc",
+        allowed_principals=("operator-1",),
+    )
+
+    with pytest.raises(OperatorAuthorizationError, match="required"):
+        authorizer.authorize_http_command(
+            "PAUSE_ENTRIES",
+            headers={"X-MS-CLIENT-PRINCIPAL-ID": "operator-1", "X-MS-CLIENT-PRINCIPAL-ROLES": "TriggerTrade.Operator"},
             payload={},
             local_dev_token="process-secret-token",
         )
@@ -89,7 +108,7 @@ def test_managed_headers_cannot_bypass_local_dev_token_mode(tmp_path):
     with pytest.raises(OperatorAuthorizationError, match="not enabled"):
         authorizer.authorize_http_command(
             "PAUSE_ENTRIES",
-            headers={"X-MS-CLIENT-PRINCIPAL-ID": "operator-1", "X-MS-CLIENT-PRINCIPAL-ROLES": "TriggerTrade.Operator"},
+            headers=_managed_principal_headers("operator-1"),
             payload={},
             local_dev_token="process-secret-token",
         )
@@ -122,6 +141,7 @@ def test_env_authorizer_defaults_to_managed_oidc_not_local_token(tmp_path):
     authorizer = operator_authorizer_from_env(tmp_path / "auth.sqlite3", {})
 
     assert authorizer.auth_mode == MANAGED_OIDC_AUTH_SOURCE
+    assert authorizer.browser_commands_supported is False
     with pytest.raises(OperatorAuthorizationError, match="required"):
         authorizer.authorize_http_command(
             "PAUSE_ENTRIES",
@@ -145,7 +165,32 @@ def test_env_authorizer_requires_explicit_local_dev_compat_for_process_token(tmp
     )
 
     assert authorizer.auth_mode == "local_dev_compat"
+    assert authorizer.browser_commands_supported is True
     assert command.principal.auth_source == LOCAL_DEV_AUTH_SOURCE
+
+
+def test_env_authorizer_rejects_local_dev_compat_for_production_web(tmp_path):
+    with pytest.raises(OperatorAuthorizationError, match="production operator auth cannot use local_dev_compat"):
+        operator_authorizer_from_env(
+            tmp_path / "auth.sqlite3",
+            {
+                "TRIGGERTRADE_RUNTIME_MODE": "production",
+                "TRIGGERTRADE_PROCESS_ROLE": "web",
+                "TRIGGERTRADE_AUTH_MODE": "local_dev_compat",
+            },
+        )
+
+
+def test_managed_oidc_browser_commands_require_operator_allowlist(tmp_path):
+    unavailable = OperatorCommandAuthorizer(tmp_path / "unavailable.sqlite3", auth_mode="managed_oidc")
+    available = OperatorCommandAuthorizer(
+        tmp_path / "available.sqlite3",
+        auth_mode="managed_oidc",
+        allowed_principals=("operator-1",),
+    )
+
+    assert unavailable.browser_commands_supported is False
+    assert available.browser_commands_supported is True
 
 
 def test_dashboard_server_does_not_mint_process_local_token_for_managed_auth(tmp_path):
@@ -154,6 +199,7 @@ def test_dashboard_server_does_not_mint_process_local_token_for_managed_auth(tmp
     try:
         assert server.operator_authorizer.auth_mode == MANAGED_OIDC_AUTH_SOURCE
         assert server.operator_control_token == ""
+        assert server.read_model.operator_command_submit_enabled is False
     finally:
         server.server_close()
 
@@ -171,3 +217,19 @@ def test_dashboard_server_mints_process_local_token_only_for_explicit_local_dev_
         assert server.read_model.operator_command_submit_enabled is True
     finally:
         server.server_close()
+
+
+def _managed_principal_headers(principal_id: str) -> dict[str, str]:
+    payload = {
+        "auth_typ": "aad",
+        "name_typ": "name",
+        "role_typ": "roles",
+        "userId": principal_id,
+        "claims": [{"typ": "roles", "val": "TriggerTrade.Operator"}],
+    }
+    encoded = base64.b64encode(json.dumps(payload).encode("utf-8")).decode("ascii").rstrip("=")
+    return {
+        "X-MS-CLIENT-PRINCIPAL": encoded,
+        "X-MS-CLIENT-PRINCIPAL-ID": principal_id,
+        "X-MS-CLIENT-PRINCIPAL-ROLES": "TriggerTrade.Operator",
+    }

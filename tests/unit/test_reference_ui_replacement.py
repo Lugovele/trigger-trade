@@ -223,7 +223,8 @@ def test_trading_rules_coin_editor_uses_pending_allocations_and_existing_save_pa
     assert "#config-rules .coin-remove" in html
     assert "width:28px;" in html
     assert "height:28px;" in html
-    assert '"X-TriggerTrade-Local-Operator":"1"' in html
+    assert 'headers["X-TriggerTrade-Local-Operator"] = "1"' in html
+    assert '"localDevOperatorControls": false' in html
     assert "Operator command submission is unavailable." in html
     assert "researchActionStatus" in html
 
@@ -315,6 +316,9 @@ def test_final_renderer_operator_labels_are_state_aware_and_disabled_path_blocks
     assert "const canSubmitOperatorControl = true;" in enabled_html
     assert "const canSubmitOperatorControl = false;" in disabled_html
     assert "Operator command submission is unavailable." in disabled_html
+    assert "node.disabled = commandUnavailable" in disabled_html
+    assert 'button[onclick^="runBacktest"]' in disabled_html
+    assert "researchRegistryUnavailable()" in disabled_html
 
 
 def test_research_reference_actions_are_backend_wired_without_fixture_values():
@@ -328,7 +332,9 @@ def test_research_reference_actions_are_backend_wired_without_fixture_values():
     assert 'q("#new-rules", desktop)' in html
     assert "insertAdjacentElement(\"afterend\", node)" in html
     assert "window.createResearch = async function()" in html
-    assert 'postJson("/api/research", {set_id, set_version, rules_version_id})' in html
+    assert 'postJson("/api/research", {set_id, set_version, rules_version_id, idempotency_key:commandIdempotencyKey("research-create")})' in html
+    assert 'credentials:"same-origin"' in html
+    assert 'commandHeaders("application/json")' in html
     assert "window.runBacktest = async function(period)" in html
     assert "research_start:start.toISOString()" in html
     assert "window.runDemo = async function()" in html
