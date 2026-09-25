@@ -149,11 +149,12 @@ def test_reference_trading_configuration_layout_is_preserved():
     assert re.search(r'<div class="group-label">\s*Trading\s*</div>', html)
     assert 'data-config="rules"' in html
     assert "Trading Rules" in html
-    assert '<div id="metric-details" class="panel"></div>' in html
-    assert "What this metric means" in html
-    assert "Data from exchange" in html
-    assert "How it is calculated" in html
-    assert "Unavailable when" in html
+    assert 'id="metricFamilyFilters"' in html
+    assert "<th>ID</th><th>Name</th><th>Family</th><th>Type</th><th>Status</th>" in html
+    assert 'id="metric-details"' in html
+    assert "What it means" in html
+    assert "Formula / Rule" in html
+    assert "Unavailable / invalid behavior" in html
     assert '<div id="trigger-details" class="panel"></div>' in html
     assert '<div id="set-details" class="panel"></div>' in html
 

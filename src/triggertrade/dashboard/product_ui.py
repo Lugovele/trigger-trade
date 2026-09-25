@@ -1746,7 +1746,7 @@ def render_product_dashboard(
 </section>
 <section class="page" id="config">
   <nav class="config-nav"><div class="config-group"><div class="group-label">Signal Logic</div><div class="config-tabs"><button class="config-tab active" data-config="metrics">Metrics</button><button class="config-tab" data-config="triggers">Triggers</button><button class="config-tab" data-config="sets">Sets</button></div></div><div class="config-group"><div class="group-label">Trading</div><div class="config-tabs"><button class="config-tab" data-config="trading-rules">Trading Rules</button></div></div></nav>
-  <div class="config-view active" id="config-metrics"><div class="layout"><section class="panel"><div class="panel-header"><div class="toolbar"><input class="search" id="metricSearch" placeholder="Search"><select id="metricTimeframe"><option value="">Timeframe</option><option>1m</option><option>5m</option><option>1D</option></select></div></div><div class="table-wrap"><table><thead><tr><th>Metric</th><th>Timeframe</th></tr></thead><tbody id="metricsBody"></tbody></table></div></section><section class="panel" id="metricDetail"></section></div></div>
+  <div class="config-view active" id="config-metrics"><div class="layout"><section class="panel"><div class="panel-header"><div class="toolbar"><input class="search" id="metricSearch" placeholder="Search by ID or name"><div class="segment" id="metricFamilyFilters"><button type="button" class="metric-family-filter active" data-family="ALL">ALL</button><button type="button" class="metric-family-filter" data-family="F">F</button><button type="button" class="metric-family-filter" data-family="A">A</button><button type="button" class="metric-family-filter" data-family="M">M</button><button type="button" class="metric-family-filter" data-family="N">N</button><button type="button" class="metric-family-filter" data-family="S">S</button></div></div></div><div class="table-wrap"><table><thead><tr><th>ID</th><th>Name</th><th>Family</th><th>Type</th><th>Status</th></tr></thead><tbody id="metricsBody"></tbody></table></div></section><section class="panel" id="metricDetail"></section></div></div>
   <div class="config-view" id="config-triggers"><div class="layout"><section class="panel"><div class="panel-header"><div class="panel-title">Triggers</div></div><div class="table-wrap"><table><thead><tr><th>Trigger</th><th>Version</th><th>Metric</th><th>Condition</th><th>Used in Sets</th><th>Status</th></tr></thead><tbody id="triggersBody"></tbody></table></div></section><section class="panel" id="triggerDetail"></section></div></div>
   <div class="config-view" id="config-sets"><div class="layout"><section class="panel"><div class="panel-header"><div class="panel-title">Sets</div></div><div class="table-wrap"><table><thead><tr><th>Set</th><th>Version</th><th>Direction</th><th>Triggers</th><th>Status</th></tr></thead><tbody id="setsBody"></tbody></table></div></section><section class="panel" id="setDetail"></section></div></div>
   <div class="config-view" id="config-trading-rules"><div class="rules-stack" id="rulesBody"></div></div>
@@ -1807,8 +1807,8 @@ window.exportHistory=()=>fetch("/api/system-history/export",{{method:"POST",head
 window.applyMobileFilters=function(){{filterCoin.value=mFilterCoin.value;filterSide.value=mFilterSide.value;filterStatus.value=mFilterStatus.value;filterSet.value=mFilterSet.value;document.getElementById("filtersSheet").classList.remove("show");renderPositions()}};
 window.resetMobileFilters=function(){{[mFilterCoin,mFilterSide,mFilterStatus,mFilterSet].forEach(x=>x.value="");applyMobileFilters()}};
 function setupOverview(){{const rows=allRows();const coins=[...rows.open,...rows.history].map(r=>r.coin),sets=[...rows.open,...rows.history].map(r=>r.set);["filterCoin","mFilterCoin"].forEach(id=>setSelect(id,coins,"Coin"));["filterSet","mFilterSet"].forEach(id=>setSelect(id,sets,"Set"));renderKpis();renderPositions()}}
-const metricRows=[{{id:"M-001",name:"Research net P/L metric",timeframe:"Research",meaning:"Research/reporting aggregation from backend analytics. Values remain research parameters.",formula:"See docs/FORMULA_METRICS_CATALOG.md M-001; UI does not implement calculation logic."}},{{id:"M-003",name:"Profit factor metric",timeframe:"Research",meaning:"Research-only profit factor surfaced from backend run metrics.",formula:"Source: triggertrade.analytics.futures::_profit_factor through persisted research metrics."}},{{id:"A-007",name:"Equity / unrealized P&L snapshot",timeframe:"As of account snapshot",meaning:"Factual accounting snapshot exposed by the portfolio read model.",formula:"Source fields: futures_equity_snapshots equity, available_margin, used_margin, unrealized_pnl."}}];
-function renderMetrics(){{metricsBody.innerHTML=metricRows.map(m=>`<tr class="catalog-row js-metric-row" data-metric-id="${{html(m.id)}}"><td>${{html(m.name)}}</td><td>${{html(m.timeframe)}}</td></tr>`).join("");document.querySelectorAll(".js-metric-row").forEach(row=>row.onclick=()=>showMetric(row.dataset.metricId||""));showMetric(metricRows[0].id)}};window.showMetric=id=>{{const m=metricRows.find(x=>x.id===id);metricDetail.innerHTML=`<div class="details-header"><div class="details-id">${{html(m.id)}}</div><div class="details-title">${{html(m.name)}}</div></div><div class="details-section"><div class="body-text">${{html(m.meaning)}}</div></div><div class="details-section"><div class="panel-title">Source -> validation -> formula -> output</div><div class="formula">${{html(m.formula)}}\\nUnavailable/invalid conditions: rendered as neutral unavailable state; no frontend fallback calculation.</div></div>`}};
+const metricCatalog=(state.metrics&&Array.isArray(state.metrics.metrics))?state.metrics.metrics:[];
+function renderMetrics(){{metricsBody.innerHTML=metricCatalog.length?metricCatalog.map(m=>`<tr class="catalog-row js-metric-row" data-metric-id="${{html(m.id)}}"><td>${{html(m.id)}}</td><td>${{html(m.name)}}</td><td>${{html(String(m.id||"").split("-")[0])}}</td><td>${{html(m.type)}}</td><td>${{html(m.status)}}</td></tr>`).join(""):`<tr><td colspan="5" class="empty">Metrics Library unavailable.</td></tr>`;document.querySelectorAll(".js-metric-row").forEach(row=>row.onclick=()=>showMetric(row.dataset.metricId||""));if(metricCatalog[0])showMetric(metricCatalog[0].id)}};window.showMetric=id=>{{const m=metricCatalog.find(x=>x.id===id)||metricCatalog[0];if(!m)return;metricDetail.innerHTML=`<div class="details-header"><div class="details-id">${{html(m.id)}} · ${{html(m.status)}}</div><div class="details-title">${{html(m.name)}}</div></div><div class="details-section"><div class="body-text">${{html(m.what_it_is||"")}}</div></div><div class="details-section"><div class="panel-title">Formula / Rule</div><div class="formula">${{html(m.formula_or_rule||"")}}</div></div>`}};
 function renderTriggers(){{const triggers=(state.registry.triggers||[]);triggersBody.innerHTML=triggers.length?triggers.map(t=>`<tr class="catalog-row js-trigger-row" data-trigger-id="${{html(t.trigger_id)}}" data-trigger-version="${{html(t.version)}}"><td>${{html(t.display_name||t.trigger_id)}}</td><td>${{html(t.version)}}</td><td>Versioned condition</td><td>${{html(t.what_it_checks)}}</td><td>${{html((state.registry.sets||[]).filter(s=>(s.trigger_versions||[]).some(v=>v.trigger_id===t.trigger_id&&v.version===t.version)).map(s=>s.set_id+" "+s.version).join(", ")||"—")}}</td><td>${{statusBadge(t.immutable?"Active":"Research")}}</td></tr>`).join(""):`<tr><td colspan="6" class="empty">No canonical Trigger versions available.</td></tr>`;document.querySelectorAll(".js-trigger-row").forEach(row=>row.onclick=()=>showTrigger(row.dataset.triggerId||"",row.dataset.triggerVersion||""));if(triggers[0])showTrigger(triggers[0].trigger_id,triggers[0].version)}};window.showTrigger=(id,version)=>{{let t=(state.registry.selected_trigger&&state.registry.selected_trigger.trigger_id===id&&state.registry.selected_trigger.version===version)?state.registry.selected_trigger:(state.registry.triggers||[]).find(x=>x.trigger_id===id&&x.version===version);const params=(t?.parameters||[]).map(p=>`${{p.name}} = ${{p.value}} (${{p.meaning}})`).join("\\n")||"—";const history=(t?.version_history||[]).map(v=>`${{v.version}} · ${{v.created_at}} · ${{v.change_summary}}`).join("\\n")||"—";triggerDetail.innerHTML=`<div class="details-header"><div class="details-id">${{html(id)}} · ${{html(version)}} · ${{t?.immutable?"CURRENT/HISTORICAL USED":"RESEARCH"}}</div><div class="details-title">${{html(t?.display_name||id)}}</div></div><div class="details-section"><div class="body-text">${{html(t?.how_it_works||t?.what_it_checks||"Trigger detail unavailable from backend.")}}</div></div><div class="details-section"><div class="panel-title">Condition</div><div class="formula">${{html(t?.formula_text||t?.what_it_checks||"—")}}</div></div><div class="details-section"><div class="panel-title">Parameters</div><div class="formula">${{html(params)}}</div></div><div class="details-section"><div class="panel-title">Set Versions Using It</div><div class="body-text">${{html((t?.used_in||[]).map(u=>`${{u.set_id||u.set_name}} ${{u.set_version}} ${{u.set_status||""}}`).join(", ")||"—")}}</div></div><div class="details-section"><div class="panel-title">Version History</div><div class="formula">${{html(history)}}</div></div>`}};
 function renderSets(){{const sets=state.registry.sets||[];setsBody.innerHTML=sets.length?sets.map(s=>`<tr class="catalog-row js-set-row" data-set-id="${{html(s.set_id)}}" data-set-version="${{html(s.version)}}"><td>${{html(s.display_name||s.set_id)}}</td><td>${{html(s.version)}}</td><td>${{html([s.symbol,s.timeframe].filter(Boolean).join(" · ")||"—")}}</td><td>${{html((s.trigger_versions||[]).map(t=>t.trigger_id+" "+t.version).join(", "))}}</td><td>${{statusBadge(s.status)}}</td></tr>`).join(""):`<tr><td colspan="5" class="empty">No canonical Set versions available.</td></tr>`;document.querySelectorAll(".js-set-row").forEach(row=>row.onclick=()=>showSet(row.dataset.setId||"",row.dataset.setVersion||""));if(sets[0])showSet(sets[0].set_id,sets[0].version)}};window.showSet=(id,version)=>{{const s=(state.registry.sets||[]).find(x=>x.set_id===id&&x.version===version);const members=s?.trigger_versions||[];setDetail.innerHTML=`<div class="details-header"><div class="details-id">${{html(id)}} · ${{html(version)}} · ${{html(s?.status||"UNKNOWN")}}</div><div class="details-title">${{html(s?.display_name||id)}}</div></div><div class="details-section"><div class="set-logic"><div class="set-logic-row"><div class="logic-keyword">IF</div><div class="logic-condition">${{html(members.map(t=>t.trigger_id+" "+t.version+" evaluates TRUE").join(" AND ")||"no trigger membership recorded")}}</div></div><div class="set-logic-row"><div class="logic-keyword">THEN</div><div class="logic-condition">Emit the versioned Set signal for ${{html([s?.symbol,s?.timeframe].filter(Boolean).join(" / ")||"the configured market")}}; strategies convert this deterministic signal into trade intent.</div></div><div class="set-logic-row"><div class="logic-keyword">TRACE</div><div class="logic-condition">Status ${{html(s?.status||"UNKNOWN")}}; created ${{html(s?.created_at||"—")}}; active ${{html(s?.is_active?"yes":"no")}}.</div></div></div></div>`}};
 document.querySelectorAll(".config-tab").forEach(b=>b.onclick=()=>{{configView=b.dataset.config;document.querySelectorAll(".config-tab").forEach(x=>x.classList.toggle("active",x.dataset.config===configView));document.querySelectorAll(".config-view").forEach(x=>x.classList.toggle("active",x.id==="config-"+configView));}});
@@ -2301,21 +2301,77 @@ def _reference_backend_script(payload: str) -> str:
   qa(".range-btn", desktop).forEach(b => b.addEventListener("click", () => { historyRange = historyRangeFromButton(b) || historyRange; renderPositions(); }));
   qa(".positions-tools-row select", desktop).forEach(s => s.addEventListener("change", renderPositions));
 
-  const metricDocs = [
-    {id:"F-003", key:"atr", name:"ATR / ATR_PCT", timeframe:"15m", type:"Formula", meaning:"ATR measures the size of recent market movement. ATR_PCT expresses that movement as a percentage of the current completed candle Close, so volatility can be compared across coins with very different prices.", source:"The system requests completed 15-minute candles from the exchange market-data API. For every candle it uses High, Low and Close. It also uses the Close of the immediately preceding completed candle. Incomplete/current forming candles are not used.", variables:[["High","Highest traded price inside the completed 15m candle."],["Low","Lowest traded price inside the completed 15m candle."],["Close","Final price of the completed 15m candle."],["Previous Close","Close of the immediately preceding completed 15m candle."],["TR","True Range for one completed candle."],["ATR","Wilder-smoothed True Range over 14 completed candles."],["ATR_PCT","ATR expressed as a percentage of Close."]], steps:["For the latest completed 15m candle, read High, Low and Close from exchange market data and read Previous Close from the preceding completed candle.","Calculate three distances: High - Low, |High - Previous Close|, and |Low - Previous Close|.","True Range is the largest of those three values.","Repeat the True Range calculation for the required completed-candle sequence and apply the 14-period Wilder ATR smoothing.","Calculate ATR_PCT = ATR / current completed Close * 100."], formula:"TR = max(High - Low, |High - Previous Close|, |Low - Previous Close|)\n\nATR = Wilder-smoothed TR over 14 completed candles\n\nATR_PCT = ATR / Close * 100", example:"Example candle: High = 104, Low = 98, Previous Close = 100.\n\nHigh - Low = 6\n|104 - 100| = 4\n|98 - 100| = 2\n\nTR = max(6, 4, 2) = 6.\n\nThe resulting TR then enters the 14-period Wilder ATR calculation. If ATR = 5 and current Close = 100, then ATR_PCT = 5 / 100 * 100 = 5%.", unavailable:"The metric must not be produced from malformed or incomplete required candle data. Required prices must be valid numeric values, High must not be below Low, and ATR_PCT cannot be calculated when the required Close denominator is invalid."},
-    {id:"F-001", key:"priceMove", name:"Price Move", timeframe:"1m", type:"Formula", meaning:"Price Move measures how far the completed market price moved relative to the exact reference price required by the TriggerTrade methodology.", source:"The required completed price observations come from exchange market-data API responses. The calculation does not invent a price when a required source observation is unavailable.", variables:[["Current Price","The current completed price observation required by the formula."],["Reference Price","The methodology-defined earlier reference price."],["Price Move","Relative movement between Current Price and Reference Price."]], steps:["Obtain the required completed Current Price from exchange market data.","Resolve the exact Reference Price required by the methodology.","Subtract Reference Price from Current Price.","Divide the difference by Reference Price.","Convert to percentage form when the consuming Trigger uses percentage representation."], formula:"Price Move = (Current Price - Reference Price) / Reference Price\n\nPrice Move % = Price Move * 100", example:"Reference Price = 100.00 and Current Price = 103.00.\n\nPrice Move = (103 - 100) / 100 = 0.03 = +3.00%.\n\nIf Current Price = 97.00, Price Move = -3.00%.", unavailable:"If either required price is unavailable or the required reference denominator is invalid, the metric is unavailable. It is not silently converted to zero."},
-    {id:"F-002", key:"turnover", name:"Relative Turnover", timeframe:"5m", type:"Formula", meaning:"Relative Turnover measures current completed-period trading activity relative to the methodology-defined historical reference activity.", source:"Turnover observations are taken from completed exchange market-data intervals. Both the current observation and the required reference observations must exist.", variables:[["Current Turnover","Turnover of the completed interval being evaluated."],["Reference Turnover","Historical reference turnover calculated from the required comparison observations."],["Relative Turnover","Current Turnover divided by Reference Turnover."]], steps:["Read the completed current-period turnover from exchange market data.","Read the completed historical turnover observations required for the reference.","Calculate the methodology-defined Reference Turnover.","Divide Current Turnover by Reference Turnover.","Pass the resulting ratio to consuming Trigger logic."], formula:"Relative Turnover = Current Turnover / Reference Turnover", example:"Current Turnover = 2,000,000 USDT.\nReference Turnover = 1,000,000 USDT.\n\nRelative Turnover = 2.0.\n\nThat means current turnover is twice the reference level.", unavailable:"If the required current or reference observations are unavailable, or the reference denominator is invalid, the result is unavailable."}
-  ];
+  const metricsRegistry = state.metrics || {metrics: []};
+  let metricFamilyFilter = "ALL";
+  function metricsList(){
+    return Array.isArray(metricsRegistry.metrics) ? metricsRegistry.metrics : [];
+  }
+  function metricFamilyCode(metric){
+    return String(metric?.id || "").split("-")[0] || "";
+  }
+  function metricFamilyLabel(code){
+    return ({
+      F:"Formula / system calculations",
+      A:"Accounting calculations and rules",
+      M:"Research-only performance metrics",
+      N:"Numeric and normalization policies",
+      S:"State and system classification rules"
+    })[code] || code || "Unknown";
+  }
+  function metricSearchValue(){
+    return String(q("#metricSearch", desktop)?.value || "").trim().toLowerCase();
+  }
+  function metricSection(title, value){
+    const text = String(value || "").trim();
+    if(!text) return "";
+    return `<div class="details-section"><div class="section-title">${h(title)}</div><div class="formula" style="white-space:pre-line">${h(text)}</div></div>`;
+  }
+  function metricRows(){
+    const needle = metricSearchValue();
+    return metricsList().filter(metric => {
+      const family = metricFamilyCode(metric);
+      if(metricFamilyFilter !== "ALL" && family !== metricFamilyFilter) return false;
+      if(!needle) return true;
+      return [metric.id, metric.name].some(value => String(value || "").toLowerCase().includes(needle));
+    });
+  }
+  function setupMetricsShell(){
+    const header = q("#config-metrics .panel-header", desktop);
+    if(header && !q("#metricFamilyFilters", header)){
+      header.innerHTML = `<div class="toolbar metric-toolbar"><input class="search" id="metricSearch" placeholder="Search by ID or name"><div class="segment" id="metricFamilyFilters">${["ALL","F","A","M","N","S"].map(family => `<button type="button" class="metric-family-filter" data-family="${family}">${family}</button>`).join("")}</div></div>`;
+      q("#metricSearch", header)?.addEventListener("input", renderMetrics);
+      qa(".metric-family-filter", header).forEach(button => button.addEventListener("click", () => {
+        metricFamilyFilter = button.dataset.family || "ALL";
+        renderMetrics();
+      }));
+    }
+    const head = q("#config-metrics thead", desktop);
+    if(head){
+      head.innerHTML = "<tr><th>ID</th><th>Name</th><th>Family</th><th>Type</th><th>Status</th></tr>";
+    }
+  }
   function renderMetrics(){
+    setupMetricsShell();
     const body = q("#metrics-body", desktop) || q("#metricsBody", desktop) || q("#config-metrics tbody", desktop);
-    if(body) body.innerHTML = metricDocs.map(m => `<tr class="catalog-row" data-metric="${m.key}"><td>${h(m.name)}</td><td>${h(m.timeframe)}</td></tr>`).join("");
+    const rows = metricRows();
+    qa(".metric-family-filter", desktop).forEach(button => button.classList.toggle("active", (button.dataset.family || "ALL") === metricFamilyFilter));
+    if(body) body.innerHTML = rows.length
+      ? rows.map(m => `<tr class="catalog-row" data-metric="${h(m.id)}"><td><b>${h(m.id)}</b></td><td>${h(m.name)}</td><td>${h(metricFamilyCode(m))}</td><td>${h(m.type)}</td><td>${badge(m.status)}</td></tr>`).join("")
+      : '<tr><td colspan="5" class="empty">No Metrics Library entries match the current filter.</td></tr>';
     qa("[data-metric]", desktop).forEach(row => row.onclick = () => window.showMetric(row.dataset.metric));
-    window.showMetric(metricDocs[0].id);
+    const selected = rows[0] || metricsList()[0];
+    if(selected) window.showMetric(selected.id);
   }
   window.showMetric = function(id){
-    const m = metricDocs.find(x => x.key === id || x.id === id) || metricDocs[0];
+    const m = metricsList().find(x => x.id === id) || metricsList()[0];
     const detail = q("#metric-details", desktop) || q("#metricDetail", desktop);
-    if(detail) detail.innerHTML = `<div class="details-header"><div class="details-id">${h(m.id)}</div><div class="details-title">${h(m.name)}</div><div class="details-meta"><span class="meta-pill">Methodology v1.2.15</span><span class="meta-pill">${h(m.timeframe)}</span><span class="meta-pill">${h(m.type)}</span></div></div><div class="details-section"><div class="section-title">What this metric means</div><div class="body-text">${h(m.meaning)}</div></div><div class="details-section"><div class="section-title">Data from exchange</div><div class="formula">${h(m.source)}</div></div><div class="details-section"><div class="section-title">Variables</div><table class="variable-table"><tbody>${m.variables.map(v => `<tr><td><b>${h(v[0])}</b></td><td>${h(v[1])}</td></tr>`).join("")}</tbody></table></div><div class="details-section"><div class="section-title">How it is calculated</div><div class="step-list">${m.steps.map((step,index) => `<div class="calc-step"><div class="step-number">${index+1}</div><div class="step-body">${h(step)}</div></div>`).join("")}</div></div><div class="details-section"><div class="section-title">Formula</div><div class="formula" style="white-space:pre-line">${h(m.formula)}</div></div><div class="details-section"><div class="section-title">Example</div><div class="formula" style="white-space:pre-line">${h(m.example)}</div></div><div class="details-section"><div class="section-title">Unavailable when</div><div class="body-text">${h(m.unavailable)}</div></div>`;
+    qa("[data-metric]", desktop).forEach(row => row.classList.toggle("selected", row.dataset.metric === m?.id));
+    if(!detail) return;
+    if(!m){
+      detail.innerHTML = '<div class="details-section"><div class="body-text">Metrics Library unavailable.</div></div>';
+      return;
+    }
+    detail.innerHTML = `<div class="details-header"><div class="details-id">${h(m.id)} · ${h(m.status)}</div><div class="details-title">${h(m.name)}</div><div class="details-meta"><span class="meta-pill">${h(metricFamilyCode(m))}: ${h(metricFamilyLabel(metricFamilyCode(m)))}</span><span class="meta-pill">Owner: ${h(m.owner)}</span><span class="meta-pill">${h(m.type)}</span></div></div>${metricSection("What it is", m.what_it_is)}${metricSection("What it means", m.what_it_means)}${metricSection("Why it exists", m.why_it_exists)}${metricSection("Inputs", m.inputs)}${metricSection("Data source", m.data_source)}${metricSection("Formula / Rule", m.formula_or_rule)}${metricSection("Calculation / Evaluation steps", m.calculation_steps)}${metricSection("Output", m.output)}${metricSection("Worked example", m.worked_example)}${metricSection("Unavailable / invalid behavior", m.unavailable_behavior)}${metricSection("Dependencies", m.dependencies)}${metricSection("Used by", m.used_by)}${metricSection("Important boundaries", m.important_boundaries)}${metricSection("Technical traceability", m.technical_traceability)}`;
   };
   function renderTriggers(){
     const rows = state.registry.triggers || [];
@@ -2794,6 +2850,26 @@ def _reference_backend_script(payload: str) -> str:
     return script.replace("__STATE__", payload)
 
 
+def _metrics_library_reference_panel() -> str:
+    return """
+  <!-- METRICS -->
+
+  <section id="config-metrics" class="config-view active"><div class="layout"><section class="panel"><div class="panel-header"><div class="toolbar metric-toolbar"><input class="search" id="metricSearch" placeholder="Search by ID or name"><div class="segment" id="metricFamilyFilters"><button type="button" class="metric-family-filter active" data-family="ALL">ALL</button><button type="button" class="metric-family-filter" data-family="F">F</button><button type="button" class="metric-family-filter" data-family="A">A</button><button type="button" class="metric-family-filter" data-family="M">M</button><button type="button" class="metric-family-filter" data-family="N">N</button><button type="button" class="metric-family-filter" data-family="S">S</button></div></div></div><div class="table-wrap"><table><thead><tr><th>ID</th><th>Name</th><th>Family</th><th>Type</th><th>Status</th></tr></thead><tbody id="metrics-body"></tbody></table></div></section><section class="panel" id="metric-details"></section></div></section>
+"""
+
+
+def _replace_metrics_reference_panel(html_source: str) -> str:
+    marker_start = html_source.find("  <!-- METRICS -->")
+    marker_end = html_source.find("  <!-- TRIGGERS -->", marker_start)
+    if marker_start >= 0 and marker_end >= 0:
+        return html_source[:marker_start] + _metrics_library_reference_panel() + "\n" + html_source[marker_end:]
+    start = html_source.find('<div class="config-view active" id="config-metrics">')
+    end = html_source.find('<div class="config-view" id="config-triggers">', start)
+    if start < 0 or end < 0:
+        return html_source
+    return html_source[:start] + _metrics_library_reference_panel() + html_source[end:]
+
+
 def render_product_dashboard(
     *,
     initial_page: str = "overview",
@@ -2808,6 +2884,7 @@ def render_product_dashboard(
 ) -> str:
     """Render the approved reference UI with backend state injected underneath."""
 
+    from triggertrade.dashboard.metrics_library import metrics_payload
     from triggertrade.dashboard.reference_ui import DESKTOP_REFERENCE_HTML, MOBILE_OVERVIEW_REFERENCE_HTML
 
     page_map = {
@@ -2834,13 +2911,16 @@ def render_product_dashboard(
             "localDevOperatorControls": bool(operator_control_token),
             "portfolio": _safe_payload(portfolio or {}),
             "registry": _safe_payload(registry or {}),
+            "metrics": _safe_payload(metrics_payload()),
             "rules": _safe_payload(rules or {}),
             "research": _safe_payload(research or {"summaries": ()}),
         },
         ensure_ascii=False,
     ).replace("</", "<\\/")
     desktop_head = _reference_head(DESKTOP_REFERENCE_HTML)
-    desktop_body = _neutral_research_detail_placeholders(_without_reference_scripts(_reference_body(DESKTOP_REFERENCE_HTML)))
+    desktop_body = _replace_metrics_reference_panel(
+        _neutral_research_detail_placeholders(_without_reference_scripts(_reference_body(DESKTOP_REFERENCE_HTML)))
+    )
     mobile_styles = _scoped_mobile_reference_styles(MOBILE_OVERVIEW_REFERENCE_HTML)
     mobile_body = _neutral_research_detail_placeholders(_without_reference_scripts(_reference_body(MOBILE_OVERVIEW_REFERENCE_HTML)))
     mobile_body = mobile_body.replace("onclick=\"alert('Prototype: Pause Entries')\"", "onclick=\"action('pause')\"")

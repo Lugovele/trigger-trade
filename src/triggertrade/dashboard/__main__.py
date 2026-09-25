@@ -25,6 +25,7 @@ from triggertrade.dashboard.read_model import (
 )
 from triggertrade.dashboard.readiness import evaluate_dashboard_readiness
 from triggertrade.dashboard.commands import DashboardCommandBoundary, DashboardCommandError
+from triggertrade.dashboard.metrics_library import get_metric, metrics_payload
 from triggertrade.exchanges import BybitDemoClient
 from triggertrade.backtest import BacktestPlan
 from triggertrade.persistence import (
@@ -116,6 +117,17 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path == "/api/metrics":
+            self._send_json(metrics_payload())
+            return
+        if parsed.path.startswith("/api/metrics/"):
+            metric_id = unquote(parsed.path.removeprefix("/api/metrics/"))
+            metric = get_metric(metric_id)
+            if metric is None:
+                self._send_json({"error": "metric id not found"}, HTTPStatus.NOT_FOUND)
+            else:
+                self._send_json({"metric": metric})
+            return
         if parsed.path == "/api/rules/current":
             try:
                 payload = _current_rules_payload(self.server)

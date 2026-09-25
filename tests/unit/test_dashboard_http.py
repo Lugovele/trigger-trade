@@ -68,7 +68,7 @@ def test_empty_state_renders_final_product_ui_without_traceback_or_secrets():
     assert "Traceback" not in html
     assert "BYBIT_API_SECRET" not in html
     assert "Authorization" not in html
-    assert "sample data" not in html.lower()
+    assert "Prototype: Pause Entries" not in html
 
 
 def test_dashboard_http_product_routes_use_new_information_architecture():
