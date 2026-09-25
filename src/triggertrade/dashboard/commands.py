@@ -8,16 +8,28 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from triggertrade.backtest import BacktestPlan
+from triggertrade.backtest.data import HistoricalDataError
+from triggertrade.backtest.models import HistoricalCandle
 from triggertrade.dashboard.read_model import DashboardReadModel
+from triggertrade.market_data import FuturesInstrumentMetadata
 from triggertrade.persistence import MessageStore, OperatorStateStore
 from triggertrade.rules import TradingRulesService
+from triggertrade.services.runtime import interval_delta
 from triggertrade.services.instrument_catalog import InstrumentCatalogService
 from triggertrade.services.operator_auth import AuthorizedOperatorCommand
 from triggertrade.services.research import ResearchPromotionCommand, ResearchService
 from triggertrade.services.system_history import SystemHistoryExporter
+
+
+class HistoricalReplaySource(Protocol):
+    def load(self, *, symbol: str, category: str, timeframe: str, start: datetime, end: datetime, use_cache: bool = True): ...
+
+
+class BacktestInstrumentProvider(Protocol):
+    def __call__(self, symbol: str) -> FuturesInstrumentMetadata: ...
 
 
 class DashboardCommandBoundary:
@@ -32,6 +44,8 @@ class DashboardCommandBoundary:
         trading_rules_service: TradingRulesService,
         instrument_catalog_service: InstrumentCatalogService,
         research_service: ResearchService,
+        historical_replay_source: HistoricalReplaySource | None = None,
+        backtest_instrument_provider: BacktestInstrumentProvider | None = None,
         operator_actions=None,
     ) -> None:
         self.read_model = read_model
@@ -40,6 +54,8 @@ class DashboardCommandBoundary:
         self.trading_rules_service = trading_rules_service
         self.instrument_catalog_service = instrument_catalog_service
         self.research_service = research_service
+        self.historical_replay_source = historical_replay_source
+        self.backtest_instrument_provider = backtest_instrument_provider
         self.operator_actions = operator_actions
 
     def create_research(
@@ -59,10 +75,40 @@ class DashboardCommandBoundary:
         )
 
     def run_backtest(self, command: AuthorizedOperatorCommand, *, research_id: str, plan: BacktestPlan):
+        candles: tuple[HistoricalCandle, ...] = ()
+        unavailable_reason: str | None = None
+        instrument: FuturesInstrumentMetadata | None = None
+        source = self.historical_replay_source
+        if source is None:
+            unavailable_reason = "historical_provider_unavailable"
+        else:
+            try:
+                record = source.load(
+                    symbol=plan.symbol,
+                    category=plan.category,
+                    timeframe=plan.timeframe,
+                    start=_historical_replay_load_start(plan),
+                    end=plan.research_end,
+                    use_cache=True,
+                )
+                candles = tuple(record.candles)
+            except Exception as exc:  # noqa: BLE001 - persisted failure reason must be safe and bounded.
+                unavailable_reason = _historical_unavailable_reason(exc)
+        if unavailable_reason is None:
+            if self.backtest_instrument_provider is None:
+                unavailable_reason = "historical_provider_unavailable"
+            else:
+                try:
+                    instrument = self.backtest_instrument_provider(plan.symbol)
+                except Exception:  # noqa: BLE001 - public instrument metadata is part of replay inputs.
+                    unavailable_reason = "historical_provider_unavailable"
         return self.research_service.run_backtest(
             research_id=research_id,
             plan=plan,
+            candles=candles,
             created_at=datetime.now(UTC),
+            historical_unavailable_reason=unavailable_reason,
+            instrument=instrument,
         )
 
     def select_backtest_run(self, command: AuthorizedOperatorCommand, *, research_id: str, run_id: str):
@@ -317,6 +363,23 @@ def _record_message(store: MessageStore, **kwargs: Any) -> None:
         store.create_message(**kwargs)
     except Exception:  # noqa: BLE001 - message persistence must not change command results.
         return
+
+
+def _historical_replay_load_start(plan: BacktestPlan) -> datetime:
+    # The engine counts warmup candles whose close_time is strictly before
+    # research_start, so include one extra interval as the CLI replay path does.
+    return plan.research_start.astimezone(UTC) - interval_delta(plan.timeframe) * (plan.warmup_candles + 1)
+
+
+def _historical_unavailable_reason(exc: Exception) -> str:
+    text = str(exc).lower()
+    if isinstance(exc, HistoricalDataError):
+        if "empty" in text:
+            return "historical_candles_empty"
+        if any(token in text for token in ("gap", "boundary", "requested", "start", "end", "warmup")):
+            return "historical_window_incomplete"
+        return "historical_source_error"
+    return "historical_source_error"
 
 
 def _safe_public_error(exc: Exception) -> str:

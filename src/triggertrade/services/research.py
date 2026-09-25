@@ -131,6 +131,7 @@ class ResearchService:
         demo_execution_handoff: ResearchDemoExecutionHandoff | None = None,
         research_config_registry: ResearchConfigurationRegistry | None = None,
         backtest_runner: BacktestRunner | None = None,
+        backtest_db_path: str | Path | None = None,
         promotion_governance_store: ResearchPromotionGovernanceStore | None = None,
         legacy_sqlite_promotion_enabled: bool = False,
     ) -> None:
@@ -146,6 +147,7 @@ class ResearchService:
         self._demo_execution_handoff = demo_execution_handoff
         self._research_config_registry = research_config_registry
         self._backtest_runner = backtest_runner or run_backtest
+        self._backtest_db_path = Path(backtest_db_path) if backtest_db_path is not None else None
         self._promotion_governance_store = promotion_governance_store
         self._legacy_sqlite_promotion_enabled = legacy_sqlite_promotion_enabled
 
@@ -192,14 +194,17 @@ class ResearchService:
         plan: BacktestPlan,
         candles: tuple[HistoricalCandle, ...] = (),
         created_at: datetime | None = None,
+        historical_unavailable_reason: str | None = None,
+        instrument: FuturesInstrumentMetadata | None = None,
     ) -> ResearchBacktestRunRecord:
         research = self._required_research(research_id)
         run_pins = _backtest_run_pins(research, plan)
-        if self._config is None or self._instrument is None or not candles:
+        backtest_instrument = instrument or self._instrument
+        if self._config is None or backtest_instrument is None or not candles:
             return self._blocked_backtest(
                 research,
                 plan=plan,
-                reason="backend_historical_replay_inputs_unavailable",
+                reason=historical_unavailable_reason or "backend_historical_replay_inputs_unavailable",
                 pin_payload=run_pins,
                 created_at=(created_at or datetime.now(UTC)).isoformat(),
             )
@@ -213,7 +218,7 @@ class ResearchService:
                 pin_payload=run_pins,
                 created_at=(created_at or datetime.now(UTC)).isoformat(),
             )
-        store_path = getattr(self._store, "path", None)
+        store_path = getattr(self._store, "path", None) or self._backtest_db_path
         if store_path is None:
             return self._blocked_backtest(
                 research,
@@ -230,7 +235,7 @@ class ResearchService:
                 trigger_set_version=research.set_version,
                 plan=plan,
                 candles=candles,
-                instrument=self._instrument,
+                instrument=backtest_instrument,
             )
         except Exception as exc:  # noqa: BLE001 - persisted failed evidence must stay bounded and public-safe.
             record = self._store.add_backtest_run(

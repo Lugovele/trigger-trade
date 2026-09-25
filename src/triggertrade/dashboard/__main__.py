@@ -28,6 +28,8 @@ from triggertrade.dashboard.commands import DashboardCommandBoundary, DashboardC
 from triggertrade.dashboard.metrics_library import get_metric, metrics_payload
 from triggertrade.exchanges import BybitDemoClient
 from triggertrade.backtest import BacktestPlan
+from triggertrade.backtest.data import BybitHistoricalDataSource
+from triggertrade.market_data import parse_linear_instrument
 from triggertrade.persistence import (
     InstrumentCatalogStore,
     MessageStore,
@@ -1037,6 +1039,9 @@ def create_server(
     research_demo_handoff=None,
     research_config_registry=None,
     research_run_store=None,
+    historical_replay_source=None,
+    research_backtest_config=None,
+    backtest_instrument_provider=None,
 ) -> DashboardServer:
     if host not in ALLOWED_HOSTS:
         raise ValueError("dashboard host must be one of: 127.0.0.1, 0.0.0.0")
@@ -1059,6 +1064,8 @@ def create_server(
         demo_isolation=_dashboard_research_demo_isolation(research_demo_handoff),
         demo_execution_handoff=research_demo_handoff,
         research_config_registry=research_config_registry,
+        config=research_backtest_config,
+        backtest_db_path=db_path,
     )
     authorizer = operator_authorizer or operator_authorizer_from_env(db_path, {})
     command_boundary = DashboardCommandBoundary(
@@ -1068,6 +1075,8 @@ def create_server(
         trading_rules_service=rules_service,
         instrument_catalog_service=catalog_service,
         research_service=research_boundary,
+        historical_replay_source=historical_replay_source,
+        backtest_instrument_provider=backtest_instrument_provider,
         operator_actions=operator_actions,
     )
     server = DashboardServer(
@@ -1281,7 +1290,8 @@ def create_server_from_env(
     host = env.get("TRIGGERTRADE_DASHBOARD_HOST", DEFAULT_HOST)
     port = int(env.get("TRIGGERTRADE_DASHBOARD_PORT", str(DEFAULT_PORT)))
     db_path = runtime_db_path(config, env)
-    catalog_service = InstrumentCatalogService(store=InstrumentCatalogStore(db_path), client=BybitDemoClient(config=config.bybit))
+    bybit_client = BybitDemoClient(config=config.bybit)
+    catalog_service = InstrumentCatalogService(store=InstrumentCatalogStore(db_path), client=bybit_client)
     authorizer = operator_authorizer_from_env(db_path, env)
     promotion_governance = _promotion_governance_from_env(env)
     operator_actions = _operator_execution_bridge_from_env(env)
@@ -1302,6 +1312,9 @@ def create_server_from_env(
         promotion_governance_store=promotion_governance,
         research_demo_handoff=research_demo_handoff,
         research_config_registry=research_config_registry,
+        historical_replay_source=BybitHistoricalDataSource(bybit_client),
+        research_backtest_config=config,
+        backtest_instrument_provider=lambda symbol: _linear_instrument_for_backtest(bybit_client, symbol),
     )
     _require_production_postgres_configuration_path(
         env,
@@ -1310,6 +1323,10 @@ def create_server_from_env(
         server=server,
     )
     return server, bootstrap.db_path
+
+
+def _linear_instrument_for_backtest(client: BybitDemoClient, symbol: str):
+    return parse_linear_instrument(client.linear_instrument_metadata(symbol).result, symbol=symbol)
 
 
 def _require_explicit_dashboard_persistence(env: dict[str, str]) -> None:

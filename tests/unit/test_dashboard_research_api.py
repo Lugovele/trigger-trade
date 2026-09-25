@@ -1,5 +1,6 @@
 from http import HTTPStatus
 from http.client import HTTPConnection
+from types import SimpleNamespace
 from decimal import Decimal
 import json
 import sqlite3
@@ -18,13 +19,15 @@ from triggertrade.persistence import (
     ResearchStatus,
     ResearchStore,
     ResearchStoreError,
+    current_futures_active_trigger_set,
 )
 from triggertrade.services.operator_auth import OperatorCommandAuthorizer
 from triggertrade.services.research import ResearchDemoExecutionHandoffResult
 from triggertrade.trigger_sets import TriggerSetStatus, TriggerSetVersion
+from tests.unit.test_backtest_replay import _instrument, _trade_candles
 from tests.unit.test_dashboard_rules_api import _json_request, _start, _stop
 from tests.unit.test_operator_command_auth import _managed_principal_headers
-from tests.unit.test_research_backend import _research_db
+from tests.unit.test_research_backend import _config, _research_db
 
 
 def test_research_promotion_governance_env_wiring_is_postgres_backed(monkeypatch):
@@ -495,28 +498,59 @@ def test_research_api_uses_postgres_registry_for_list_and_detail(tmp_path):
         _stop(server, thread)
 
 
-def test_postgres_registry_research_without_sqlite_mirror_can_start_backtest_and_detail(tmp_path):
+def test_postgres_registry_research_without_sqlite_mirror_runs_backtest_with_historical_replay(tmp_path):
     db, rules = _research_db(tmp_path)
+    candles = _trade_candles(volume_spike=True)
+    replay_candles = candles[:-1]
     current = rules.get_current_rules_version()
     record = _research_record(
         research_id="res-pg-only-001",
-        set_id="pg-canonical-set",
-        set_version="v42",
+        set_id="triggertrade-futures-core",
+        set_version="v1",
         rules_version_id=current.rules_version_id,
         rules_display_version=current.version,
     )
+    existing_failed = ResearchBacktestRunRecord(
+        research_id=record.research_id,
+        run_id="rbt-98dd43525e37083367ef",
+        created_at="2026-09-25T00:00:00+00:00",
+        updated_at="2026-09-25T00:00:00+00:00",
+        status=ResearchBacktestStatus.FAILED,
+        period_start="2026-09-18T00:00:00+00:00",
+        period_end="2026-09-25T00:00:00+00:00",
+        timeframe="1m",
+        engine_run_id=None,
+        selected_for_use=False,
+        metrics={},
+        unavailable_reason="backend_historical_replay_inputs_unavailable",
+        pin_payload={"historical_source": "bybit-demo-public-linear-kline-v1"},
+        pin_digest="old-failed-run-digest",
+    )
+
+    class FakeHistoricalSource:
+        def __init__(self):
+            self.calls = []
+
+        def load(self, **kwargs):
+            self.calls.append(kwargs)
+            return SimpleNamespace(candles=replay_candles)
+
+    source = FakeHistoricalSource()
     registry = _FakeResearchConfigRegistry(
-        trigger_set=_trigger_set("pg-canonical-set", "v42"),
+        trigger_set=current_futures_active_trigger_set(created_at="2026-09-08T00:00:00+00:00"),
         rules=current,
         research=(record,),
     )
-    run_store = _FakeResearchRunStore(research=(record,))
+    run_store = _FakeResearchRunStore(research=(record,), backtests=(existing_failed,))
     server = create_server(
         port=0,
         db_path=db,
         operator_authorizer=OperatorCommandAuthorizer(db, auth_mode="local_dev_compat"),
         research_config_registry=registry,
         research_run_store=run_store,
+        historical_replay_source=source,
+        backtest_instrument_provider=lambda symbol: _instrument(),
+        research_backtest_config=_config(db),
     )
     host, port = server.server_address
     thread = _start(server)
@@ -528,9 +562,12 @@ def test_postgres_registry_research_without_sqlite_mirror_can_start_backtest_and
             f"/api/research/{record.research_id}/backtests",
             {
                 "token": server.operator_control_token,
-                "research_start": "2026-09-18T00:00:00+00:00",
-                "research_end": "2026-09-25T00:00:00+00:00",
+                "symbol": "BTCUSDT",
+                "category": "linear",
+                "research_start": replay_candles[60].close_time.isoformat(),
+                "research_end": replay_candles[-1].close_time.isoformat(),
                 "timeframe": "1m",
+                "warmup_candles": 60,
                 "idempotency_key": "research-backtest-pg-only-001",
             },
             expected=HTTPStatus.CREATED,
@@ -538,10 +575,30 @@ def test_postgres_registry_research_without_sqlite_mirror_can_start_backtest_and
         detail = _json_request(host, port, "GET", f"/api/research/{record.research_id}")
 
         assert result["backtest"]["research_id"] == record.research_id
-        assert result["backtest"]["status"] == "FAILED"
+        assert result["backtest"]["status"] in {"COMPLETED", "COMPLETED_NO_TRADES"}
+        assert result["backtest"]["engine_run_id"]
+        assert result["backtest"]["unavailable_reason"] is None
+        assert source.calls == [
+            {
+                "symbol": "BTCUSDT",
+                "category": "linear",
+                "timeframe": "1m",
+                "start": replay_candles[0].open_time,
+                "end": replay_candles[-1].close_time,
+                "use_cache": True,
+            }
+        ]
         assert detail["run_projection"] == {"available": True}
         assert detail["backtests"][0]["run_id"] == result["backtest"]["run_id"]
-        assert detail["backtests"][0]["unavailable_reason"] == "backend_historical_replay_inputs_unavailable"
+        assert detail["backtests"][0]["engine_run_id"] == result["backtest"]["engine_run_id"]
+        assert detail["backtests"][0]["unavailable_reason"] is None
+        assert detail["backtests"][0]["metrics"]
+        persisted_runs = run_store.list_backtest_runs(record.research_id)
+        assert persisted_runs[0].pin_payload["run_inputs"]["historical_source"] == "bybit-demo-public-linear-kline-v1"
+        assert detail["backtests"][1]["run_id"] == existing_failed.run_id
+        assert detail["backtests"][1]["status"] == "FAILED"
+        assert detail["backtests"][1]["engine_run_id"] is None
+        assert detail["backtests"][1]["unavailable_reason"] == "backend_historical_replay_inputs_unavailable"
     finally:
         _stop(server, thread)
 
