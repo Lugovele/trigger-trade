@@ -417,20 +417,279 @@ Raw facts come from Set-owned market-data selections. Derived values come from S
 
 #### Formula or rule
 
-F-004 applies the certified Set methodology for required normalized values, percentile ranks, gates, and canonical `DIRECTION_SCORE`. Required inputs must be available; context-only metrics may be unavailable without making F-004 unavailable.
+Required inputs at the governed Set analytical cutoff:
+
+```text
+asset structure 1h
+asset structure 15m
+DE 15m
+VNM 15m
+VNM 5m
+relative return 15m
+aggressive delta 5m
+time-of-day relative turnover 5m
+ATR_PCT 15m percentile
+BTC structure 1h
+BTC return 15m z-score
+```
+
+Additional context-only metrics may be unavailable without making F-004 unavailable. Required inputs may not be fabricated, carried forward, replaced with zero, replaced with stale values, or inferred from downstream state.
+
+Numeric policy:
+
+```text
+Q36(x) = exact value x rounded to 36 fractional decimal places
+         using ROUND_HALF_EVEN
+```
+
+All sums, differences, products, and quotients remain exact until the named output quantizer. Binary floating point, epsilon comparisons, significant-digit rounding, and display-rounded gates are forbidden.
+
+Ordinary reference population:
+
+```text
+evaluation_at = persisted governed Set analytical cutoff
+D = 00:00:00Z at the start of evaluation_at's UTC day
+ordinary interval = [D - 30 UTC calendar days, D)
+```
+
+The current incomplete UTC day is excluded even if individual candles inside it are complete. This is not a trailing-hours, local-timezone, Portfolio-accounting-day, or exchange-session window. Point events at the lower boundary are included and point events at the upper boundary are excluded; completed candle intervals and factual buckets must be wholly contained, with an exclusive end equal to the upper boundary allowed.
+
+Eligible warmup:
+
+```text
+minimum eligible completed UTC days = 14
+ordinary initial-history population may contain 14 through 29 eligible days
+```
+
+The 14-through-29 case applies only when absence before the first countable full UTC day is proven by instrument/source inception or legitimate metric initialization. Later missing, unavailable, or contradictory observations inside countable days cannot be skipped or replaced. Fewer than 14 eligible completed UTC days makes the required normalized metric `UNAVAILABLE`, makes F-005 classification support unavailable, and records `DATA_UNAVAILABLE`.
+
+Population standard deviation:
+
+```text
+ddof = 0
+mu = exact arithmetic mean
+variance = exact sum((x - mu)^2) / n
+sigma = correctly rounded TT_SET_NUMERIC_V1 sqrt(variance)
+```
+
+If `n = 0`, any population member is unavailable, or rounded `sigma = 0`, the affected normalization is `UNAVAILABLE`.
+
+Normalized ordinary z-score metrics:
+
+```text
+z = Q36((x - mu) / sigma)
+normalized_score = Q36(clip(z / 2, -1, +1))
+```
+
+Percentile rule:
+
+```text
+K = count(b_i <= x)
+percentile = Q36(100 * K / n)
+```
+
+Ties count as `<=`. If every valid reference equals the current value, the percentile is `100`. If `n = 0` or the required eligible-day minimum is not met, the percentile is `UNAVAILABLE`.
+
+Time-of-day relative turnover uses a special same-clock selector:
+
+```text
+input_timeframe = 5m
+timezone = UTC
+lookback_days = 30
+minimum_warmup_days = 14
+baseline_statistic = median
+same_clock_bucket = true
+turnover_basis = quote notional turnover
+```
+
+For current completed 5m bucket `[bucket_start, bucket_end)` with `bucket_end <= evaluation_at`, the reference set is the same UTC clock bucket on the thirty prior UTC dates, strictly before the current bucket. The current bucket never enters its own baseline, including when `bucket_end` is exactly UTC midnight. Proven initial absence may yield 14 through 29 eligible same-clock observations; missing or contradictory evidence for a day that should exist makes `TOD_REL_TURNOVER` `UNAVAILABLE`; fewer than 14 eligible prior same-clock observations makes it `UNAVAILABLE`.
+
+Same-clock median is exact. With an even count, use the exact arithmetic average of the two middle sorted values. If the median denominator is zero or undefined:
+
+```text
+TOD_REL_TURNOVER = UNAVAILABLE
+```
+
+Otherwise:
+
+```text
+TOD_REL_TURNOVER =
+current_5m_turnover / median_prior_same_clock_5m_turnover
+```
+
+Structure mapping and score:
+
+```text
+BULLISH   -> +1
+AMBIGUOUS -> 0
+BEARISH   -> -1
+
+STRUCTURE_SCORE =
+Q36(0.50 * STRUCTURE_1H + 0.50 * STRUCTURE_15M)
+```
+
+Directional efficiency:
+
+```text
+if DE_15m < 0.30:
+    hard_gate = DIRECTIONAL_EFFICIENCY_GATE
+
+DE_STRENGTH =
+Q36(clip((DE_15m - 0.30) / 0.40, 0, 1))
+```
+
+`DE_15m = 0.30` gives `DE_STRENGTH = 0`; `DE_15m = 0.50` gives `0.50`; `DE_15m >= 0.70` gives `1`.
+
+Momentum:
+
+```text
+VNM_15m = RETURN_15m / ATR_PCT_decimal_15m
+MOMENTUM_SCORE = Q36(clip(momentum_z / 2, -1, +1))
+MOMENTUM_EFFECTIVE =
+Q36(MOMENTUM_SCORE * (0.5 + 0.5 * DE_STRENGTH))
+```
+
+If required 15m ATR_PCT is unavailable or not positive, `VNM_15m`, `momentum_z`, `MOMENTUM_SCORE`, and `MOMENTUM_EFFECTIVE` are `UNAVAILABLE`.
+
+Local 5m momentum veto:
+
+```text
+VNM_5m = RETURN_5m / ATR_PCT_decimal_5m
+LONG-side veto active when local_5m_vnm_z <= -2.0
+SHORT-side veto active when local_5m_vnm_z >= +2.0
+```
+
+F-004 produces the side-specific boolean diagnostics and preserves the underlying z-score and availability reason. F-005 consumes the vetoes.
+
+Relative strength:
+
+```text
+RELATIVE_RETURN_15m =
+RETURN(asset, 15m) - RETURN(BTC, 15m)
+
+RELATIVE_SCORE =
+Q36(clip(relative_return_z / 2, -1, +1))
+
+LONG-side relative veto active when relative_return_z <= -2.0
+SHORT-side relative veto active when relative_return_z >= +2.0
+```
+
+Flow and activity:
+
+```text
+AGGRESSIVE_VOLUME_DELTA_PCT =
+Q36(100 * (AggBuyNotional - AggSellNotional)
+        / (AggBuyNotional + AggSellNotional))
+```
+
+If the aggressive notional denominator is zero, aggressive volume delta is `UNAVAILABLE`.
+
+```text
+FLOW_RAW = Q36(AGGRESSIVE_VOLUME_DELTA_PCT / 100)
+
+if TOD_REL_TURNOVER < 0.70:
+    hard_gate = ACTIVITY_GATE
+
+PARTICIPATION_STRENGTH =
+Q36(clip((TOD_REL_TURNOVER - 0.70) / 1.30, 0, 1))
+
+FLOW_EFFECTIVE =
+Q36(FLOW_RAW * (0.5 + 0.5 * PARTICIPATION_STRENGTH))
+```
+
+Volatility:
+
+```text
+ATR_PCT_15m_PERCENTILE =
+Q36(100 * count(reference_ATR_PCT_15m <= current_ATR_PCT_15m) / n)
+
+if ATR_PCT_15m_PERCENTILE < 15:
+    hard_gate = VOLATILITY_GATE
+
+if ATR_PCT_15m_PERCENTILE > 97:
+    hard_gate = VOLATILITY_GATE
+```
+
+Boundary values `15` and `97` pass.
+
+BTC context:
+
+```text
+BTC_MOMENTUM_SCORE =
+Q36(clip(BTC_RETURN_Z / 2, -1, +1))
+
+BTC_CONTEXT_SCORE =
+Q36(0.60 * BTC_STRUCTURE_SCORE + 0.40 * BTC_MOMENTUM_SCORE)
+
+LONG-side BTC veto active when BTC_CONTEXT_SCORE <= -0.70
+SHORT-side BTC veto active when BTC_CONTEXT_SCORE >= +0.70
+```
+
+Canonical direction score:
+
+```text
+DIRECTION_SCORE =
+Q36(
+    0.35 * STRUCTURE_SCORE
+  + 0.25 * MOMENTUM_EFFECTIVE
+  + 0.15 * RELATIVE_SCORE
+  + 0.15 * FLOW_EFFECTIVE
+  + 0.10 * BTC_CONTEXT_SCORE
+)
+```
+
+All products and the sum remain exact until the single `DIRECTION_SCORE` quantizer. If any required factor is unavailable, the complete `DIRECTION_SCORE` is `UNAVAILABLE`. Missing factors may not be replaced with zero, stale values, neutral values, or redistributed weights.
+
+Weighted contribution diagnostics:
+
+```text
+STRUCTURE_CONTRIBUTION = Q36(0.35 * STRUCTURE_SCORE)
+MOMENTUM_CONTRIBUTION  = Q36(0.25 * MOMENTUM_EFFECTIVE)
+RELATIVE_CONTRIBUTION  = Q36(0.15 * RELATIVE_SCORE)
+FLOW_CONTRIBUTION      = Q36(0.15 * FLOW_EFFECTIVE)
+BTC_CONTRIBUTION       = Q36(0.10 * BTC_CONTEXT_SCORE)
+```
+
+These diagnostics do not feed back into `DIRECTION_SCORE`; their rounded sum may differ from the canonical score.
+
+Hard gates produced by F-004:
+
+```text
+DATA_UNAVAILABLE
+DIRECTIONAL_EFFICIENCY_GATE
+ACTIVITY_GATE
+VOLATILITY_GATE
+```
+
+Veto diagnostics produced by F-004:
+
+```text
+BTC_VETO_LONG
+BTC_VETO_SHORT
+RELATIVE_VETO_LONG
+RELATIVE_VETO_SHORT
+LOCAL_MOMENTUM_VETO_LONG
+LOCAL_MOMENTUM_VETO_SHORT
+```
 
 #### Calculation / evaluation steps
 
 1. Validate all required inputs at the governed Set analytical cutoff.
-2. Apply exact Set arithmetic and required Q36 working-grid rounding.
-3. Use exact counts and ranks for percentile/rank operations.
-4. Use F-003 only for certified 15m ATR and ATR_PCT semantics.
-5. Compute gates and direction score from the certified Set methodology.
-6. Preserve missing, malformed, stale, or contradictory required input as unavailable.
+2. Build ordinary completed-day populations from `[D - 30 UTC calendar days, D)`, excluding the current UTC day.
+3. Apply the leading-inception/initialization exception only before the first countable full UTC day; do not skip later missing or invalid observations.
+4. Require at least 14 eligible completed days for required normalized metrics.
+5. Build the same-clock 5m turnover population from the prior thirty same UTC clock buckets and compute the exact median baseline.
+6. Apply exact Set arithmetic and required Q36 working-grid rounding.
+7. Compute z-scores, normalized scores, percentile ranks, factor scores, gates, side-specific veto diagnostics, weighted contributions, and `DIRECTION_SCORE`.
+8. Preserve every underlying value, threshold, comparison direction, availability reason, selected population identity, and same-clock bucket identity.
+9. Use F-003 only for certified 15m ATR and ATR_PCT semantics; the local 5m ATR_PCT dependency is F-004-local and not certified by F-003.
+10. Preserve missing, malformed, stale, or contradictory required input as unavailable.
 
 #### Output
 
-Canonical normalized Set diagnostics, gate diagnostics, percentile diagnostics, and `DIRECTION_SCORE`.
+F-004 outputs normalized z-scores, clipped factor scores, ATR_PCT percentile and gate status, `TOD_REL_TURNOVER`, `PARTICIPATION_STRENGTH`, activity status, `DE_STRENGTH`, directional-efficiency gate status, `MOMENTUM_EFFECTIVE`, `RELATIVE_SCORE`, `FLOW_EFFECTIVE`, `BTC_CONTEXT_SCORE`, `STRUCTURE_SCORE`, side-specific BTC/relative/local-momentum veto diagnostics, weighted contribution diagnostics, `DIRECTION_SCORE`, and complete availability and missing-reason diagnostics.
+
+F-004 does not output final direction, Market Handoff approval, order specification, position size, stop, take profit, risk/reward, execution permission, or live trading authority.
 
 #### Worked example
 
@@ -438,7 +697,23 @@ No canonical worked example specified.
 
 #### Unavailable / invalid behavior
 
-Unavailable when any required input or required derived diagnostic is missing, malformed, contradictory, stale, source-incompatible, or unavailable. Do not fabricate, carry forward, replace with zero, infer from downstream state, or substitute F-001/F-002 for distinct 15m/5m context operands.
+Unavailable when any required input or required derived diagnostic is missing, malformed, contradictory, stale, source-incompatible, or unavailable. Specific required behavior:
+
+| Case | Required behavior |
+|---|---|
+| Fewer than 14 eligible completed UTC days | Required normalized metric `UNAVAILABLE`; F-005 classification support unavailable. |
+| Proven 14-29 eligible completed UTC days during initial-history period | Use all eligible observations inside `[D - 30, D)`; do not expand backward outside provenance or include current incomplete day. |
+| Missing day that should exist | Affected metric `UNAVAILABLE`; do not skip or shorten population. |
+| Rounded `sigma = 0` | Affected z-score and normalized score `UNAVAILABLE`. |
+| `TOD_REL_TURNOVER` denominator zero/undefined | `TOD_REL_TURNOVER`, participation strength, and dependent flow effective value `UNAVAILABLE`. |
+| Aggressive notional denominator zero | Aggressive delta and dependent flow values `UNAVAILABLE`. |
+| 5m ATR_PCT unavailable or non-positive | `VNM_5m` and local momentum veto input `UNAVAILABLE`. |
+| 15m ATR_PCT unavailable or non-positive | `VNM_15m` and dependent momentum values `UNAVAILABLE`. |
+| Required factor unavailable | Complete `DIRECTION_SCORE` `UNAVAILABLE`; no weight redistribution. |
+| Source contradiction or incomplete selected range | Affected computation `UNAVAILABLE` pending deterministic resolution. |
+| Future or still-forming data | Excluded; cannot satisfy any F-004 input. |
+
+`UNAVAILABLE` is not `FALSE`, not zero, not `FLAT`, not stale state, and not a neutral contribution. Do not fabricate, carry forward, replace with zero, infer from downstream state, or substitute F-001/F-002 for distinct 15m/5m context operands.
 
 #### Dependencies
 
@@ -455,7 +730,7 @@ Unavailable when any required input or required derived diagnostic is missing, m
 
 #### Important boundaries
 
-F-004 does not itself select LONG/SHORT or create a trade. It does not replace F-001, F-002, or F-003. It does not infer missing activity, volatility, flow, or BTC-context evidence.
+F-004 does not itself select LONG/SHORT or create a trade. It does not replace F-001, F-002, or F-003. It does not infer missing activity, volatility, flow, or BTC-context evidence. F-004 preserves `all_failed_gates[]`, `all_active_vetoes[]`, values, thresholds, comparison directions, and availability reasons; F-005 owns primary rejection priority, side-specific veto consumption, final `LONG`/`SHORT`/`NONE`, and handoff/no-handoff.
 
 #### Technical traceability
 
@@ -603,24 +878,180 @@ References and direction come from the frozen Market Handoff. Tick facts come fr
 
 #### Formula or rule
 
-LONG requires direction `LONG` and candidate levels of type `SWING_LOW_15M`, `SWING_LOW_1H`, `PREVIOUS_DAY_LOW`, or `RANGE_LOW`. A candidate is eligible only when `level.price < E - t`.
+Symbols:
 
-Family priority selects a reference, then the branch applies certified distance/ATR constraints and directional tick rounding from the final specification.
+```text
+E = planned_entry_reference from certified F-008
+A = received volatility.atr_15m from Market Handoff, certified by F-003
+t = tick_size
+R = selected_reference_price
+```
+
+All are exact positive decimals before F-006 calculation. Position consumes `A` as the received Q18 Market Handoff value and must not recompute ATR, recover hidden precision, or use display rounding.
+
+F-006 evaluates only when immutable Market Handoff direction is `LONG`. `NONE` is invalid and `SHORT` belongs to F-007.
+
+Permitted LONG adverse low reference types:
+
+```text
+SWING_LOW_15M
+SWING_LOW_1H
+PREVIOUS_DAY_LOW
+RANGE_LOW
+```
+
+A candidate level is eligible only if all are true:
+
+```text
+level exists in references.levels[]
+level_id is unique within the canonical handoff level set
+available_at <= matched_at
+price is finite and > 0
+level_type is one of the four permitted LONG low types
+level.price < E - t
+```
+
+The final adverse-side test is recomputed against `planned_entry_reference`; cached Set side is audit-only. A level within one tick of the planned entry is ineligible. No synthetic level is permitted.
+
+Handoff and thesis-binding validation before selection:
+
+1. Reject invalid or conflicting producer bindings.
+2. Reject dangling thesis IDs.
+3. Reject producer availability violations.
+4. Reject duplicate or conflicting canonical level IDs.
+5. Reject `sl_context.thesis_reference_policy = NONE` when either thesis reference ID or binding is non-null.
+
+These are handoff-consumption failures, not warning-only fallback cases. `REQUIRED` has no fallback; an absent, dangling, unavailable-as-of-`matched_at`, non-LONG-low, nonpositive, nonfinite, or non-adverse-side required thesis reference returns `usable=false`, `reason=THESIS_REFERENCE_INVALID`. `PREFERRED` fallback is allowed only when the thesis pair is contract-valid null, or when a valid bound reference exists but fails F-006 eligibility; if a valid bound reference is eligible, select it. If the valid bound reference fails eligibility, record `INVALID_THESIS_REFERENCE_OVERRIDE` and continue to default hierarchy. `NONE` requires both thesis ID and binding to be null.
+
+Family priority reads `sl_context.set_family` only from the frozen Market Handoff. Missing or invalid family returns `MISSING_SET_FAMILY`.
+
+For `TREND_CONTINUATION` and `GENERIC`:
+
+```text
+1. SWING_LOW_15M
+2. SWING_LOW_1H
+3. PREVIOUS_DAY_LOW
+4. RANGE_LOW
+```
+
+For `RANGE`:
+
+```text
+1. RANGE_LOW
+2. SWING_LOW_15M
+3. SWING_LOW_1H
+4. PREVIOUS_DAY_LOW
+```
+
+For `BREAKOUT_RECLAIM`, a valid `REQUIRED` or `PREFERRED` thesis reference controls selection. Otherwise use the default:
+
+```text
+1. SWING_LOW_15M
+2. SWING_LOW_1H
+3. PREVIOUS_DAY_LOW
+4. RANGE_LOW
+```
+
+No free-form breakout reference is created.
+
+Same-priority ordering:
+
+```text
+1. latest exact available_at
+2. smallest exact E - level.price
+3. case-sensitive ordinal Unicode code-point level_id
+```
+
+No locale collation, case folding, natural sort, numeric substring sort, or implementation-default string comparator is allowed. `age_seconds` is diagnostic only.
+
+Corroborating levels are diagnostic:
+
+```text
+4 * abs(other_level.price - R) <= A
+```
+
+Exclude the selected level itself; a non-empty list records `MULTIPLE_NEARBY_LEVELS`.
+
+Constants and stop construction:
+
+```text
+BUFFER_ATR_MULTIPLIER = 0.20
+MIN_DISTANCE_ATR = 0.50
+MAX_DISTANCE_ATR = 2.00
+CORROBORATION_DISTANCE_ATR = 0.25
+
+buffer_price = 0.20 * A
+raw_stop = R - buffer_price
+
+minimum_distance_price = 0.50 * A
+minimum_stop = E - minimum_distance_price
+
+adjusted_stop = min(raw_stop, minimum_stop)
+minimum_distance_adjustment_applied = (raw_stop > minimum_stop)
+```
+
+Pre-rounding feasibility:
+
+```text
+pre_rounding_risk_price = E - adjusted_stop
+pre_rounding_risk_price <= 2.00 * A
+```
+
+If `pre_rounding_risk_price > 2.00 * A`, return `usable=false`, `reason=SL_TOO_WIDE`. No weaker-reference retry is allowed.
+
+Tick rounding is exact and outward for LONG:
+
+```text
+rounded_stop = floor(adjusted_stop / t) * t
+```
+
+Post-rounding invariants:
+
+```text
+rounded_stop is finite
+rounded_stop > 0
+rounded_stop / t is an integer
+rounded_stop = floor(adjusted_stop / t) * t
+rounded_stop < R
+rounded_stop < E
+```
+
+If any invariant fails, return `usable=false`, `reason=ROUNDING_ERROR`. Diagnostic failed prices may be persisted, but they are non-actionable. No clamp, offset, inward correction, alternate-reference retry, ATR-only fallback, entry repricing, or exchange-specific repair is permitted.
+
+Post-rounding feasibility:
+
+```text
+post_rounding_risk_price = E - rounded_stop
+post_rounding_risk_price <= 2.00 * A
+```
+
+If `post_rounding_risk_price > 2.00 * A`, return `usable=false`, `reason=SL_TOO_WIDE`. Only after all checks pass:
+
+```text
+usable = true
+reason = AVAILABLE
+rounded_stop_price = rounded_stop
+```
 
 #### Calculation / evaluation steps
 
-1. Require immutable handoff direction `LONG`.
-2. Validate F-008 entry, received ATR, tick size, producer bindings, thesis IDs, and unique canonical level IDs.
-3. Apply thesis-reference policy: `REQUIRED` has no fallback; `PREFERRED` can fall back only under certified conditions; `NONE` requires null thesis binding.
-4. Filter to permitted low reference types available as of `matched_at`.
-5. Require strict adverse-side geometry below `E - t`.
-6. Traverse family priority order.
-7. Apply certified rounding and post-rounding invariants.
-8. Return usable stop or the certified reason.
+1. Require valid committed Market Handoff, `direction=LONG`, `stop_loss_mode=DYNAMIC`, available frozen references, positive `E`, positive received Q18 `A`, positive `t`, allowed set family, and allowed thesis policy.
+2. Validate handoff producer bindings, dangling thesis IDs, producer availability, duplicate/conflicting level IDs, and `NONE` thesis-policy null bindings before reference selection.
+3. If policy is `REQUIRED`, select only the valid required LONG adverse-side thesis reference or return `THESIS_REFERENCE_INVALID`.
+4. If policy is `PREFERRED`, select the valid eligible bound reference; otherwise record `INVALID_THESIS_REFERENCE_OVERRIDE` when applicable and continue only under the certified fallback conditions.
+5. Build eligible candidates from the four permitted LONG low types with `available_at <= matched_at`, finite positive prices, unique IDs, and `level.price < E - t`.
+6. Traverse the certified set-family priority order; within a priority type sort by latest exact `available_at`, smallest exact `E - level.price`, then case-sensitive ordinal Unicode code-point `level_id`.
+7. Persist candidate and ineligible IDs, selected reference identity, priority rank, and corroborating-level diagnostics.
+8. Compute `raw_stop`, `minimum_stop`, and `adjusted_stop` exactly.
+9. Reject `SL_TOO_WIDE` when pre-rounding risk exceeds `2.00 * A`; do not try a weaker reference.
+10. Round outward with `floor(adjusted_stop / t) * t`.
+11. Reject `ROUNDING_ERROR` for nonfinite, nonpositive, off-grid, not-outward, not-below-`R`, or not-below-`E` rounded stops.
+12. Reject `SL_TOO_WIDE` when post-rounding risk exceeds `2.00 * A`.
+13. Return `AVAILABLE` and `rounded_stop_price` only after every invariant passes.
 
 #### Output
 
-Usable LONG rounded stop price and diagnostics, or `usable=false` with reason.
+`dynamic_sl` for a LONG candidate, including methodology id/version, snapshot identity, thesis context, reference-selection diagnostics, selected reference, corroborating levels, ATR constants, raw/minimum/adjusted/rounded stop prices, pre/post risk distance diagnostics, `usable`, `reason`, `fallback_used=false`, and warnings.
 
 #### Worked example
 
@@ -628,7 +1059,22 @@ No canonical worked example specified.
 
 #### Unavailable / invalid behavior
 
-Unavailable or invalid for wrong direction, missing Entry/ATR/tick, invalid handoff identity, invalid thesis binding, duplicate/conflicting level IDs, no eligible low-side reference, rounding failure, or failed post-rounding invariants. Do not synthesize levels or use high-side levels for LONG stops.
+Unavailable or invalid behavior is reason-coded:
+
+| Condition | Reason |
+|---|---|
+| `ATR_15m` missing or `<= 0` | `MISSING_ATR` |
+| `tick_size` missing or `<= 0` | `MISSING_TICK_SIZE` |
+| `planned_entry_reference` missing or `<= 0` | `MISSING_ENTRY_REFERENCE` |
+| `set_family` missing/invalid | `MISSING_SET_FAMILY` |
+| thesis policy missing/invalid | `MISSING_THESIS_REFERENCE_POLICY` |
+| no adverse-side geometry capability | `NO_ADVERSE_SIDE_GEOMETRY` |
+| no eligible governed adverse-side reference | `NO_ELIGIBLE_REFERENCE` |
+| required thesis reference invalid for any required condition | `THESIS_REFERENCE_INVALID` |
+| pre/post risk price exceeds `2.00 * A` | `SL_TOO_WIDE` |
+| rounded stop is nonfinite, nonpositive, off grid, not outward, not below `R`, or not below `E` | `ROUNDING_ERROR` |
+
+Do not synthesize levels, use high-side levels for LONG stops, clamp, move the stop inward, retry a weaker reference, synthesize an ATR-only stop, reprice Entry, or repair producer bindings.
 
 #### Dependencies
 
@@ -646,7 +1092,7 @@ Unavailable or invalid for wrong direction, missing Entry/ATR/tick, invalid hand
 
 #### Important boundaries
 
-F-006 applies only to LONG. It does not select Entry, Take Profit, size, or risk/reward. It does not call APIs or refresh market data.
+F-006 applies only to LONG. It does not select Entry, Take Profit, size, or risk/reward. It does not call APIs or refresh market data. It consumes F-008 entry and does not recalculate it. If entry and REQUIRED SL share reference `r`, LONG entry rounding gives `E <= r`, so that reference fails `r < E - t` and the result is `THESIS_REFERENCE_INVALID`; F-006 must not rebind it.
 
 #### Technical traceability
 
@@ -693,22 +1139,182 @@ References and direction come from the frozen Market Handoff. Tick facts come fr
 
 #### Formula or rule
 
-SHORT requires direction `SHORT` and candidate levels of type `SWING_HIGH_15M`, `SWING_HIGH_1H`, `PREVIOUS_DAY_HIGH`, or `RANGE_HIGH`. A candidate is eligible only when `level.price > E + t`.
+Symbols:
+
+```text
+E = planned_entry_reference from certified F-008
+A = received volatility.atr_15m from Market Handoff, certified by F-003
+t = tick_size
+R = selected_reference_price
+Sstop = rounded_stop
+```
+
+All are exact positive decimals before F-007 calculation. Position consumes `A` as the received Q18 Market Handoff value and must not recompute ATR, recover hidden precision, or use display rounding.
+
+F-007 evaluates only when immutable Market Handoff direction is `SHORT`. `NONE` is invalid and `LONG` belongs to F-006.
+
+Permitted SHORT adverse high reference types:
+
+```text
+SWING_HIGH_15M
+SWING_HIGH_1H
+PREVIOUS_DAY_HIGH
+RANGE_HIGH
+```
+
+A candidate level is eligible only if all are true:
+
+```text
+level exists in references.levels[]
+level_id is unique within the canonical handoff level set
+available_at <= matched_at
+price is finite and > 0
+level_type is one of the four permitted SHORT high types
+level.price > E + t
+```
+
+The final adverse-side test is recomputed against `planned_entry_reference`; cached Set side is audit-only. A level within one tick of the planned entry is ineligible. No synthetic level is permitted.
+
+Handoff and thesis-binding validation before selection:
+
+1. Reject invalid handoff identity, provenance, or digest.
+2. Reject invalid or conflicting producer bindings.
+3. Reject dangling thesis IDs.
+4. Reject producer availability violations.
+5. Reject duplicate or conflicting canonical level IDs.
+6. Reject `sl_context.thesis_reference_policy = NONE` when either thesis reference ID or binding is non-null.
+
+These are handoff-consumption failures, not warning-only fallback cases. `REQUIRED` has no fallback; an absent, dangling, unavailable-as-of-`matched_at`, non-SHORT-high, nonpositive, nonfinite, or non-adverse-side required thesis reference returns `usable=false`, `reason=THESIS_REFERENCE_INVALID`. `PREFERRED` fallback is allowed only when the thesis pair is contract-valid null, or when a valid bound reference exists but fails F-007 eligibility; if a valid bound reference is eligible, select it. If the valid bound reference fails eligibility, record `INVALID_THESIS_REFERENCE_OVERRIDE` and continue to default hierarchy. `NONE` requires both thesis ID and binding to be null. Calculation fallback never rewrites the producer binding.
+
+Family priority reads `sl_context.set_family` only from the frozen Market Handoff. Missing or invalid family returns `MISSING_SET_FAMILY`.
+
+For `TREND_CONTINUATION` and `GENERIC`:
+
+```text
+1. SWING_HIGH_15M
+2. SWING_HIGH_1H
+3. PREVIOUS_DAY_HIGH
+4. RANGE_HIGH
+```
+
+For `RANGE`:
+
+```text
+1. RANGE_HIGH
+2. SWING_HIGH_15M
+3. SWING_HIGH_1H
+4. PREVIOUS_DAY_HIGH
+```
+
+For `BREAKOUT_RECLAIM`, a valid `REQUIRED` or `PREFERRED` thesis reference controls selection. Otherwise use the default:
+
+```text
+1. SWING_HIGH_15M
+2. SWING_HIGH_1H
+3. PREVIOUS_DAY_HIGH
+4. RANGE_HIGH
+```
+
+No free-form breakout reference is created.
+
+Same-priority ordering:
+
+```text
+1. latest exact available_at
+2. smallest exact level.price - E
+3. ascending case-sensitive ordinal Unicode code-point level_id
+```
+
+No locale collation, case folding, natural sort, numeric substring sort, arrival order, array order, or implementation-default string comparator is allowed. `age_seconds` is diagnostic only.
+
+Corroborating levels are diagnostic:
+
+```text
+4 * abs(other_level.price - R) <= A
+```
+
+Exclude the selected level itself; a non-empty list records `MULTIPLE_NEARBY_LEVELS`.
+
+Constants and stop construction:
+
+```text
+BUFFER_ATR_MULTIPLIER = 0.20
+MIN_DISTANCE_ATR = 0.50
+MAX_DISTANCE_ATR = 2.00
+CORROBORATION_DISTANCE_ATR = 0.25
+
+buffer_price = 0.20 * A
+raw_stop = R + buffer_price
+
+minimum_distance_price = 0.50 * A
+minimum_stop = E + minimum_distance_price
+
+adjusted_stop = max(raw_stop, minimum_stop)
+minimum_distance_adjustment_applied = (raw_stop < minimum_stop)
+```
+
+Pre-rounding feasibility:
+
+```text
+pre_rounding_risk_price = adjusted_stop - E
+pre_rounding_risk_price <= 2.00 * A
+```
+
+If `pre_rounding_risk_price > 2.00 * A`, return `usable=false`, `reason=SL_TOO_WIDE`. No weaker-reference retry is allowed.
+
+Tick rounding is exact and outward for SHORT:
+
+```text
+Sstop = rounded_stop = ceil(adjusted_stop / t) * t
+```
+
+Post-rounding invariants:
+
+```text
+Sstop is finite
+Sstop > 0
+Sstop / t is an integer
+Sstop = ceil(adjusted_stop / t) * t
+Sstop > R
+Sstop > E
+```
+
+If arithmetic fails or any invariant fails, return `usable=false`, `reason=ROUNDING_ERROR`. Diagnostic failed prices may be persisted, but they are non-actionable. No clamp, offset, inward correction, alternate-reference retry, ATR-only fallback, entry repricing, or exchange-specific repair is permitted.
+
+Post-rounding feasibility:
+
+```text
+post_rounding_risk_price = Sstop - E
+post_rounding_risk_price <= 2.00 * A
+```
+
+If `post_rounding_risk_price > 2.00 * A`, return `usable=false`, `reason=SL_TOO_WIDE`. Only after all checks pass:
+
+```text
+usable = true
+reason = AVAILABLE
+rounded_stop_price = Sstop
+```
 
 #### Calculation / evaluation steps
 
-1. Require immutable handoff direction `SHORT`.
-2. Validate F-008 entry, received ATR, tick size, producer bindings, thesis IDs, and unique canonical level IDs.
-3. Apply thesis-reference policy.
-4. Filter to permitted high reference types available as of `matched_at`.
-5. Require strict adverse-side geometry above `E + t`.
-6. Traverse family priority order.
-7. Apply certified rounding and post-rounding invariants.
-8. Return usable stop or the certified reason.
+1. Require valid committed Market Handoff, `direction=SHORT`, `stop_loss_mode=DYNAMIC`, available frozen references, positive `E`, positive received Q18 `A`, positive `t`, allowed set family, and allowed thesis policy.
+2. Validate handoff identity/provenance/digest, producer bindings, dangling thesis IDs, producer availability, duplicate/conflicting level IDs, and `NONE` thesis-policy null bindings before reference selection.
+3. If policy is `REQUIRED`, select only the valid required SHORT adverse-side thesis reference or return `THESIS_REFERENCE_INVALID`.
+4. If policy is `PREFERRED`, select the valid eligible bound reference; otherwise record `INVALID_THESIS_REFERENCE_OVERRIDE` when applicable and continue only under the certified fallback conditions.
+5. Build eligible candidates from the four permitted SHORT high types with `available_at <= matched_at`, finite positive prices, unique IDs, and `level.price > E + t`.
+6. Traverse the certified set-family priority order; within a priority type sort by latest exact `available_at`, smallest exact `level.price - E`, then ascending case-sensitive ordinal Unicode code-point `level_id`.
+7. Persist candidate and ineligible IDs, selected reference identity, priority rank, and corroborating-level diagnostics.
+8. Compute `raw_stop`, `minimum_stop`, and `adjusted_stop` exactly.
+9. Reject `SL_TOO_WIDE` when pre-rounding risk exceeds `2.00 * A`; do not try a weaker reference.
+10. Round outward with `ceil(adjusted_stop / t) * t`.
+11. Reject `ROUNDING_ERROR` for arithmetic failure, nonfinite, nonpositive, off-grid, not-outward, not-above-`R`, or not-above-`E` rounded stops.
+12. Reject `SL_TOO_WIDE` when post-rounding risk exceeds `2.00 * A`.
+13. Return `AVAILABLE` and `rounded_stop_price` only after every invariant passes.
 
 #### Output
 
-Usable SHORT rounded stop price and diagnostics, or `usable=false` with reason.
+`dynamic_sl` for a SHORT candidate, including methodology id/version, snapshot identity, thesis context, reference-selection diagnostics, selected reference, corroborating levels, ATR constants, raw/minimum/adjusted/rounded stop prices, pre/post risk distance diagnostics, `usable`, `reason`, `fallback_used=false`, and warnings.
 
 #### Worked example
 
@@ -716,7 +1322,22 @@ No canonical worked example specified.
 
 #### Unavailable / invalid behavior
 
-Unavailable or invalid for wrong direction, missing Entry/ATR/tick, invalid handoff identity, invalid thesis binding, duplicate/conflicting level IDs, no eligible high-side reference, rounding failure, or failed post-rounding invariants. Do not synthesize levels or use low-side levels for SHORT stops.
+Unavailable or invalid behavior is reason-coded:
+
+| Condition | Reason |
+|---|---|
+| `ATR_15m` missing or `<= 0` | `MISSING_ATR` |
+| `tick_size` missing or `<= 0` | `MISSING_TICK_SIZE` |
+| `planned_entry_reference` missing or `<= 0` | `MISSING_ENTRY_REFERENCE` |
+| `set_family` missing/invalid | `MISSING_SET_FAMILY` |
+| thesis policy missing/invalid | `MISSING_THESIS_REFERENCE_POLICY` |
+| no adverse-side geometry capability | `NO_ADVERSE_SIDE_GEOMETRY` |
+| no eligible governed adverse-side reference | `NO_ELIGIBLE_REFERENCE` |
+| required thesis reference invalid for any required condition | `THESIS_REFERENCE_INVALID` |
+| pre/post risk price exceeds `2.00 * A` | `SL_TOO_WIDE` |
+| rounded stop is nonfinite, nonpositive, off grid, not outward, not above `R`, or not above `E` | `ROUNDING_ERROR` |
+
+Do not synthesize levels, use low-side levels for SHORT stops, clamp, move the stop inward, retry a weaker reference, synthesize an ATR-only stop, reprice Entry, or repair producer bindings.
 
 #### Dependencies
 
@@ -734,7 +1355,7 @@ Unavailable or invalid for wrong direction, missing Entry/ATR/tick, invalid hand
 
 #### Important boundaries
 
-F-007 applies only to SHORT. It does not select Entry, Take Profit, size, or risk/reward. It does not call APIs or refresh market data.
+F-007 applies only to SHORT. It does not select Entry, Take Profit, size, or risk/reward. It does not call APIs or refresh market data. It consumes F-008 entry and does not recalculate it. If entry and REQUIRED SL share reference `r`, SHORT entry gives `E >= r`, so that reference fails `r > E + t` and the result is `THESIS_REFERENCE_INVALID`; F-007 must not rebind it. F-009 cannot change F-007's selected reference, rounded candidate, or feasibility result while retaining F-007 approval.
 
 #### Technical traceability
 
@@ -994,44 +1615,255 @@ Reference levels and family come from frozen Market Handoff. Tick and metadata c
 
 #### Formula or rule
 
-Basic favorable-side geometry:
+Symbols:
 
 ```text
-LONG: r > E + t
+direction = LONG | SHORT
+E = planned_entry_reference from certified F-008
+A = received volatility.atr_15m from Market Handoff
+t = tick_size
+r = candidate/target level price
+R = selected_target_price
+TP = rounded_target_price
+d = abs(r - E)
+```
+
+`E`, `A`, and `t` must be exact finite positive decimals. Position consumes the received Q18 ATR unchanged and must not recompute ATR or recover hidden precision.
+
+Prerequisites:
+
+```text
+F-008 result = AVAILABLE and same-bound to instrument, direction,
+decision_cycle_id, set_result_id, Market Handoff identity/digest,
+and tick provenance
+take_profit_mode = DYNAMIC
+```
+
+Invalid TP mode or missing pinned Position configuration returns `CONFIG_INVALID`.
+
+Directional permitted target types:
+
+```text
+LONG:
+SWING_HIGH_15M
+SWING_HIGH_1H
+PREVIOUS_DAY_HIGH
+RANGE_HIGH
+
+SHORT:
+SWING_LOW_15M
+SWING_LOW_1H
+PREVIOUS_DAY_LOW
+RANGE_LOW
+```
+
+Do not silently infer an opposite-type conversion.
+
+Basic favorable-side eligibility:
+
+```text
+LONG:  r > E + t
 SHORT: r < E - t
 ```
 
-Reachability:
+A level within one tick of planned Entry is ineligible. A basic eligible target must exist in `references.levels[]`, have a unique canonical `level_id`, have `available_at <= matched_at`, have finite positive price, have a directionally permitted target type, and satisfy favorable-side geometry against `E`.
+
+Handoff and thesis-binding validation before selection:
+
+1. Validate handoff identity, provenance, and digest.
+2. Validate F-008 identity and same-cycle entry binding.
+3. Validate required primitives: direction, `E`, `A`, `t`, `references.levels[]`, `tp_context.set_family`, `tp_context.thesis_reference_policy`, configuration identity/version/digest, and instrument metadata revision.
+4. Reject invalid or conflicting producer bindings.
+5. Reject dangling thesis IDs.
+6. Reject producer availability violations.
+7. Reject duplicate or conflicting canonical level IDs.
+8. Reject `tp_context.thesis_reference_policy = NONE` when either thesis ID or binding is non-null.
+
+These are handoff/configuration/dependency failures, not fallback cases. `REQUIRED` has no fallback; if the required thesis reference is absent, dangling, unavailable as-of `matched_at`, not directionally permitted, nonpositive, nonfinite, not favorable-side eligible against `E`, or outside the reachability band, return `usable=false`, `reason=THESIS_REFERENCE_INVALID`. `PREFERRED` fallback is allowed only when the thesis pair is contract-valid null, or when a valid bound reference exists but fails F-010 calculation eligibility. If `PREFERRED` has a valid bound reference and it is calculation-eligible, select it before default traversal; if it is validly bound but fails eligibility, record `INVALID_THESIS_REFERENCE_OVERRIDE` and continue to default hierarchy. Calculation fallback never rewrites the producer binding.
+
+Geometry capability and pools:
 
 ```text
+directional_pool =
+  governed levels in references.levels[]
+  with level_type in the active direction's permitted target type set
+  and finite positive price
+  and available_at <= matched_at
+```
+
+`reference_geometry.levels` must be present in the frozen handoff, schema-valid under the handoff version, bound to the same handoff identity/digest, and replayable from the persisted handoff snapshot. Missing, null, non-array, schema-invalid, unbound, or non-replayable collection is not an empty set; after higher-precedence checks it returns `NO_FAVORABLE_SIDE_GEOMETRY`.
+
+If the collection is usable but `directional_pool` is empty, return `NO_FAVORABLE_SIDE_GEOMETRY`. `basic_pool` is the subset of `directional_pool` that passes strict favorable-side geometry. If `directional_pool` is non-empty and `basic_pool` is empty, return `NO_ELIGIBLE_REFERENCE`. `traversable_pool` is the ordered subset of `basic_pool` whose level type appears in the active Set-family directional hierarchy; if `basic_pool` is non-empty but none belong to the active hierarchy, return `NO_REACHABLE_TARGET`.
+
+Set family hierarchy reads `tp_context.set_family` only from the frozen Market Handoff and must be `TREND_CONTINUATION`, `RANGE`, `BREAKOUT_RECLAIM`, or `GENERIC`.
+
+For `TREND_CONTINUATION` and `GENERIC`:
+
+```text
+LONG:
+1. SWING_HIGH_15M
+2. SWING_HIGH_1H
+3. PREVIOUS_DAY_HIGH
+4. RANGE_HIGH
+
+SHORT:
+1. SWING_LOW_15M
+2. SWING_LOW_1H
+3. PREVIOUS_DAY_LOW
+4. RANGE_LOW
+```
+
+For `RANGE`:
+
+```text
+LONG:
+1. RANGE_HIGH
+2. SWING_HIGH_15M
+3. SWING_HIGH_1H
+4. PREVIOUS_DAY_HIGH
+
+SHORT:
+1. RANGE_LOW
+2. SWING_LOW_15M
+3. SWING_LOW_1H
+4. PREVIOUS_DAY_LOW
+```
+
+For `BREAKOUT_RECLAIM`, a valid `REQUIRED` or `PREFERRED` thesis target controls selection. Otherwise use the `GENERIC` hierarchy. No free-form breakout target is permitted.
+
+Same-priority ordering:
+
+```text
+1. latest exact available_at
+2. smallest exact favorable distance abs(level.price - E)
+3. ascending case-sensitive ordinal Unicode code-point level_id,
+   with shorter prefixes first
+```
+
+No locale-dependent comparison, normalization, case folding, natural sort, numeric substring sort, array order, arrival order, or `age_seconds` ordering is allowed. `TOO_FAR` terminates traversal before any later candidate, including an older candidate of the same type.
+
+Reachability comparisons use exact arithmetic:
+
+```text
+distance_price = abs(r - E)
+distance_pct = 100 * distance_price / E
+distance_atr = distance_price / A
+
 TOO_CLOSE: 4 * distance_price < 3 * A
 ELIGIBLE:  4 * distance_price >= 3 * A and distance_price <= 4 * A
 TOO_FAR:   distance_price > 4 * A
 ```
 
-Rounding:
+These are equivalent to `distance_atr < 0.75`, `0.75 <= distance_atr <= 4.00`, and `distance_atr > 4.00`. Rounded quotient diagnostics must not drive decisions.
+
+Default hierarchy traversal:
+
+```text
+for target in structural priority order:
+    if target not in traversable_pool:
+        preserve diagnostic as appropriate
+        continue
+
+    d = abs(target.price - E)
+
+    if 4 * d < 3 * A:
+        record TOO_CLOSE
+        continue
+
+    if d > 4 * A:
+        record TOO_FAR
+        terminate selection
+        return TARGET_TOO_FAR
+
+    select target
+    stop
+```
+
+If hierarchy is exhausted after only `TOO_CLOSE` traversed candidates and no target is selected, return `NO_REACHABLE_TARGET`. Optional diagnostic traversal after primary selection may populate alternative targets, but it must not affect the primary selected target, reason, or feasibility.
+
+Tick rounding is inward toward realizability:
 
 ```text
 LONG TP = floor(R / t) * t
 SHORT TP = ceil(R / t) * t
 ```
 
+Post-rounding validity:
+
+```text
+TP is finite
+TP > 0
+TP / t is an integer
+
+LONG:
+TP = floor(R / t) * t
+TP > E
+TP <= R
+
+SHORT:
+TP = ceil(R / t) * t
+TP < E
+TP >= R
+```
+
+Arithmetic failure or invariant failure returns `ROUNDING_ERROR`. Failed prices are non-actionable. Post-rounding failure is terminal under every policy, including `PREFERRED`; F-010 must not select an alternate lower-priority target, reprice Entry, use Stop Loss distance, or synthesize an ATR target as repair.
+
+Post-rounding reachability:
+
+```text
+rounded_distance_price = abs(TP - E)
+
+if 4 * rounded_distance_price < 3 * A:
+    usable = false
+    reason = TARGET_TOO_CLOSE_AFTER_ROUNDING
+
+if rounded_distance_price > 4 * A:
+    usable = false
+    reason = ROUNDING_ERROR
+```
+
+Primary reason precedence:
+
+```text
+1. CONFIG_INVALID
+2. IDENTITY_INVALID
+3. missing primitive reasons:
+   MISSING_ENTRY_REFERENCE
+   MISSING_ATR
+   MISSING_TICK_SIZE
+   MISSING_SET_FAMILY
+   MISSING_THESIS_REFERENCE_POLICY
+4. NO_FAVORABLE_SIDE_GEOMETRY
+5. THESIS_REFERENCE_INVALID
+6. NO_ELIGIBLE_REFERENCE
+7. traversal outcomes:
+   TARGET_TOO_FAR
+   NO_REACHABLE_TARGET
+   TARGET_TOO_CLOSE_AFTER_ROUNDING
+   ROUNDING_ERROR
+   AVAILABLE
+```
+
 #### Calculation / evaluation steps
 
-1. Require same-bound available F-008 result and dynamic TP configuration.
-2. Validate handoff, F-008 binding, primitives, configuration, metadata, thesis IDs, and unique level IDs.
-3. Build the directional pool from permitted favorable-side level types.
-4. Build the basic pool using strict favorable-side geometry.
-5. Traverse the active family hierarchy in certified order.
-6. Skip too-close candidates; terminate on too-far where the spec requires.
-7. Select the first eligible target.
-8. Round inward to tick.
-9. Validate on-grid, positive, favorable-side, and post-rounding reachability.
-10. Preserve diagnostics without letting optional diagnostic traversal change the selected target.
+1. Require same-bound available F-008 result and pinned dynamic TP configuration.
+2. Validate handoff identity/provenance/digest, F-008 binding, primitives, configuration identity, metadata revision, producer bindings, thesis IDs, and unique canonical level IDs in certified precedence.
+3. Apply thesis-reference policy: `REQUIRED` has no fallback; valid calculation-eligible `PREFERRED` selects before default traversal; certified `PREFERRED` fallback may continue without rewriting producer binding.
+4. Confirm `reference_geometry.levels` is usable from frozen Market Handoff; do not treat unavailable capability as an empty list.
+5. Build the directional pool from permitted favorable-side level types and `available_at <= matched_at`.
+6. Build the basic pool using strict favorable-side geometry: LONG `r > E + t`, SHORT `r < E - t`.
+7. Build the traversable pool from the active set-family hierarchy.
+8. Traverse hierarchy order; within each type, order by latest exact `available_at`, smallest favorable distance, then ascending case-sensitive Unicode `level_id` with shorter prefixes first.
+9. Skip and record too-close candidates; terminate immediately on the first too-far traversed candidate.
+10. Select the first raw eligible target within `0.75 <= distance_atr <= 4.00`.
+11. Persist selection, candidate, ineligible, too-close, too-far, termination, selected-rank, alternative diagnostic, and unvisited diagnostics.
+12. Round LONG targets down and SHORT targets up to tick.
+13. Validate finite, positive, on-grid, favorable-side, not beyond selected target, and post-rounding reachability.
+14. Return usable rounded TP or the certified terminal reason.
 
 #### Output
 
-Usable rounded Take Profit price, selected target identity, traversal diagnostics, or `usable=false` with reason.
+Usable rounded Take Profit price, selected target identity, traversal diagnostics, reason/warning/audit output, or `usable=false` with reason. Persisted diagnostics include geometry collection status, directional candidates, pre-distance candidates, ineligible IDs with reasons, too-close IDs and count, too-far IDs, termination flag, first too-far identity/distance, eligible target IDs, selected priority rank, alternative eligible target IDs, and unvisited IDs.
 
 #### Worked example
 
@@ -1039,7 +1871,26 @@ No canonical worked example specified.
 
 #### Unavailable / invalid behavior
 
-Unavailable or invalid for missing dynamic config, invalid handoff/F-008 binding, missing Entry/ATR/tick/family/policy, unusable reference geometry, invalid thesis reference, no eligible target, target too far, no reachable target, target too close after rounding, or rounding error. Do not synthesize an ATR target or select an alternate after terminal rounding failure.
+Unavailable or invalid behavior is reason-coded:
+
+| Condition | Reason |
+|---|---|
+| invalid/missing TP mode/configuration | `CONFIG_INVALID` |
+| invalid F-008/handoff identity, digest, provenance, duplicate/conflicting IDs or invalid binding | `IDENTITY_INVALID` |
+| `E` missing or `<= 0` | `MISSING_ENTRY_REFERENCE` |
+| `A` missing or `<= 0` | `MISSING_ATR` |
+| `t` missing or `<= 0` | `MISSING_TICK_SIZE` |
+| `set_family` missing/invalid | `MISSING_SET_FAMILY` |
+| thesis policy missing/invalid | `MISSING_THESIS_REFERENCE_POLICY` |
+| `reference_geometry.levels` unavailable/unusable, or usable but no governed directionally permitted levels for active direction/family | `NO_FAVORABLE_SIDE_GEOMETRY` |
+| required thesis reference invalid after valid handoff primitives | `THESIS_REFERENCE_INVALID` |
+| directional_pool non-empty but zero strict favorable-side references | `NO_ELIGIBLE_REFERENCE` |
+| no reachable target after allowed too-close skips | `NO_REACHABLE_TARGET` |
+| next traversed candidate too far | `TARGET_TOO_FAR` |
+| inward rounding makes target too close | `TARGET_TOO_CLOSE_AFTER_ROUNDING` |
+| arithmetic or rounded-output invariant failure | `ROUNDING_ERROR` |
+
+Do not synthesize an ATR target, use Stop Loss as an operand, select an alternate after terminal rounding failure, refresh levels, repair bindings, or use rounded quotient diagnostics to drive decisions.
 
 #### Dependencies
 
@@ -1057,7 +1908,7 @@ Unavailable or invalid for missing dynamic config, invalid handoff/F-008 binding
 
 #### Important boundaries
 
-F-010 produces one primary TP. It does not use Stop distance as a target selector, does not introduce partial TP or multi-target behavior, and does not alter Entry.
+F-010 produces one primary TP. It does not compute Stop, fixed take profit, gross R:R, Minimum Net Edge, size, notional, Portfolio approval, Order Lifecycle behavior, liquidity/session/flow/BTC/score-based TP modification, or multi-target exits. It does not use Stop as an operand. F-009 stop distance, desired R:R, and downstream failures cannot construct or repair TP, and F-010 does not alter Entry.
 
 #### Technical traceability
 
@@ -4204,6 +5055,34 @@ directional_persistence = (up_steps - down_steps) / 29
 
 Candidate labels use thresholds from the final diagnostic-only specification. This rule is not promoted to canonical product truth.
 
+Diagnostic-only label predicates:
+
+```text
+STRONG_UPTREND:
+  window_return_pct >= 0.50
+  AND normalized_trend >= 5
+  AND directional_persistence >= 0.65
+
+UPTREND:
+  window_return_pct >= 0.15
+  AND normalized_trend >= 2
+  AND directional_persistence >= 0.35
+
+STRONG_DOWNTREND:
+  window_return_pct <= -0.50
+  AND normalized_trend <= -5
+  AND directional_persistence <= -0.65
+
+DOWNTREND:
+  window_return_pct <= -0.15
+  AND normalized_trend <= -2
+  AND directional_persistence <= -0.35
+
+otherwise SIDEWAYS
+```
+
+These thresholds, labels, BTCUSDT scope, and window are research/demo parameters only. They are not canonical trading thresholds and are not approved as product truth.
+
 #### Calculation / evaluation steps
 
 1. Use only research/demo data.
@@ -4237,7 +5116,7 @@ Unavailable for missing candles, noncontiguous data, nonpositive closes, unsuppo
 
 #### Important boundaries
 
-S-005 must not affect certified F-005 direction, Set matching, Position approval, Portfolio capacity, Lifecycle execution, or live trading decisions.
+S-005 must not affect certified F-005 direction, Set matching, Position approval, Portfolio capacity, Order Lifecycle execution, or live trading decisions. Its thresholds are diagnostic/research parameters only, not live-trading authority.
 
 #### Technical traceability
 
