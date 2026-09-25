@@ -354,10 +354,51 @@ def test_research_detail_workflow_state_is_factual_for_brand_new_research():
     assert 'return {label:"NOT STARTED", done:false, failed:false}' in html
     assert 'if(!rows.length) return {label:"NOT STARTED"' in html
     assert 'renderDemoSegments(demoState.progress)' in html
+    assert 'setWorkflowCard("#wfBacktest, #workflow-backtest", "#wfBacktestState, #workflow-backtest-state", backtestState)' in html
+    assert 'setWorkflowCard("#wfDemo, #workflow-demo", "#wfDemoState, #workflow-demo-state", demoState)' in html
+    assert 'q("#demoSegments, #demo-segments", desktop)' in html
     assert 'segments.innerHTML = "";' in html
     assert 'wfBacktestState.textContent=(currentResearch.backtests||[]).length?"Complete":"Pending"' not in html
     assert 'wfDemoState.textContent=demo?(String(demo.status)==="RUNNING"' not in html
     assert 'Array.from({length:7},(_,i)=>`<div class="demo-segment ${i<prog?"filled":""}' not in html
+
+
+def test_research_detail_deep_link_hydrates_id_before_page_rewrite():
+    html = _html(initial_page="research-detail")
+
+    assert "function researchIdFromLocation()" in html
+    assert 'return parts[0] === "research" && parts[1] ? decodeURIComponent(parts[1]) : "";' in html
+    assert "const initialResearchId = researchIdFromLocation();" in html
+    assert 'if(initialPage === "research-detail")' in html
+    assert 'if(initialResearchId) window.openResearchById(initialResearchId, {preserveUrl:true});' in html
+    assert 'showPage("research-detail", {preserveUrl:!!options.preserveUrl})' in html
+    assert 'if(!options.preserveUrl)' in html
+    assert 'history.pushState(null, "", `/research/${encodeURIComponent(safeId)}`)' in html
+    assert "function showResearchLoading(id)" in html
+    assert "currentResearch = {research:{research_id:id}, backtests:null, demos:null, loading:true}" in html
+    assert 'const loading = !!currentResearch?.loading;' in html
+    assert 'loading ? \'<tr><td colspan="6" class="empty">Loading Research detail.</td></tr>\' : runRows(backtests, "backtest")' in html
+    assert 'const backtestState = loading ? {label:"LOADING", done:false, failed:false} : workflowBacktestState(backtests)' in html
+    assert 'if(!currentResearchId || loading) setResearchActionButtonsDisabled(true)' in html
+    assert 'fetch(`/api/research/${encodeURIComponent(safeId)}`, {credentials:"same-origin"})' in html
+    assert 'if(!res.ok) throw new Error(data.error || data.reason || "Research record unavailable.")' in html
+
+
+def test_idless_research_detail_shows_unavailable_state_without_prototype_data():
+    html = _html(initial_page="research-detail")
+
+    assert "function showResearchUnavailable(message)" in html
+    assert 'showResearchUnavailable("Research record unavailable.")' in html
+    assert "currentResearch = {research:{}, backtests:[], demos:[]" in html
+    assert "setResearchActionButtonsDisabled(true)" in html
+    assert "Research record unavailable." in html
+    assert "R-022" not in html
+    assert "SET-012" not in html
+    assert "Rules V14" not in html
+    assert "Running · 4 / 7" not in html
+    assert 'id="workflow-backtest"\n      class="workflow-step done"' not in html
+    assert re.search(r'id="workflow-backtest-state"[\s\S]*?>\s*NOT STARTED\s*</div>', html)
+    assert re.search(r'id="workflow-demo-state"[\s\S]*?>\s*NOT STARTED\s*</div>', html)
 
 
 def test_research_detail_backtest_and_demo_actions_have_visible_checked_feedback():
@@ -390,7 +431,7 @@ def test_research_detail_demo_and_compare_use_factual_backend_state_only():
 
     assert 'if(kind === "demo" && status === "RUNNING")' in html
     assert 'return progress === null || progress === undefined || progress === "" ? "RUNNING" : `RUNNING · ${h(progress)} / 7`' in html
-    assert 'setWorkflowCard("#wfCompare", "#wfCompareState", {label:currentCompare?.available ? "AVAILABLE" : "WAITING"' in html
+    assert 'setWorkflowCard("#wfCompare, #workflow-compare", "#wfCompareState, #workflow-compare-state", {label:currentCompare?.available ? "AVAILABLE" : "WAITING"' in html
     assert 'if(!currentCompare?.available){ table.innerHTML = `<tbody><tr><td class="empty">${h(currentCompare?.reason || "Compare unavailable")}</td></tr></tbody>`; return; }' in html
     assert 'currentCompare.available?"Complete":"Pending"' not in html
     assert 'demo?.progress_days||0' not in html

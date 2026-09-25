@@ -1861,6 +1861,31 @@ def _without_reference_scripts(body: str) -> str:
     return re.sub(r"<script\b[^>]*>.*?</script>", "", body, flags=re.IGNORECASE | re.DOTALL)
 
 
+def _neutral_research_detail_placeholders(body: str) -> str:
+    """Remove prototype Research detail values from the final server-composed DOM."""
+
+    replacements = {
+        "R-022 · SET-012 V2 · Rules V14": "Research",
+        "SET-012": "SET unavailable",
+        "Running · 4 / 7": "NOT STARTED",
+    }
+    for old, new in replacements.items():
+        body = body.replace(old, new)
+    body = re.sub(
+        r'(id="workflow-backtest"\s+class="workflow-step)\s+done(")',
+        r"\1\2",
+        body,
+        flags=re.IGNORECASE,
+    )
+    body = re.sub(
+        r'(id="workflow-backtest-state"\s+class="workflow-state"\s*>\s*)Complete(\s*</div>)',
+        r"\1NOT STARTED\2",
+        body,
+        flags=re.IGNORECASE,
+    )
+    return body
+
+
 def _reference_styles(html_source: str) -> str:
     return "\n".join(re.findall(r"<style\b[^>]*>.*?</style>", html_source, flags=re.IGNORECASE | re.DOTALL))
 
@@ -2124,7 +2149,11 @@ def _reference_backend_script(payload: str) -> str:
     }
   });
 
-  function showPage(page){
+  function researchIdFromLocation(){
+    const parts = location.pathname.split("/").filter(Boolean);
+    return parts[0] === "research" && parts[1] ? decodeURIComponent(parts[1]) : "";
+  }
+  function showPage(page, options={}){
     const normalized = page === "config" ? "configuration" : page;
     const pageId = normalized === "research-detail" ? "page-research-detail" : "page-" + normalized;
     const activeTab = normalized === "research-detail" ? "research" : normalized;
@@ -2132,7 +2161,9 @@ def _reference_backend_script(payload: str) -> str:
     qa(".top-tab", desktop).forEach(node => node.classList.toggle("active", node.dataset.page === activeTab));
     if(normalized !== "overview") document.body.classList.remove("tt-mobile-overview-active");
     else document.body.classList.add("tt-mobile-overview-active");
-    history.replaceState(null, "", normalized === "overview" ? "/overview" : normalized === "configuration" ? "/trading-configuration" : normalized === "research-detail" && currentResearchId ? "/research/" + encodeURIComponent(currentResearchId) : "/" + normalized);
+    if(!options.preserveUrl){
+      history.replaceState(null, "", normalized === "overview" ? "/overview" : normalized === "configuration" ? "/trading-configuration" : normalized === "research-detail" && currentResearchId ? "/research/" + encodeURIComponent(currentResearchId) : "/" + normalized);
+    }
   }
   window.openPage = showPage;
   window.openConfig = function(view){
@@ -2527,13 +2558,49 @@ def _reference_backend_script(payload: str) -> str:
     qa("[data-research-id]", desktop).forEach(row => row.onclick = () => window.openResearchById(row.dataset.researchId));
     applyCommandAvailability();
   }
-  window.openResearchById = async function(id){
-    currentResearchId = id;
-    showPage("research-detail");
-    const res = await fetch(`/api/research/${encodeURIComponent(id)}`);
-    currentResearch = await res.json();
+  function showResearchUnavailable(message){
+    currentResearchId = "";
+    currentResearch = {research:{}, backtests:[], demos:[], run_projection:{available:false, reason:message || "Research record unavailable."}};
+    currentCompare = {available:false, reason:message || "Research record unavailable."};
+    showPage("research-detail", {preserveUrl:true});
     renderResearchDetail();
-    await loadCompare();
+    renderCompare();
+    setResearchActionButtonsDisabled(true);
+    setResearchActionStatus(message || "Research record unavailable.", "negative");
+  }
+  function showResearchLoading(id){
+    currentResearch = {research:{research_id:id}, backtests:null, demos:null, loading:true};
+    currentCompare = {available:false, reason:"Loading Research detail."};
+    renderResearchDetail();
+    renderCompare();
+    setResearchActionButtonsDisabled(true);
+    setResearchActionStatus("Loading Research detail...", "neutral");
+  }
+  window.openResearchById = async function(id, options={}){
+    const safeId = String(id || "").trim();
+    if(!safeId){
+      showResearchUnavailable("Research record unavailable.");
+      return;
+    }
+    currentResearchId = safeId;
+    showPage("research-detail", {preserveUrl:!!options.preserveUrl});
+    if(!options.preserveUrl) history.pushState(null, "", `/research/${encodeURIComponent(safeId)}`);
+    showResearchLoading(safeId);
+    try{
+      const res = await fetch(`/api/research/${encodeURIComponent(safeId)}`, {credentials:"same-origin"});
+      const data = await res.json().catch(() => ({}));
+      if(!res.ok) throw new Error(data.error || data.reason || "Research record unavailable.");
+      currentResearch = data;
+      renderResearchDetail();
+      if(currentResearch?.run_projection?.available === false){
+        setResearchActionStatus(currentResearch.run_projection.reason || "Research run evidence unavailable.", "negative");
+      }else{
+        setResearchActionStatus("", "neutral");
+      }
+      await loadCompare();
+    }catch(error){
+      showResearchUnavailable(error.message || "Research record unavailable.");
+    }
   };
   function canonicalStatus(value){ return String(value || "").trim().toUpperCase(); }
   function isTerminalSuccessStatus(value){ return ["COMPLETED","COMPLETE","STOPPED","SUCCEEDED","SUCCESS"].includes(canonicalStatus(value)); }
@@ -2570,7 +2637,7 @@ def _reference_backend_script(payload: str) -> str:
     }
   }
   function renderDemoSegments(progress){
-    const segments = q("#demoSegments", desktop);
+    const segments = q("#demoSegments, #demo-segments", desktop);
     if(!segments) return;
     if(progress === null || progress === undefined){
       segments.innerHTML = "";
@@ -2582,29 +2649,31 @@ def _reference_backend_script(payload: str) -> str:
   function renderResearchDetail(){
     const r = currentResearch?.research || {};
     const decisionValue = r.decision || r.status || "NONE";
-    const backtests = currentResearch?.backtests || [];
-    const demos = currentResearch?.demos || [];
+    const loading = !!currentResearch?.loading;
+    const backtests = Array.isArray(currentResearch?.backtests) ? currentResearch.backtests : [];
+    const demos = Array.isArray(currentResearch?.demos) ? currentResearch.demos : [];
     const title = q("#research-detail-title", desktop) || q("#researchTitle", desktop);
     if(title) title.textContent = r.research_id ? `${r.research_id} · ${r.set_id} ${r.set_version} · Rules ${r.rules_display_version || r.rules_version_id}` : "Research";
     const bt = q("#backtest-body", desktop) || q("#backtestBody", desktop);
     const dm = q("#demo-body", desktop) || q("#demoBody", desktop);
-    if(bt) bt.innerHTML = runRows(backtests, "backtest");
-    if(dm) dm.innerHTML = runRows(demos, "demo");
-    const backtestState = workflowBacktestState(backtests);
-    const demoState = workflowDemoState(demos);
-    setWorkflowCard("#wfBacktest", "#wfBacktestState", backtestState);
-    setWorkflowCard("#wfDemo", "#wfDemoState", demoState);
+    if(bt) bt.innerHTML = loading ? '<tr><td colspan="6" class="empty">Loading Research detail.</td></tr>' : runRows(backtests, "backtest");
+    if(dm) dm.innerHTML = loading ? '<tr><td colspan="6" class="empty">Loading Research detail.</td></tr>' : runRows(demos, "demo");
+    const backtestState = loading ? {label:"LOADING", done:false, failed:false} : workflowBacktestState(backtests);
+    const demoState = loading ? {label:"LOADING", done:false, failed:false, progress:null} : workflowDemoState(demos);
+    setWorkflowCard("#wfBacktest, #workflow-backtest", "#wfBacktestState, #workflow-backtest-state", backtestState);
+    setWorkflowCard("#wfDemo, #workflow-demo", "#wfDemoState, #workflow-demo-state", demoState);
     renderDemoSegments(demoState.progress);
     const decision = q("#decision-state", desktop) || q("#decisionStateInline", desktop);
     if(decision){ decision.textContent = decisionValue; decision.className = "badge " + String(decisionValue || "none").toLowerCase(); }
-    const workflowDecision = q("#wfDecisionState", desktop) || q("#flowDecisionState", desktop);
+    const workflowDecision = q("#wfDecisionState, #workflow-decision-state", desktop) || q("#flowDecisionState", desktop);
     if(workflowDecision) workflowDecision.textContent = decisionValue;
-    const workflowDecisionCard = q("#wfDecision", desktop);
+    const workflowDecisionCard = q("#wfDecision, #workflow-decision", desktop);
     if(workflowDecisionCard){
       workflowDecisionCard.classList.toggle("done", decisionValue !== "NONE");
       workflowDecisionCard.classList.toggle("reject-done", decisionValue === "REJECT" || decisionValue === "ARCHIVE" || decisionValue === "ARCHIVED");
     }
-    applyCommandAvailability();
+    if(!currentResearchId || loading) setResearchActionButtonsDisabled(true);
+    else applyCommandAvailability();
   }
   async function loadCompare(){
     if(!currentResearchId) return;
@@ -2615,7 +2684,7 @@ def _reference_backend_script(payload: str) -> str:
     }catch(error){
       currentCompare = {available:false, reason:error.message || "Compare unavailable"};
     }
-    setWorkflowCard("#wfCompare", "#wfCompareState", {label:currentCompare?.available ? "AVAILABLE" : "WAITING", done:!!currentCompare?.available, failed:false});
+    setWorkflowCard("#wfCompare, #workflow-compare", "#wfCompareState, #workflow-compare-state", {label:currentCompare?.available ? "AVAILABLE" : "WAITING", done:!!currentCompare?.available, failed:false});
     renderCompare();
   }
   function renderCompare(){
@@ -2711,7 +2780,14 @@ def _reference_backend_script(payload: str) -> str:
   };
 
   setupFilters(); applyOperatorState(); setupKpis(); renderPositions(); renderMetrics(); renderTriggers(); renderSets(); renderRules(); renderResearchSummary(); applyCommandAvailability();
-  showPage(state.page === "config" ? "configuration" : state.page || "overview");
+  const initialPage = state.page === "config" ? "configuration" : state.page || "overview";
+  const initialResearchId = researchIdFromLocation();
+  if(initialPage === "research-detail"){
+    if(initialResearchId) window.openResearchById(initialResearchId, {preserveUrl:true});
+    else showResearchUnavailable("Research record unavailable.");
+  }else{
+    showPage(initialPage);
+  }
 })();
 </script>
 """
@@ -2764,9 +2840,9 @@ def render_product_dashboard(
         ensure_ascii=False,
     ).replace("</", "<\\/")
     desktop_head = _reference_head(DESKTOP_REFERENCE_HTML)
-    desktop_body = _without_reference_scripts(_reference_body(DESKTOP_REFERENCE_HTML))
+    desktop_body = _neutral_research_detail_placeholders(_without_reference_scripts(_reference_body(DESKTOP_REFERENCE_HTML)))
     mobile_styles = _scoped_mobile_reference_styles(MOBILE_OVERVIEW_REFERENCE_HTML)
-    mobile_body = _without_reference_scripts(_reference_body(MOBILE_OVERVIEW_REFERENCE_HTML))
+    mobile_body = _neutral_research_detail_placeholders(_without_reference_scripts(_reference_body(MOBILE_OVERVIEW_REFERENCE_HTML)))
     mobile_body = mobile_body.replace("onclick=\"alert('Prototype: Pause Entries')\"", "onclick=\"action('pause')\"")
     mobile_body = mobile_body.replace("onclick=\"confirm('Close all open positions?')\"", "onclick=\"action('close')\"")
     responsive_css = """

@@ -848,11 +848,42 @@ def _research_detail_payload(server: DashboardServer, research_id: str) -> dict[
         raise DashboardRegistryUnavailable("PostgreSQL Research configuration registry unavailable") from exc
     if record is None:
         return None
+    run_detail = server.read_model.get_research_detail(research_id)
+    research_payload = _research_record_payload(record)
+    if run_detail is None:
+        return {
+            "research": research_payload,
+            "backtests": (),
+            "demos": (),
+            "run_projection": {
+                "available": False,
+                "reason": "factual Research run store unavailable for this Research",
+            },
+            "compare": {
+                "available": False,
+                "reason": "factual Research run store unavailable for this Research",
+            },
+        }
+    run_research = run_detail.get("research")
+    if isinstance(run_research, dict):
+        mutable_fields = (
+            "status",
+            "selected_backtest_run_id",
+            "selected_demo_run_id",
+            "decision",
+            "decision_at",
+            "archived_at",
+            "made_active_at",
+            "updated_at",
+        )
+        for field in mutable_fields:
+            if field in run_research:
+                research_payload[field] = run_research[field]
     return {
-        "research": _research_record_payload(record),
-        "backtests": (),
-        "demos": (),
-        "compare": {"available": False, "reason": "canonical Research run results unavailable in registry projection"},
+        "research": research_payload,
+        "backtests": tuple(run_detail.get("backtests") or ()),
+        "demos": tuple(run_detail.get("demos") or ()),
+        "run_projection": {"available": True},
     }
 
 

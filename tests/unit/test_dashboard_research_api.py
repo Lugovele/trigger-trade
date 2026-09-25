@@ -418,8 +418,33 @@ def test_research_dashboard_uses_postgres_registry_for_set_and_rules_choices(tmp
 def test_research_api_uses_postgres_registry_for_list_and_detail(tmp_path):
     db, rules = _research_db(tmp_path)
     current = rules.get_current_rules_version()
+    store = ResearchStore(db)
+    stored, _created = store.create_research(
+        set_id="pg-canonical-set",
+        set_version="v42",
+        rules_version_id=current.rules_version_id,
+        rules_display_version=current.version,
+        created_source="unit",
+    )
+    backtest = store.add_backtest_run(
+        research_id=stored.research_id,
+        period_start="2026-09-18T00:00:00+00:00",
+        period_end="2026-09-25T00:00:00+00:00",
+        timeframe="7D",
+        status=ResearchBacktestStatus.FAILED,
+        metrics={"closed_trades": 0},
+        unavailable_reason="historical replay input unavailable",
+    )
+    demo = store.add_demo_run(
+        research_id=stored.research_id,
+        status=ResearchDemoStatus.RUNNING,
+        started_at="2026-09-25T00:00:00+00:00",
+        execution_scope_id="demo-scope-001",
+        account_scope="bybit-demo",
+        metrics={"closed_trades": 0},
+    )
     record = _research_record(
-        research_id="research-pg-001",
+        research_id=stored.research_id,
         set_id="pg-canonical-set",
         set_version="v42",
         rules_version_id=current.rules_version_id,
@@ -448,13 +473,19 @@ def test_research_api_uses_postgres_registry_for_list_and_detail(tmp_path):
     thread = _start(server)
     try:
         listed = _json_request(host, port, "GET", "/api/research")["research"]
-        detail = _json_request(host, port, "GET", "/api/research/research-pg-001")
+        detail = _json_request(host, port, "GET", f"/api/research/{stored.research_id}")
 
-        assert listed[0]["research_id"] == "research-pg-001"
+        assert listed[0]["research_id"] == stored.research_id
         assert listed[0]["set_id"] == "pg-canonical-set"
         assert detail["research"]["set_id"] == "pg-canonical-set"
-        assert detail["backtests"] == []
-        assert detail["demos"] == []
+        assert detail["research"]["set_version"] == "v42"
+        assert detail["run_projection"] == {"available": True}
+        assert detail["backtests"][0]["run_id"] == backtest.run_id
+        assert detail["backtests"][0]["status"] == "FAILED"
+        assert detail["backtests"][0]["unavailable_reason"] == "historical replay input unavailable"
+        assert detail["demos"][0]["run_id"] == demo.run_id
+        assert detail["demos"][0]["status"] == "RUNNING"
+        assert detail["demos"][0]["execution_scope_id"] == "demo-scope-001"
     finally:
         _stop(server, thread)
 
