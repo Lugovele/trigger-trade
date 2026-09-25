@@ -343,3 +343,54 @@ def test_research_reference_actions_are_backend_wired_without_fixture_values():
     assert "<td>R-001</td>" not in html
     assert "BT-012" not in html
     assert "DM-006" not in html
+
+
+def test_research_detail_workflow_state_is_factual_for_brand_new_research():
+    html = _html()
+
+    assert html.count("function renderResearchDetail()") == 1
+    assert html.count("window.runBacktest = async function(period)") == 1
+    assert html.count("window.runDemo = async function()") == 1
+    assert 'return {label:"NOT STARTED", done:false, failed:false}' in html
+    assert 'if(!rows.length) return {label:"NOT STARTED"' in html
+    assert 'renderDemoSegments(demoState.progress)' in html
+    assert 'segments.innerHTML = "";' in html
+    assert 'wfBacktestState.textContent=(currentResearch.backtests||[]).length?"Complete":"Pending"' not in html
+    assert 'wfDemoState.textContent=demo?(String(demo.status)==="RUNNING"' not in html
+    assert 'Array.from({length:7},(_,i)=>`<div class="demo-segment ${i<prog?"filled":""}' not in html
+
+
+def test_research_detail_backtest_and_demo_actions_have_visible_checked_feedback():
+    html = _html()
+
+    assert 'window.runBacktest = async function(period)' in html
+    assert 'const days = period === "90D" ? 90 : period === "30D" ? 30 : 7' in html
+    assert 'research_start:start.toISOString()' in html
+    assert 'research_end:end.toISOString()' in html
+    assert 'idempotency_key:commandIdempotencyKey("research-backtest")' in html
+    assert 'setResearchActionStatus("Submitting backtest...", "neutral")' in html
+    assert 'setResearchActionStatus("Backtest submitted.", "positive")' in html
+    assert 'setResearchActionStatus(error.message || "Backtest unavailable.", "negative")' in html
+    assert 'await postJson(`/api/research/${encodeURIComponent(currentResearchId)}/backtests`' in html
+    assert 'setResearchActionButtonsDisabled(true)' in html
+    assert 'finally { setResearchActionButtonsDisabled(false); }' in html
+    assert 'await fetch(`/api/research/${{encodeURIComponent(currentResearchId)}}/backtests`' not in html
+
+    assert 'window.runDemo = async function()' in html
+    assert 'await postJson(`/api/research/${encodeURIComponent(currentResearchId)}/demo/start`' in html
+    assert 'idempotency_key:commandIdempotencyKey("research-demo")' in html
+    assert 'setResearchActionStatus("Starting demo...", "neutral")' in html
+    assert 'setResearchActionStatus("Demo submitted.", "positive")' in html
+    assert 'setResearchActionStatus(error.message || "Demo start unavailable.", "negative")' in html
+    assert 'await fetch(`/api/research/${{encodeURIComponent(currentResearchId)}}/demo/start`' not in html
+
+
+def test_research_detail_demo_and_compare_use_factual_backend_state_only():
+    html = _html()
+
+    assert 'if(kind === "demo" && status === "RUNNING")' in html
+    assert 'return progress === null || progress === undefined || progress === "" ? "RUNNING" : `RUNNING · ${h(progress)} / 7`' in html
+    assert 'setWorkflowCard("#wfCompare", "#wfCompareState", {label:currentCompare?.available ? "AVAILABLE" : "WAITING"' in html
+    assert 'if(!currentCompare?.available){ table.innerHTML = `<tbody><tr><td class="empty">${h(currentCompare?.reason || "Compare unavailable")}</td></tr></tbody>`; return; }' in html
+    assert 'currentCompare.available?"Complete":"Pending"' not in html
+    assert 'demo?.progress_days||0' not in html

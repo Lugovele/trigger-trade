@@ -2535,16 +2535,66 @@ def _reference_backend_script(payload: str) -> str:
     renderResearchDetail();
     await loadCompare();
   };
-  function runRows(rows){ return rows.length ? rows.map(r => `<tr><td>${h(r.run_id || r.backtest_run_id)}</td><td>${h((r.period_start || r.started_at || "—") + " -> " + (r.period_end || r.stopped_at || "—"))}</td><td>${h(r.metrics?.closed_trades ?? "—")}</td><td>${h(r.metrics?.net_pnl ?? "—")}</td><td>${h(r.metrics?.profit_factor ?? "—")}</td><td>${h(r.status || "—")}</td></tr>`).join("") : '<tr><td colspan="6" class="empty">No runs.</td></tr>'; }
+  function canonicalStatus(value){ return String(value || "").trim().toUpperCase(); }
+  function isTerminalSuccessStatus(value){ return ["COMPLETED","COMPLETE","STOPPED","SUCCEEDED","SUCCESS"].includes(canonicalStatus(value)); }
+  function isRunningStatus(value){ return ["RUNNING","PENDING","QUEUED","STARTED","IN_PROGRESS"].includes(canonicalStatus(value)); }
+  function isFailureStatus(value){ return ["FAILED","BLOCKED","ERROR","REJECTED","CANCELLED","UNAVAILABLE"].includes(canonicalStatus(value)); }
+  function factualRunStatus(row, kind){
+    const status = canonicalStatus(row?.status);
+    if(kind === "demo" && status === "RUNNING"){
+      const progress = row?.progress_days;
+      return progress === null || progress === undefined || progress === "" ? "RUNNING" : `RUNNING · ${h(progress)} / 7`;
+    }
+    return status || "UNKNOWN";
+  }
+  function workflowBacktestState(rows){
+    if(!rows.length) return {label:"NOT STARTED", done:false, failed:false};
+    const latest = rows[0] || {};
+    const status = factualRunStatus(latest, "backtest");
+    return {label:status, done:isTerminalSuccessStatus(latest.status), failed:isFailureStatus(latest.status)};
+  }
+  function workflowDemoState(rows){
+    if(!rows.length) return {label:"NOT STARTED", done:false, failed:false, progress:null};
+    const latest = rows[0] || {};
+    const progress = latest.progress_days === null || latest.progress_days === undefined || latest.progress_days === "" ? null : Number(latest.progress_days);
+    return {label:factualRunStatus(latest, "demo"), done:isTerminalSuccessStatus(latest.status), failed:isFailureStatus(latest.status), progress:Number.isFinite(progress) ? Math.max(0, Math.min(7, progress)) : null};
+  }
+  function setWorkflowCard(cardId, stateId, result){
+    const card = q(cardId, desktop);
+    const label = q(stateId, desktop);
+    if(label) label.textContent = result.label;
+    if(card){
+      card.classList.toggle("done", !!result.done);
+      card.classList.toggle("reject-done", !!result.failed);
+      card.classList.toggle("active", isRunningStatus(result.label));
+    }
+  }
+  function renderDemoSegments(progress){
+    const segments = q("#demoSegments", desktop);
+    if(!segments) return;
+    if(progress === null || progress === undefined){
+      segments.innerHTML = "";
+      return;
+    }
+    segments.innerHTML = Array.from({length:7}, (_, i) => `<div class="demo-segment ${i < progress ? "filled" : ""}"></div>`).join("");
+  }
+  function runRows(rows, kind){ return rows.length ? rows.map(r => `<tr><td>${h(r.run_id || r.backtest_run_id)}</td><td>${h((r.period_start || r.started_at || "—") + " -> " + (r.period_end || r.stopped_at || "—"))}</td><td>${h(r.metrics?.closed_trades ?? "—")}</td><td>${h(r.metrics?.net_pnl ?? "—")}</td><td>${h(r.metrics?.profit_factor ?? "—")}</td><td>${h(factualRunStatus(r, kind))}</td></tr>`).join("") : '<tr><td colspan="6" class="empty">No runs.</td></tr>'; }
   function renderResearchDetail(){
     const r = currentResearch?.research || {};
     const decisionValue = r.decision || r.status || "NONE";
+    const backtests = currentResearch?.backtests || [];
+    const demos = currentResearch?.demos || [];
     const title = q("#research-detail-title", desktop) || q("#researchTitle", desktop);
     if(title) title.textContent = r.research_id ? `${r.research_id} · ${r.set_id} ${r.set_version} · Rules ${r.rules_display_version || r.rules_version_id}` : "Research";
     const bt = q("#backtest-body", desktop) || q("#backtestBody", desktop);
     const dm = q("#demo-body", desktop) || q("#demoBody", desktop);
-    if(bt) bt.innerHTML = runRows(currentResearch?.backtests || []);
-    if(dm) dm.innerHTML = runRows(currentResearch?.demos || []);
+    if(bt) bt.innerHTML = runRows(backtests, "backtest");
+    if(dm) dm.innerHTML = runRows(demos, "demo");
+    const backtestState = workflowBacktestState(backtests);
+    const demoState = workflowDemoState(demos);
+    setWorkflowCard("#wfBacktest", "#wfBacktestState", backtestState);
+    setWorkflowCard("#wfDemo", "#wfDemoState", demoState);
+    renderDemoSegments(demoState.progress);
     const decision = q("#decision-state", desktop) || q("#decisionStateInline", desktop);
     if(decision){ decision.textContent = decisionValue; decision.className = "badge " + String(decisionValue || "none").toLowerCase(); }
     const workflowDecision = q("#wfDecisionState", desktop) || q("#flowDecisionState", desktop);
@@ -2558,8 +2608,14 @@ def _reference_backend_script(payload: str) -> str:
   }
   async function loadCompare(){
     if(!currentResearchId) return;
-    const res = await fetch(`/api/research/${encodeURIComponent(currentResearchId)}/compare`);
-    currentCompare = await res.json();
+    try{
+      const res = await fetch(`/api/research/${encodeURIComponent(currentResearchId)}/compare`, {credentials:"same-origin"});
+      currentCompare = await res.json();
+      if(!res.ok) currentCompare = {available:false, reason:currentCompare.error || currentCompare.reason || "Compare unavailable"};
+    }catch(error){
+      currentCompare = {available:false, reason:error.message || "Compare unavailable"};
+    }
+    setWorkflowCard("#wfCompare", "#wfCompareState", {label:currentCompare?.available ? "AVAILABLE" : "WAITING", done:!!currentCompare?.available, failed:false});
     renderCompare();
   }
   function renderCompare(){
@@ -2617,8 +2673,11 @@ def _reference_backend_script(payload: str) -> str:
     qa(".compare-period", desktop).forEach(node => node.classList.toggle("active", (node.textContent || "").trim() === comparePeriod));
     renderCompare();
   };
-  window.runBacktest = async function(period){ if(!currentResearchId){ setResearchActionStatus("Research record unavailable.", "negative"); return; } if(!canSubmit()){ setResearchActionStatus(commandUnavailableMessage(), "negative"); return; } if(researchRegistryUnavailable()){ setResearchActionStatus(state.research.unavailable_reason, "negative"); return; } const days = period === "90D" ? 90 : period === "30D" ? 30 : 7; const end = new Date(), start = new Date(end.getTime() - days * 86400000); try{ setResearchActionStatus("Running backtest...", "neutral"); await postJson(`/api/research/${encodeURIComponent(currentResearchId)}/backtests`, {research_start:start.toISOString(),research_end:end.toISOString(),idempotency_key:commandIdempotencyKey("research-backtest")}); setResearchActionStatus("Backtest submitted.", "positive"); }catch(error){ currentCompare = {available:false, reason:error.message || "Backtest unavailable"}; setResearchActionStatus(error.message || "Backtest unavailable.", "negative"); renderCompare(); } await window.openResearchById(currentResearchId); };
-  window.runDemo = async function(){ if(!currentResearchId){ setResearchActionStatus("Research record unavailable.", "negative"); return; } if(!canSubmit()){ setResearchActionStatus(commandUnavailableMessage(), "negative"); return; } if(researchRegistryUnavailable()){ setResearchActionStatus(state.research.unavailable_reason, "negative"); return; } try{ setResearchActionStatus("Starting demo...", "neutral"); await postJson(`/api/research/${encodeURIComponent(currentResearchId)}/demo/start`, {idempotency_key:commandIdempotencyKey("research-demo")}); setResearchActionStatus("Demo submitted.", "positive"); }catch(error){ currentCompare = {available:false, reason:error.message || "Demo start unavailable"}; setResearchActionStatus(error.message || "Demo start unavailable.", "negative"); renderCompare(); } await window.openResearchById(currentResearchId); };
+  function setResearchActionButtonsDisabled(disabled){
+    qa('button[onclick^="runBacktest"], button[onclick="runDemo()"]', desktop).forEach(node => node.disabled = !!disabled);
+  }
+  window.runBacktest = async function(period){ if(!currentResearchId){ setResearchActionStatus("Research record unavailable.", "negative"); return; } if(!canSubmit()){ setResearchActionStatus(commandUnavailableMessage(), "negative"); return; } if(researchRegistryUnavailable()){ setResearchActionStatus(state.research.unavailable_reason, "negative"); return; } const days = period === "90D" ? 90 : period === "30D" ? 30 : 7; const end = new Date(), start = new Date(end.getTime() - days * 86400000); setResearchActionButtonsDisabled(true); try{ setResearchActionStatus("Submitting backtest...", "neutral"); await postJson(`/api/research/${encodeURIComponent(currentResearchId)}/backtests`, {research_start:start.toISOString(),research_end:end.toISOString(),idempotency_key:commandIdempotencyKey("research-backtest")}); setResearchActionStatus("Backtest submitted.", "positive"); await window.openResearchById(currentResearchId); }catch(error){ currentCompare = {available:false, reason:error.message || "Backtest unavailable"}; setResearchActionStatus(error.message || "Backtest unavailable.", "negative"); renderCompare(); } finally { setResearchActionButtonsDisabled(false); } };
+  window.runDemo = async function(){ if(!currentResearchId){ setResearchActionStatus("Research record unavailable.", "negative"); return; } if(!canSubmit()){ setResearchActionStatus(commandUnavailableMessage(), "negative"); return; } if(researchRegistryUnavailable()){ setResearchActionStatus(state.research.unavailable_reason, "negative"); return; } setResearchActionButtonsDisabled(true); try{ setResearchActionStatus("Starting demo...", "neutral"); await postJson(`/api/research/${encodeURIComponent(currentResearchId)}/demo/start`, {idempotency_key:commandIdempotencyKey("research-demo")}); setResearchActionStatus("Demo submitted.", "positive"); await window.openResearchById(currentResearchId); }catch(error){ currentCompare = {available:false, reason:error.message || "Demo start unavailable"}; setResearchActionStatus(error.message || "Demo start unavailable.", "negative"); renderCompare(); } finally { setResearchActionButtonsDisabled(false); } };
   window.setDecision = async function(value){ if(!currentResearchId){ setResearchActionStatus("Research record unavailable.", "negative"); return; } if(!canSubmit()){ setResearchActionStatus(commandUnavailableMessage(), "negative"); return; } if(researchRegistryUnavailable()){ setResearchActionStatus(state.research.unavailable_reason, "negative"); return; } const normalized = String(value || "").toUpperCase(); const url = normalized === "REJECT" ? `/api/research/${encodeURIComponent(currentResearchId)}/archive` : `/api/research/${encodeURIComponent(currentResearchId)}/decision/make-active`; try{ setResearchActionStatus("Submitting decision...", "neutral"); await postJson(url, {idempotency_key:"ui-"+Date.now()}); setResearchActionStatus("Decision submitted.", "positive"); }catch(error){ currentCompare = {available:false, reason:error.message || "Decision unavailable"}; setResearchActionStatus(error.message || "Decision unavailable.", "negative"); renderCompare(); } await window.openResearchById(currentResearchId); };
   window.exportResearch = function(){ const blob = new Blob([JSON.stringify({research:currentResearch, compare:currentCompare}, null, 2)], {type:"application/json"}); const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `${currentResearchId || "research"}-research.json`; a.click(); };
   function setupNewResearch(){
