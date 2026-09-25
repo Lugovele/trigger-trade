@@ -74,16 +74,18 @@ def _server_boundary_script(state: str, operator_command_submit_enabled: bool, s
   const operatorStateAvailable = %s;
   const canSubmitOperatorControl = %s;
   let serverControlAction = null;
+  let serverClosePosition = null;
 
   function applyOperatorControlLabels(){
+    const buttons = document.querySelectorAll('.stop-new, button[onclick*="confirmPauseEntries"], button[onclick*="action(\\'pause\\')"]');
     if(!operatorStateAvailable){
-      document.querySelectorAll(".stop-new").forEach((button) => {
+      buttons.forEach((button) => {
         button.textContent = "Pause Entries";
         button.setAttribute("aria-label", "Pause Entries");
       });
       return;
     }
-    document.querySelectorAll(".stop-new").forEach((button) => {
+    buttons.forEach((button) => {
       if(operatorState === "TRADING_PAUSED"){
         button.textContent = "Resume Entries";
         button.setAttribute("aria-label", "Resume Entries");
@@ -92,6 +94,152 @@ def _server_boundary_script(state: str, operator_command_submit_enabled: bool, s
         button.setAttribute("aria-label", "Pause Entries");
       }
     });
+  }
+
+  function operatorStatusNode(){
+    let node = document.getElementById("operatorCommandStatus");
+    if(node) return node;
+    node = document.createElement("div");
+    node.id = "operatorCommandStatus";
+    node.className = "panel-meta";
+    node.style.minWidth = "180px";
+    const target =
+      document.querySelector("#tt-desktop-reference .positions-actions") ||
+      document.querySelector(".positions-actions") ||
+      document.querySelector(".header-actions") ||
+      document.body;
+    target.appendChild(node);
+    return node;
+  }
+
+  function setOperatorStatus(message, tone){
+    const node = operatorStatusNode();
+    if(!node) return;
+    node.textContent = message || "";
+    node.className = "panel-meta " + (tone || "neutral");
+  }
+
+  function ensureControlModal(){
+    let modal = document.getElementById("controlModal");
+    if(!modal){
+      const wrapper = document.createElement("div");
+      wrapper.innerHTML = '<div class="modalbg sheet-bg" id="controlModal"><div class="modal sheet"><div class="panelhead panel-header"><div><div class="title panel-title" id="controlTitle">Confirm action</div><div class="meta panel-meta" id="controlMeta"></div></div></div><div class="modalbody"><div class="notice body-text" id="controlNotice"></div><div class="confirm-field" id="confirmField" style="display:none"><label for="confirmInput">Type CLOSE ALL to confirm</label><input id="confirmInput" class="search" autocomplete="off" placeholder="CLOSE ALL"></div><div class="modalactions" style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px"><button class="btn row-action js-cancel-operator-command" type="button" id="controlCancel">Cancel</button><button class="btn danger red row-action js-confirm-operator-command" type="button" id="controlConfirm">Confirm</button></div></div></div></div>';
+      modal = wrapper.firstElementChild;
+      (document.getElementById("tt-desktop-reference") || document.body).appendChild(modal);
+    }
+    const desktopRoot = document.getElementById("tt-desktop-reference");
+    if(desktopRoot && !desktopRoot.contains(modal)){
+      desktopRoot.appendChild(modal);
+    }
+    let cancelButton = document.getElementById("controlCancel") || modal.querySelector(".modalactions button:not(#controlConfirm)");
+    if(cancelButton){
+      cancelButton.id = "controlCancel";
+      cancelButton.type = "button";
+      cancelButton.classList.add("row-action", "js-cancel-operator-command");
+      cancelButton.onclick = null;
+      if(!cancelButton.dataset.serverBoundaryBound){
+        cancelButton.addEventListener("click", closeBoundaryModal);
+        cancelButton.dataset.serverBoundaryBound = "true";
+      }
+    }
+    const confirmButton = document.getElementById("controlConfirm");
+    if(confirmButton){
+      confirmButton.type = "button";
+      confirmButton.classList.add("row-action", "js-confirm-operator-command");
+      confirmButton.onclick = null;
+      if(!confirmButton.dataset.serverBoundaryBound){
+        confirmButton.addEventListener("click", function(){ window.confirmControlAction(); });
+        confirmButton.dataset.serverBoundaryBound = "true";
+      }
+    }
+    return modal;
+  }
+
+  function setModalText(title, meta, notice, confirmText, requiresPhrase){
+    ensureControlModal();
+    document.querySelectorAll("#operatorCommandStatus .js-confirm-operator-command, #operatorCommandStatus .js-cancel-operator-command").forEach((node) => node.remove());
+    document.querySelectorAll("#tt-desktop-reference .js-confirm-operator-command, #tt-desktop-reference .js-cancel-operator-command").forEach((node) => {
+      if(node.id !== "controlConfirm" && node.id !== "controlCancel") node.remove();
+    });
+    document.getElementById("controlTitle").textContent = title;
+    document.getElementById("controlMeta").textContent = meta || "";
+    document.getElementById("controlNotice").textContent = notice || "";
+    const field = document.getElementById("confirmField");
+    const input = document.getElementById("confirmInput");
+    if(input) input.value = "";
+    if(field) field.style.display = requiresPhrase ? "block" : "none";
+    document.getElementById("controlConfirm").textContent = confirmText || "Confirm";
+  }
+
+  function openBoundaryModal(){
+    const modal = ensureControlModal();
+    modal.classList.add("open");
+    modal.classList.add("show");
+    modal.style.display = "flex";
+  }
+
+  function closeBoundaryModal(){
+    const modal = document.getElementById("controlModal");
+    if(!modal) return;
+    modal.classList.remove("open");
+    modal.classList.remove("show");
+    modal.style.display = "";
+  }
+
+  window.closeControlModal = closeBoundaryModal;
+
+  function assignIdempotency(form){
+    const field = form && form.querySelector('input[name="idempotency_key"]');
+    if(field && !field.value){
+      field.value = form.id + "-" + Date.now() + "-" + Math.random().toString(16).slice(2);
+    }
+  }
+
+  function publicFormError(text){
+    return String(text || "Command failed").replace(/<[^>]*>/g, " ").replace(/\\s+/g, " ").trim().slice(0, 180) || "Command failed";
+  }
+
+  function successMessageForForm(form){
+    if(!form) return "Command submitted.";
+    if(form.id === "operatorPauseForm") return "Entries paused.";
+    if(form.id === "operatorResumeForm") return "Entries resumed.";
+    if(form.id === "operatorCloseOneForm") return "Close Position submitted.";
+    if(form.id === "operatorCloseAllForm") return "Close All submitted.";
+    return "Command submitted.";
+  }
+
+  async function submitOperatorForm(form){
+    if(!canSubmitOperatorControl){
+      setOperatorStatus("Operator command submission is unavailable.", "negative");
+      closeBoundaryModal();
+      return;
+    }
+    if(!form){
+      setOperatorStatus("Operator command form is unavailable.", "negative");
+      closeBoundaryModal();
+      return;
+    }
+    assignIdempotency(form);
+    if(!window.fetch){
+      form.submit();
+      return;
+    }
+    const body = new URLSearchParams(new FormData(form));
+    setOperatorStatus("Submitting...", "neutral");
+    try{
+      const response = await fetch(form.action, {
+        method: "POST",
+        headers: {"Content-Type": "application/x-www-form-urlencoded", "X-TriggerTrade-Local-Operator": "1"},
+        body
+      });
+      const text = await response.text();
+      if(!response.ok) throw new Error(publicFormError(text));
+      closeBoundaryModal();
+      setOperatorStatus(successMessageForForm(form), "positive");
+    }catch(error){
+      closeBoundaryModal();
+      setOperatorStatus(error.message || "Command failed.", "negative");
+    }
   }
 
   function applyOperatorStateIndicator(){
@@ -128,72 +276,137 @@ def _server_boundary_script(state: str, operator_command_submit_enabled: bool, s
 
   const originalOpenControlModal = window.openControlModal;
   const originalConfirmControlAction = window.confirmControlAction;
-  let serverClosePosition = null;
   window.openSingleCloseById = function(positionId, symbol){
     serverClosePosition = {positionId, symbol};
     serverControlAction = "single-close";
-    if(typeof window.openSingleClose === "function"){
-      window.openSingleClose(symbol);
-    }
+    setModalText(
+      "Close " + (symbol || "position") + "?",
+      "Single position",
+      "This will request closure of this position only.",
+      "Close",
+      false
+    );
+    openBoundaryModal();
   };
+  window.closePosition = function(positionId, symbol){
+    window.openSingleCloseById(positionId, symbol);
+  };
+  window.closeOne = window.closePosition;
+
   window.openControlModal = function(action){
     const normalizedAction = action === "pause" && operatorState === "TRADING_PAUSED" ? "resume" : action;
-    if(normalizedAction !== "pause" && normalizedAction !== "resume"){
-      serverControlAction = normalizedAction;
-      if(typeof originalOpenControlModal === "function"){
-        originalOpenControlModal(normalizedAction);
-      }
+    serverControlAction = normalizedAction;
+    if(normalizedAction === "pause"){
+      setModalText(
+        "Pause Entries?",
+        "Protected trading control",
+        "New entries will be paused. Existing positions remain active and continue to be managed.",
+        "Pause Entries",
+        false
+      );
+      openBoundaryModal();
       return;
     }
-    serverControlAction = normalizedAction;
-    if(normalizedAction === "pause" && typeof originalOpenControlModal === "function"){
-      originalOpenControlModal(normalizedAction);
-    } else {
-      confirmInput.value = "";
-      controlTitle.textContent = "Resume new entries?";
-      controlMeta.textContent = "Protected trading control";
-      controlNotice.textContent = "The bot may open new ACTIVE positions again after this confirmation.";
-      confirmField.style.display = "none";
-      controlConfirm.textContent = "Resume Entries";
-      controlModal.classList.add("open");
+    if(normalizedAction === "resume"){
+      setModalText(
+        "Resume Entries?",
+        "Protected trading control",
+        "New entries will be resumed. Existing positions remain active and continue to be managed.",
+        "Resume Entries",
+        false
+      );
+      openBoundaryModal();
+      return;
     }
+    if(normalizedAction === "close"){
+      setModalText(
+        "Close All?",
+        "Emergency portfolio action",
+        "This will request closure of every currently open position. This action affects the whole portfolio.",
+        "Close All",
+        true
+      );
+      openBoundaryModal();
+      return;
+    }
+    if(typeof originalOpenControlModal === "function"){
+      originalOpenControlModal(normalizedAction);
+    }
+  };
+
+  window.confirmPauseEntries = function(){
+    window.openControlModal("pause");
+  };
+
+  window.confirmCloseAll = function(){
+    window.openControlModal("close");
   };
 
   window.confirmControlAction = function(){
     if(serverControlAction === "pause" || serverControlAction === "resume"){
       const formId = serverControlAction === "resume" ? "operatorResumeForm" : "operatorPauseForm";
       const form = document.getElementById(formId);
-      if(canSubmitOperatorControl && form){
-        form.submit();
-        return;
-      }
-      closeControlModal();
+      submitOperatorForm(form);
       return;
     }
     if(serverControlAction === "single-close"){
       const form = document.getElementById("operatorCloseOneForm");
-      if(canSubmitOperatorControl && form && serverClosePosition){
+      if(form && serverClosePosition){
         form.querySelector('input[name="position_id"]').value = serverClosePosition.positionId;
         form.querySelector('input[name="symbol"]').value = serverClosePosition.symbol;
-        form.submit();
-        return;
       }
-      closeControlModal();
+      submitOperatorForm(form);
       return;
     }
     if(serverControlAction === "close"){
-      const form = document.getElementById("operatorCloseAllForm");
-      if(canSubmitOperatorControl && form){
-        form.submit();
+      const input = document.getElementById("confirmInput");
+      if(!input || input.value !== "CLOSE ALL"){
+        setOperatorStatus("Type CLOSE ALL to confirm.", "negative");
+        if(input) input.focus();
         return;
       }
-      closeControlModal();
+      const form = document.getElementById("operatorCloseAllForm");
+      submitOperatorForm(form);
       return;
     }
     if(typeof originalConfirmControlAction === "function"){
       originalConfirmControlAction();
     }
   };
+
+  window.action = function(name){
+    if(typeof window.backdrop === "function"){
+      window.backdrop("actions-bg");
+      window.backdrop("actionsSheet");
+    }
+    if(name === "pause") window.confirmPauseEntries();
+    if(name === "close") window.confirmCloseAll();
+  };
+
+  document.addEventListener("click", function(event){
+    const closeButton = event.target.closest(".js-close-position");
+    if(closeButton){
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      window.openSingleCloseById(closeButton.dataset.positionId || "", closeButton.dataset.symbol || "");
+      return;
+    }
+    const button = event.target.closest("button");
+    if(!button) return;
+    const onclick = button.getAttribute("onclick") || "";
+    const text = (button.textContent || "").trim();
+    if(onclick.indexOf("confirmPauseEntries") >= 0 || onclick.indexOf("action('pause')") >= 0 || ((text === "Pause Entries" || text === "Resume Entries") && button.closest(".positions-actions, #actionsSheet"))){
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      window.confirmPauseEntries();
+      return;
+    }
+    if(onclick.indexOf("confirmCloseAll") >= 0 || onclick.indexOf("action('close')") >= 0 || (text === "Close All" && button.closest(".positions-actions, #actionsSheet"))){
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      window.confirmCloseAll();
+    }
+  }, true);
 
   applyOperatorControlLabels();
   applyOperatorStateIndicator();
@@ -1543,9 +1756,10 @@ function showPage(id){{page=id;document.querySelectorAll(".page").forEach(x=>x.c
 document.querySelectorAll(".top-tab").forEach(b=>b.onclick=()=>showPage(b.dataset.page));
 function applyOperatorState(){{const badge=document.getElementById("operatorStateBadge"),dot=document.getElementById("botDot");if(!state.operatorStateAvailable)return;const paused=state.operatorState==="TRADING_PAUSED";badge.textContent=paused?"Entries paused":"Entries enabled";badge.className="badge "+(paused?"pending":"opened");dot.style.background=paused?"#a16207":"#1b9a59";}}
 function canSubmitOperatorAction(){{if(state.canSubmitOperatorControl)return true;alert("Operator command submission is unavailable in this rendered context.");return false;}}
-window.confirmPauseEntries=function(){{const paused=state.operatorState==="TRADING_PAUSED";if(canSubmitOperatorAction()&&confirm(paused?"Resume new entries?":"Pause new entries?"))document.getElementById(paused?"operatorResumeForm":"operatorPauseForm").submit();}};
-window.confirmCloseAll=function(){{if(canSubmitOperatorAction()&&confirm("Close all open positions?"))document.getElementById("operatorCloseAllForm").submit();}};
-function closeOne(id,symbol){{if(canSubmitOperatorAction()&&confirm(`Close ${{symbol}} position?`)){{const f=document.getElementById("operatorCloseOneForm");f.position_id.value=id;f.symbol.value=symbol;f.submit();}}}}
+function operatorBoundaryUnavailable(){{alert("Operator control boundary is unavailable in this rendered context.");}}
+window.confirmPauseEntries=function(){{if(typeof window.openControlModal==="function")window.openControlModal("pause");else operatorBoundaryUnavailable();}};
+window.confirmCloseAll=function(){{if(typeof window.openControlModal==="function")window.openControlModal("close");else operatorBoundaryUnavailable();}};
+function closeOne(id,symbol){{if(typeof window.openSingleCloseById==="function")window.openSingleCloseById(id,symbol);else operatorBoundaryUnavailable();}}
 window.openSheet=id=>document.getElementById(id).classList.add("show");window.backdrop=(e,id)=>{{if(e.target.id===id)document.getElementById(id).classList.remove("show")}};
 function filters(){{return{{coin:filterCoin.value,side:filterSide.value,status:filterStatus.value,set:filterSet.value}}}}
 function setSelect(id,items,label){{const node=document.getElementById(id);if(!node)return;node.innerHTML=`<option value="">${{label}}: All</option>`+[...new Set(items.filter(Boolean))].map(x=>`<option>${{html(x)}}</option>`).join("")}}
@@ -1811,22 +2025,25 @@ def _reference_backend_script(payload: str) -> str:
     }
   }
   window.confirmPauseEntries = function(){
-    const paused = state.operatorState === "TRADING_PAUSED";
-    requestOperatorConfirmation(paused ? "Confirm resume new entries." : "Confirm pause new entries.", () => submitOperatorForm(
-      paused ? "operatorResumeForm" : "operatorPauseForm",
-      null,
-      paused ? "Entries resumed." : "Entries paused.",
-      () => { state.operatorState = paused ? "TRADING_ENABLED" : "TRADING_PAUSED"; state.operatorStateAvailable = true; applyOperatorState(); }
-    ));
+    if(typeof window.openControlModal === "function"){
+      window.openControlModal("pause");
+      return;
+    }
+    setOperatorStatus("Operator control boundary is unavailable.", "negative");
   };
   window.confirmCloseAll = function(){
-    requestOperatorConfirmation("Confirm Close All open positions.", () => submitOperatorForm("operatorCloseAllForm", null, "Close All submitted."));
+    if(typeof window.openControlModal === "function"){
+      window.openControlModal("close");
+      return;
+    }
+    setOperatorStatus("Operator control boundary is unavailable.", "negative");
   };
   window.closePosition = function(id, symbol){
-    requestOperatorConfirmation("Confirm close " + (symbol || "position") + ".", () => submitOperatorForm("operatorCloseOneForm", (form) => {
-      form.querySelector('[name="position_id"]').value = id || "";
-      form.querySelector('[name="symbol"]').value = symbol || "";
-    }, "Close Position submitted."));
+    if(typeof window.openSingleCloseById === "function"){
+      window.openSingleCloseById(id, symbol);
+      return;
+    }
+    setOperatorStatus("Operator control boundary is unavailable.", "negative");
   };
   document.addEventListener("click", (event) => {
     const button = event.target.closest(".js-close-position");
@@ -1868,8 +2085,6 @@ def _reference_backend_script(payload: str) -> str:
   };
   qa(".top-tab", desktop).forEach(node => node.addEventListener("click", () => showPage(node.dataset.page)));
   qa(".nav button", mobile).forEach(node => node.addEventListener("click", () => showPage(pageMap[node.textContent.trim().toLowerCase()] || "overview")));
-  qa(".btn.warning", desktop).forEach(node => { if(node.textContent.includes("Pause") || node.textContent.includes("Resume")) node.addEventListener("click", confirmPauseEntries); });
-  qa(".btn.danger", desktop).forEach(node => { if(node.textContent.includes("Close All")) node.addEventListener("click", confirmCloseAll); });
 
   function applyOperatorState(){
     const paused = state.operatorState === "TRADING_PAUSED";
@@ -2590,5 +2805,6 @@ def render_product_dashboard(
         + "</div>\n"
         + forms
         + _reference_backend_script(payload)
+        + _server_boundary_script(raw_state if state_available else "UNKNOWN", operator_command_submit_enabled, state_available)
         + "\n</body>\n</html>"
     )

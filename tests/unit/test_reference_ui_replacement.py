@@ -7,9 +7,11 @@ from triggertrade.dashboard.product_ui import render_product_dashboard
 
 
 def _html(**kwargs) -> str:
+    operator_state = kwargs.pop("operator_state", SimpleNamespace(state="TRADING_ENABLED"))
+    operator_command_submit_enabled = kwargs.pop("operator_command_submit_enabled", True)
     return render_product_dashboard(
-        operator_state=SimpleNamespace(state="TRADING_ENABLED"),
-        operator_command_submit_enabled=True,
+        operator_state=operator_state,
+        operator_command_submit_enabled=operator_command_submit_enabled,
         portfolio={
             "snapshot": {
                 "total_equity": "1000.00",
@@ -269,6 +271,50 @@ def test_backend_wiring_payload_and_visible_controls_are_present_without_token()
     assert "Prototype: Pause Entries" not in html
     assert "onclick=\"action('pause')\"" in html
     assert "onclick=\"action('close')\"" in html
+
+
+def test_final_renderer_restores_operator_server_boundary_controls():
+    html = _html()
+
+    assert 'id="operatorPauseForm"' in html
+    assert 'id="operatorResumeForm"' in html
+    assert 'id="operatorCloseOneForm"' in html
+    assert 'id="operatorCloseAllForm"' in html
+    assert 'id="triggertrade-server-boundaries"' in html
+    assert "window.confirmControlAction" in html
+    assert "serverControlAction" in html
+    assert "originalOpenControlModal" in html
+    assert "form.submit()" in html
+    assert "window.confirmPauseEntries = function()" in html
+    assert "window.confirmCloseAll = function()" in html
+    assert "window.closePosition = function(positionId, symbol)" in html
+    assert "New entries will be paused. Existing positions remain active and continue to be managed." in html
+    assert "This will request closure of this position only." in html
+
+
+def test_final_renderer_close_all_requires_typed_confirmation():
+    html = _html()
+
+    assert "Close All?" in html
+    assert "Emergency portfolio action" in html
+    assert "This will request closure of every currently open position. This action affects the whole portfolio." in html
+    assert "Type CLOSE ALL to confirm" in html
+    assert 'value="CLOSE ALL"' in html
+    assert 'input.value !== "CLOSE ALL"' in html
+    assert 'confirm("Close all open positions?")' not in html
+
+
+def test_final_renderer_operator_labels_are_state_aware_and_disabled_path_blocks_submission():
+    enabled_html = _html(operator_state=SimpleNamespace(state="TRADING_ENABLED"))
+    paused_html = _html(operator_state=SimpleNamespace(state="TRADING_PAUSED"))
+    disabled_html = _html(operator_command_submit_enabled=False)
+
+    assert "Pause Entries" in enabled_html
+    assert "Resume Entries" in paused_html
+    assert "New entries will be resumed. Existing positions remain active and continue to be managed." in paused_html
+    assert "const canSubmitOperatorControl = true;" in enabled_html
+    assert "const canSubmitOperatorControl = false;" in disabled_html
+    assert "Operator command submission is unavailable." in disabled_html
 
 
 def test_research_reference_actions_are_backend_wired_without_fixture_values():

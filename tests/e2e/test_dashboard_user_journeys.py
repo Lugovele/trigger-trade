@@ -134,7 +134,8 @@ def test_e2e_overview_tabs_filters_periods_and_operator_feedback(dashboard_base_
         )
         assert "execution bridge is not attached" in desktop.locator("#operatorCommandStatus").inner_text()
 
-        desktop.locator("button", has_text="Close All").click()
+        desktop.locator(".positions-actions .btn.danger", has_text="Close All").click()
+        desktop.locator("#confirmInput").fill("CLOSE ALL")
         with page.expect_response(lambda response: response.url.endswith("/operator/close-all") and response.status == 503):
             desktop.locator(".js-confirm-operator-command").click()
         page.wait_for_function(

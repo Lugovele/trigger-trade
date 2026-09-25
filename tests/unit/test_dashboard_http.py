@@ -130,7 +130,10 @@ def test_operator_controls_are_protected_frontend_boundaries():
 
     assert "Pause Entries" in html
     assert "Close All" in html
-    assert "Confirm pause new entries." in html
+    assert 'id="triggertrade-server-boundaries"' in html
+    assert "New entries will be paused. Existing positions remain active and continue to be managed." in html
+    assert "Type CLOSE ALL to confirm" in html
+    assert "Confirm pause new entries." not in html
     assert "operatorCommandStatus" in html
     assert 'id="operatorPauseForm"' in html
     assert 'action="/operator/pause"' in html
