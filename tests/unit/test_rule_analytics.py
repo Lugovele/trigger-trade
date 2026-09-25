@@ -41,7 +41,7 @@ def test_candidate_set_references_exact_volume_rule_version_without_active_mutat
     )
     assert active.status is TriggerSetStatus.ACTIVE
     assert spot_candidate.status is TriggerSetStatus.ARCHIVE
-    assert candidate.status is TriggerSetStatus.TESTING
+    assert candidate.status is TriggerSetStatus.ARCHIVE
     assert ("TRG-002", "0.2.0") in candidate.rule_versions
 
 
@@ -77,7 +77,7 @@ def test_bootstrap_adds_new_candidate_version_over_legacy_v1_test(tmp_path):
     assert ("TRG-002", "0.1.0") in spot_candidate.rule_versions
     assert spot_candidate.status is TriggerSetStatus.ARCHIVE
     assert ("TRG-002", "0.2.0") in candidate.rule_versions
-    assert candidate.status is TriggerSetStatus.TESTING
+    assert candidate.status is TriggerSetStatus.ARCHIVE
 
 def test_recommendation_registry_separates_observation_hypothesis_and_experiment(tmp_path):
     store = TriggerSetStore(tmp_path / "rec.sqlite3")

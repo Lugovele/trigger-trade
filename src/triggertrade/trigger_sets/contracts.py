@@ -9,6 +9,16 @@ from typing import Any, Mapping
 
 TRIGGER_REGISTRY_SCHEMA_VERSION = "trigger-definition@1"
 TRIGGER_SET_REGISTRY_SCHEMA_VERSION = "trigger-set-composition@1"
+CURRENT_SELECTABLE_TRIGGER_VERSIONS = frozenset({("TRG-001", "0.2.0")})
+CURRENT_SELECTABLE_TRIGGER_SETS = frozenset({("triggertrade-futures-core", "v1")})
+
+
+def is_current_selectable_trigger(rule_id: str, version: str) -> bool:
+    return (rule_id, version) in CURRENT_SELECTABLE_TRIGGER_VERSIONS
+
+
+def is_current_selectable_trigger_set(set_id: str, version: str) -> bool:
+    return (set_id, version) in CURRENT_SELECTABLE_TRIGGER_SETS
 
 
 class Lane(StrEnum):

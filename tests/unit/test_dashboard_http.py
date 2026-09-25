@@ -531,9 +531,27 @@ def test_dashboard_routes_render_bootstrapped_registry_under_new_ia():
         sets_html = sets.read().decode("utf-8")
         assert sets.status == 200
         assert "triggertrade-futures-core" in sets_html
-        assert "triggertrade-futures-candidate" in sets_html
         assert "TRG-001" in sets_html
-        assert "TRG-002" in sets_html
+        assert "triggertrade-futures-candidate" not in sets_html
+        assert "TRG-002" not in sets_html
+
+        conn.request("GET", "/set/triggertrade-core/v1")
+        historical_set = conn.getresponse()
+        historical_html = historical_set.read().decode("utf-8")
+        assert historical_set.status == 200
+        assert '"selected_set"' in historical_html
+        assert '"set_id": "triggertrade-core"' in historical_html
+        assert '"version": "v1"' in historical_html
+        assert "TRG-001" in historical_html
+
+        conn.request("GET", "/set/triggertrade-futures-candidate/v2-test")
+        prototype_set = conn.getresponse()
+        prototype_html = prototype_set.read().decode("utf-8")
+        assert prototype_set.status == 200
+        assert '"selected_set"' in prototype_html
+        assert '"set_id": "triggertrade-futures-candidate"' in prototype_html
+        assert '"version": "v2-test"' in prototype_html
+        assert "TRG-002" in prototype_html
     finally:
         server.shutdown()
         server.server_close()

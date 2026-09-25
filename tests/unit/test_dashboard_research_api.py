@@ -391,13 +391,13 @@ def test_research_dashboard_uses_postgres_registry_for_set_and_rules_choices(tmp
     current = rules.get_current_rules_version()
     registry = _FakeResearchConfigRegistry(
         trigger_set=TriggerSetVersion(
-            set_id="pg-canonical-set",
-            version="v42",
-            purpose="Research candidate",
-            status=TriggerSetStatus.TESTING,
+            set_id="triggertrade-futures-core",
+            version="v1",
+            purpose="Current futures set",
+            status=TriggerSetStatus.ACTIVE,
             symbol="BTCUSDT",
             timeframe="1m",
-            rule_versions=(("TRG-001", "0.1.0"),),
+            rule_versions=(("TRG-001", "0.2.0"),),
             strategy_version="strategy-v1",
             risk_profile_version="risk-v1",
             config_snapshot={},
@@ -413,10 +413,10 @@ def test_research_dashboard_uses_postgres_registry_for_set_and_rules_choices(tmp
         research_config_registry=registry,
     )
 
-    assert '"set_id": "pg-canonical-set"' in html
-    assert '"version": "v42"' in html
+    assert '"set_id": "triggertrade-futures-core"' in html
+    assert '"version": "v1"' in html
     assert current.rules_version_id in html
-    assert "triggertrade-futures-core" not in html
+    assert "triggertrade-futures-candidate" not in html
 
 
 def test_research_api_uses_postgres_registry_for_list_and_detail(tmp_path):

@@ -15,6 +15,7 @@ from triggertrade.governance import EvidenceCapability, GovernanceEvidence, Gove
 from triggertrade.persistence import DailyLossStore, InstrumentCatalogStore, TradingRulesStore
 from triggertrade.persistence.futures_accounting_store import FuturesAccountingStore
 from triggertrade.services.daily_loss import read_only_daily_loss_state
+from triggertrade.trigger_sets import CURRENT_SELECTABLE_TRIGGER_SETS, CURRENT_SELECTABLE_TRIGGER_VERSIONS
 
 
 @dataclass(frozen=True)
@@ -1161,12 +1162,22 @@ class DashboardReadModel:
     def get_test_overview(self) -> OverviewView:
         return self._overview("TEST")
 
-    def list_set_summaries(self, *, limit: int | None = None) -> tuple[SetSummaryView, ...]:
+    def list_set_summaries(self, *, limit: int | None = None, selectable_only: bool = True) -> tuple[SetSummaryView, ...]:
         if not self.db_path.exists():
             return ()
         safe_limit = None if limit is None else max(1, min(int(limit), 500))
         limit_clause = "" if safe_limit is None else " LIMIT ?"
-        params = () if safe_limit is None else (safe_limit,)
+        where_clause = ""
+        params_list: list[object] = []
+        if selectable_only:
+            set_clauses = []
+            for set_id, version in sorted(CURRENT_SELECTABLE_TRIGGER_SETS):
+                set_clauses.append("(set_id = ? AND version = ?)")
+                params_list.extend((set_id, version))
+            where_clause = "WHERE " + " OR ".join(set_clauses) if set_clauses else "WHERE 1 = 0"
+        if safe_limit is not None:
+            params_list.append(safe_limit)
+        params = tuple(params_list)
         try:
             with self._connect() as conn:
                 if not _registry_tables_present(conn):
@@ -1176,6 +1187,7 @@ class DashboardReadModel:
                     """
                     SELECT set_id, version, purpose, status, symbol, timeframe, created_at
                     FROM trigger_set_versions
+                    """ + where_clause + """
                     ORDER BY
                       CASE status
                         WHEN 'ACTIVE' THEN 0
@@ -1210,12 +1222,22 @@ class DashboardReadModel:
         except sqlite3.Error:
             return ()
 
-    def list_trigger_catalog(self, *, limit: int | None = None) -> tuple[TriggerCatalogRow, ...]:
+    def list_trigger_catalog(self, *, limit: int | None = None, selectable_only: bool = True) -> tuple[TriggerCatalogRow, ...]:
         if not self.db_path.exists():
             return ()
         safe_limit = None if limit is None else max(1, min(int(limit), 500))
         limit_clause = "" if safe_limit is None else " LIMIT ?"
-        params = () if safe_limit is None else (safe_limit,)
+        selectable_clause = ""
+        params_list: list[object] = []
+        if selectable_only:
+            trigger_clauses = []
+            for rule_id, version in sorted(CURRENT_SELECTABLE_TRIGGER_VERSIONS):
+                trigger_clauses.append("(rule_id = ? AND version = ?)")
+                params_list.extend((rule_id, version))
+            selectable_clause = " AND (" + " OR ".join(trigger_clauses) + ")" if trigger_clauses else " AND 1 = 0"
+        if safe_limit is not None:
+            params_list.append(safe_limit)
+        params = tuple(params_list)
         try:
             with self._connect() as conn:
                 if not _registry_tables_present(conn):
@@ -1225,6 +1247,7 @@ class DashboardReadModel:
                     SELECT rule_id, version, name, condition, created_at
                     FROM rule_definitions
                     WHERE rule_type = 'trigger'
+                    """ + selectable_clause + """
                     ORDER BY rule_id, version
                     """ + limit_clause,
                     params,

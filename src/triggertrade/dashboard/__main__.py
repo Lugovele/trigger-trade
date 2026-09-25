@@ -56,6 +56,7 @@ from triggertrade.services.operator_auth import (
 from triggertrade.services.operator_execution_bridge import DashboardOperatorExecutionBridge
 from triggertrade.services.research import ResearchDemoIsolation, ResearchService, ResearchServiceError
 from triggertrade.services.research_demo_execution import PostgresResearchDemoExecutionHandoff
+from triggertrade.trigger_sets import is_current_selectable_trigger_set
 
 
 DEFAULT_HOST = "127.0.0.1"
@@ -259,6 +260,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._send_html(
                 render_dashboard(
                     self.server.read_model,
+                    selected_set=f"{set_id}|{version}",
                     initial_page="sets",
                     research_config_registry=self.server.research_config_registry,
                 )
@@ -736,8 +738,10 @@ def render_dashboard(
     except DashboardRegistryUnavailable as exc:
         registry_error = str(exc)
         registry_set_summaries = ()
+    selected_set_view = _selected_set_summary(read_model, selected_set)
     registry = {
         "sets": registry_set_summaries if research_config_registry is not None else read_model.list_set_summaries(),
+        "selected_set": selected_set_view,
         "triggers": read_model.list_trigger_catalog(),
         "selected_trigger": read_model.get_trigger_detail(selected_trigger_id, selected_trigger_version)
         if selected_trigger_id
@@ -789,7 +793,7 @@ def render_dashboard(
     )
 
 
-def _registry_set_summaries(registry) -> tuple[SetSummaryView, ...]:
+def _registry_set_summaries(registry, *, selectable_only: bool = True) -> tuple[SetSummaryView, ...]:
     if registry is None or not callable(getattr(registry, "list_trigger_set_versions", None)):
         return ()
     try:
@@ -798,6 +802,8 @@ def _registry_set_summaries(registry) -> tuple[SetSummaryView, ...]:
         raise DashboardRegistryUnavailable("PostgreSQL Research configuration registry unavailable") from exc
     summaries: list[SetSummaryView] = []
     for version in versions:
+        if selectable_only and not is_current_selectable_trigger_set(version.set_id, version.version):
+            continue
         summaries.append(
             SetSummaryView(
                 set_id=version.set_id,
@@ -821,6 +827,41 @@ def _registry_set_summaries(registry) -> tuple[SetSummaryView, ...]:
             )
         )
     return tuple(summaries)
+
+
+def _selected_set_summary(read_model: DashboardReadModel, selected_set: str) -> SetSummaryView | None:
+    if not selected_set:
+        return None
+    if "|" in selected_set:
+        set_id, version = selected_set.split("|", 1)
+    elif "@" in selected_set:
+        set_id, version = selected_set.rsplit("@", 1)
+    else:
+        return None
+    row = read_model.get_trigger_set(set_id, version)
+    if row is None:
+        return None
+    return SetSummaryView(
+        set_id=row.set_id,
+        display_name=row.set_id,
+        version=row.version,
+        status=row.status,
+        trigger_versions=tuple(
+            TriggerSetMembershipView(
+                trigger_id=str(rule.get("rule_id") or ""),
+                display_name=str(rule.get("name") or rule.get("rule_id") or ""),
+                version=str(rule.get("version") or ""),
+            )
+            for rule in row.rules
+            if str(rule.get("rule_id") or "").startswith("TRG-")
+        ),
+        created_at=row.created_at,
+        updated_at=None,
+        is_active=row.status == "ACTIVE",
+        symbol=row.symbol,
+        timeframe=row.timeframe,
+        integrity_errors=(),
+    )
 
 
 def _registry_rules_versions(registry):

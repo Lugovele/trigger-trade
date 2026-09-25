@@ -786,6 +786,13 @@ def bootstrap_current_trigger_sets(store: TriggerSetStore, *, created_at: str = 
     reports.append(store.sync_trigger_sets((current_futures_active_trigger_set(created_at=created_at), current_futures_testing_trigger_set(created_at=created_at))))
     for report in reports:
         _raise_on_sync_failure(report)
+    store.transition_status(
+        set_id="triggertrade-futures-candidate",
+        version="v2-test",
+        status=TriggerSetStatus.ARCHIVE,
+        changed_at=created_at,
+        reason="retained for exact replay/history; removed from current selectable production configuration",
+    )
     store.save_recommendation(current_volume_recommendation(created_at=created_at))
     return _merge_reports(tuple(reports))
 
@@ -1019,7 +1026,7 @@ def current_futures_testing_trigger_set(*, created_at: str) -> TriggerSetVersion
         set_id="triggertrade-futures-candidate",
         version="v2-test",
         purpose="Forward-test futures baseline plus linear TRG-VOLUME confirmation",
-        status=TriggerSetStatus.TESTING,
+        status=TriggerSetStatus.ARCHIVE,
         symbol="BTCUSDT",
         timeframe="1m",
         rule_versions=(

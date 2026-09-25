@@ -1,8 +1,10 @@
 ﻿from decimal import Decimal
 from datetime import UTC, datetime
 import sqlite3
+from types import SimpleNamespace
 
 from triggertrade.accounting import calculate_drawdown_snapshot
+from triggertrade.dashboard.__main__ import _registry_set_summaries
 from triggertrade.dashboard.read_model import DashboardReadModel
 from triggertrade.execution import OrderStatus, OrderType, RiskDecision, Side, TradeIntent
 from triggertrade.execution.service import client_order_id_for_intent
@@ -13,6 +15,7 @@ from triggertrade.persistence import (
     ExecutionStore,
     RuntimeCheckpoint,
     LaneCandleLifecycle,
+    ResearchStore,
     RuntimeStore,
     TraceStore,
     TriggerSetStore,
@@ -21,6 +24,7 @@ from triggertrade.persistence import (
 from triggertrade.persistence.futures_accounting_store import FuturesAccountingStore
 from triggertrade.persistence.futures_position_store import FuturesClosedPositionRecord, FuturesPositionRecord, FuturesPositionStore
 from triggertrade.persistence.operator_state_store import OperatorStateStore
+from triggertrade.trigger_sets import TriggerSetStatus, TriggerSetVersion
 from triggertrade.triggers import Signal, SignalType
 
 
@@ -456,9 +460,26 @@ def test_set_summaries_are_backend_backed_with_exact_trigger_versions(tmp_path):
     model = DashboardReadModel(db)
 
     sets = model.list_set_summaries()
+    identities = {(row.set_id, row.version) for row in sets}
+    all_sets = model.list_set_summaries(selectable_only=False)
+    all_identities = {(row.set_id, row.version) for row in all_sets}
     futures_active = next(row for row in sets if row.set_id == "triggertrade-futures-core" and row.version == "v1")
-    futures_candidate = next(row for row in sets if row.set_id == "triggertrade-futures-candidate" and row.version == "v2-test")
+    futures_candidate = next(
+        row for row in all_sets if row.set_id == "triggertrade-futures-candidate" and row.version == "v2-test"
+    )
 
+    assert identities == {("triggertrade-futures-core", "v1")}
+    assert {
+        ("triggertrade-core", "v1"),
+        ("triggertrade-core-candidate", "v2-test"),
+        ("triggertrade-futures-candidate", "v2-test"),
+    }.isdisjoint(identities)
+    assert {
+        ("triggertrade-core", "v1"),
+        ("triggertrade-core-candidate", "v2-test"),
+        ("triggertrade-futures-core", "v1"),
+        ("triggertrade-futures-candidate", "v2-test"),
+    } <= all_identities
     assert sets[0].status == "ACTIVE"
     assert futures_active.is_active is True
     assert tuple((row.trigger_id, row.display_name, row.version) for row in futures_active.trigger_versions) == (
@@ -466,6 +487,9 @@ def test_set_summaries_are_backend_backed_with_exact_trigger_versions(tmp_path):
     )
     assert ("TRG-002", "0.2.0") in tuple((row.trigger_id, row.version) for row in futures_candidate.trigger_versions)
     assert ("TRG-002", "0.1.0") not in tuple((row.trigger_id, row.version) for row in futures_candidate.trigger_versions)
+    assert model.get_trigger_set("triggertrade-core", "v1") is not None
+    assert model.get_trigger_set("triggertrade-core-candidate", "v2-test") is not None
+    assert model.get_trigger_set("triggertrade-futures-candidate", "v2-test") is not None
     assert not futures_active.integrity_errors
 
 
@@ -476,16 +500,29 @@ def test_trigger_catalog_and_detail_are_exact_trigger_only_read_models(tmp_path)
 
     catalog = model.list_trigger_catalog()
     identities = {(row.trigger_id, row.version) for row in catalog}
+    all_catalog = model.list_trigger_catalog(selectable_only=False)
+    all_identities = {(row.trigger_id, row.version) for row in all_catalog}
+    detail_active_historical = model.get_trigger_detail("TRG-001", "0.1.0")
     detail_spot = model.get_trigger_detail("TRG-002", "0.1.0")
     detail_futures = model.get_trigger_detail("TRG-002", "0.2.0")
 
-    assert ("TRG-001", "0.1.0") in identities
-    assert ("TRG-001", "0.2.0") in identities
-    assert ("TRG-002", "0.1.0") in identities
-    assert ("TRG-002", "0.2.0") in identities
+    assert identities == {("TRG-001", "0.2.0")}
+    assert {
+        ("TRG-001", "0.1.0"),
+        ("TRG-002", "0.1.0"),
+        ("TRG-002", "0.2.0"),
+    }.isdisjoint(identities)
+    assert {
+        ("TRG-001", "0.1.0"),
+        ("TRG-001", "0.2.0"),
+        ("TRG-002", "0.1.0"),
+        ("TRG-002", "0.2.0"),
+    } <= all_identities
     assert all(not row.trigger_id.startswith("STR-") and not row.trigger_id.startswith("RSK-") for row in catalog)
+    assert detail_active_historical is not None
     assert detail_spot is not None
     assert detail_futures is not None
+    assert detail_active_historical.version == "0.1.0"
     assert detail_spot.version == "0.1.0"
     assert detail_futures.version == "0.2.0"
     assert detail_spot.used_in[0]["set_id"] == "triggertrade-core-candidate"
@@ -500,6 +537,82 @@ def test_trigger_detail_missing_exact_version_does_not_fall_back_to_latest(tmp_p
     bootstrap_current_trigger_sets(TriggerSetStore(db), created_at="2026-09-05T00:00:00+00:00")
 
     assert DashboardReadModel(db).get_trigger_detail("TRG-002", "9.9.9") is None
+
+
+def test_research_pins_resolve_historical_sets_without_selectability(tmp_path):
+    db = tmp_path / "read_model.sqlite3"
+    bootstrap_current_trigger_sets(TriggerSetStore(db), created_at="2026-09-05T00:00:00+00:00")
+    research, _created = ResearchStore(db).create_research(
+        set_id="triggertrade-core-candidate",
+        set_version="v2-test",
+        rules_version_id="rules-v1",
+        rules_display_version="v1",
+        created_source="unit",
+        created_at="2026-09-05T00:01:00+00:00",
+    )
+    model = DashboardReadModel(db)
+
+    assert ("triggertrade-core-candidate", "v2-test") not in {
+        (row.set_id, row.version) for row in model.list_set_summaries()
+    }
+    assert model.get_trigger_set(research.set_id, research.set_version) is not None
+    assert model.get_trigger_detail("TRG-001", "0.1.0") is not None
+    assert model.get_trigger_detail("TRG-002", "0.1.0") is not None
+    assert ResearchStore(db).get_research(research.research_id).set_id == "triggertrade-core-candidate"
+
+
+def test_postgres_registry_set_summaries_filter_to_current_selectable_sets():
+    versions = (
+        TriggerSetVersion(
+            set_id="triggertrade-core",
+            version="v1",
+            purpose="Historical spot set",
+            status=TriggerSetStatus.ARCHIVE,
+            symbol="BTCUSDT",
+            timeframe="1m",
+            rule_versions=(("TRG-001", "0.1.0"),),
+            strategy_version="STR-001@0.1.0",
+            risk_profile_version="RSK-PAPER-001@0.1.0",
+            config_snapshot={},
+            created_at="2026-09-05T00:00:00+00:00",
+            provenance="unit",
+        ),
+        TriggerSetVersion(
+            set_id="triggertrade-futures-core",
+            version="v1",
+            purpose="Current futures set",
+            status=TriggerSetStatus.ACTIVE,
+            symbol="BTCUSDT",
+            timeframe="1m",
+            rule_versions=(("TRG-001", "0.2.0"),),
+            strategy_version="STR-FUT-001@0.1.0",
+            risk_profile_version="RSK-FUTURES-001@0.1.0",
+            config_snapshot={},
+            created_at="2026-09-05T00:00:00+00:00",
+            provenance="unit",
+        ),
+        TriggerSetVersion(
+            set_id="triggertrade-futures-candidate",
+            version="v2-test",
+            purpose="Prototype futures candidate",
+            status=TriggerSetStatus.ARCHIVE,
+            symbol="BTCUSDT",
+            timeframe="1m",
+            rule_versions=(("TRG-001", "0.2.0"), ("TRG-002", "0.2.0")),
+            strategy_version="STR-FUT-001@0.1.0",
+            risk_profile_version="RSK-FUTURES-001@0.1.0",
+            config_snapshot={},
+            created_at="2026-09-05T00:00:00+00:00",
+            provenance="unit",
+        ),
+    )
+    registry = SimpleNamespace(list_trigger_set_versions=lambda: versions)
+
+    selectable = _registry_set_summaries(registry)
+    all_versions = _registry_set_summaries(registry, selectable_only=False)
+
+    assert {(row.set_id, row.version) for row in selectable} == {("triggertrade-futures-core", "v1")}
+    assert ("triggertrade-futures-candidate", "v2-test") in {(row.set_id, row.version) for row in all_versions}
 
 
 def test_registry_integrity_reports_multiple_active_without_silent_winner(tmp_path):
@@ -536,7 +649,7 @@ def test_registry_integrity_reports_multiple_active_without_silent_winner(tmp_pa
             (("set-a", "v1", "first", "a"), ("set-b", "v1", "second", "b")),
         )
 
-    rows = DashboardReadModel(db).list_set_summaries()
+    rows = DashboardReadModel(db).list_set_summaries(selectable_only=False)
 
     assert rows
     assert rows[0].integrity_errors == ("multiple ACTIVE trigger sets for BTCUSDT 1m: 2",)

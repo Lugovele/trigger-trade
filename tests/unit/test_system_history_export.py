@@ -288,12 +288,14 @@ def test_system_history_export_requests_bounded_registry_and_rules_reads():
         def list_recent_activity(self, *, limit=None):
             return ()
 
-        def list_set_summaries(self, *, limit=None):
+        def list_set_summaries(self, *, limit=None, selectable_only=True):
             assert limit == 13
+            assert selectable_only is False
             return ()
 
-        def list_trigger_catalog(self, *, limit=None):
+        def list_trigger_catalog(self, *, limit=None, selectable_only=True):
             assert limit == 21
+            assert selectable_only is False
             return ()
 
         def get_current_rules_version_payload(self):

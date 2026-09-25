@@ -1,6 +1,8 @@
 """Versioned Trigger Set domain model."""
 
 from .contracts import (
+    CURRENT_SELECTABLE_TRIGGER_SETS,
+    CURRENT_SELECTABLE_TRIGGER_VERSIONS,
     TRIGGER_REGISTRY_SCHEMA_VERSION,
     TRIGGER_SET_REGISTRY_SCHEMA_VERSION,
     Lane,
@@ -14,9 +16,13 @@ from .contracts import (
     TriggerSetStatus,
     TriggerSetVersion,
     TriggerVersion,
+    is_current_selectable_trigger,
+    is_current_selectable_trigger_set,
 )
 
 __all__ = [
+    "CURRENT_SELECTABLE_TRIGGER_SETS",
+    "CURRENT_SELECTABLE_TRIGGER_VERSIONS",
     "Lane",
     "Recommendation",
     "RegistrySyncReport",
@@ -30,4 +36,6 @@ __all__ = [
     "TriggerSetStatus",
     "TriggerSetVersion",
     "TriggerVersion",
+    "is_current_selectable_trigger",
+    "is_current_selectable_trigger_set",
 ]

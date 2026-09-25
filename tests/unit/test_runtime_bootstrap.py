@@ -124,7 +124,7 @@ def test_empty_runtime_db_bootstraps_canonical_registries_without_fake_evidence(
     assert model.get_rule_detail("CTX-REGIME", "0.1.0").rule["rule_type"] == "context"
     assert model.get_live_overview().rule_set == "v1"
     assert model.get_live_overview().rules_count == 4
-    assert model.get_test_overview().rule_set == "v2-test"
+    assert model.get_test_overview().rule_set == "-"
     assert model.list_set_performance() == ()
     assert _counts(db)["lane_lifecycles"] == 0
 
@@ -200,7 +200,7 @@ def test_legacy_runtime_history_survives_registry_bootstrap(tmp_path):
     assert RuntimeStore(db).get_lifecycle("BTCUSDT:1m:2026-09-05T12:00:00+00:00") is not None
     assert TriggerSetStore(db).get_active_set("BTCUSDT", "1m").version == "v1"
     assert TriggerSetStore(db).get_set("triggertrade-core-candidate", "v2-test").status is TriggerSetStatus.ARCHIVE
-    assert TriggerSetStore(db).get_set("triggertrade-futures-candidate", "v2-test").status is TriggerSetStatus.TESTING
+    assert TriggerSetStore(db).get_set("triggertrade-futures-candidate", "v2-test").status is TriggerSetStatus.ARCHIVE
 
 
 def test_configured_bootstrap_uses_env_file_and_process_env_precedence(tmp_path):

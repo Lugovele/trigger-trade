@@ -90,8 +90,8 @@ class SystemHistoryExporter:
         return lines
 
     def _sets_and_triggers_lines(self) -> list[str]:
-        sets = _call(self.read_model, "list_set_summaries", limit=EXPORT_LIMITS["trigger_sets"] + 1) or ()
-        triggers = _call(self.read_model, "list_trigger_catalog", limit=EXPORT_LIMITS["triggers"] + 1) or ()
+        sets = _call(self.read_model, "list_set_summaries", limit=EXPORT_LIMITS["trigger_sets"] + 1, selectable_only=False) or ()
+        triggers = _call(self.read_model, "list_trigger_catalog", limit=EXPORT_LIMITS["triggers"] + 1, selectable_only=False) or ()
         lines: list[str] = []
         lines.extend(_row_lines("trigger_set", sets, EXPORT_LIMITS["trigger_sets"]))
         lines.extend(_row_lines("trigger", triggers, EXPORT_LIMITS["triggers"]))

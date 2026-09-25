@@ -2411,7 +2411,7 @@ def _reference_backend_script(payload: str) -> str:
     if(rows[0]) window.showSet(rows[0].set_id, rows[0].version);
   }
   window.showSet = function(id, version){
-    const s = (state.registry.sets || []).find(x => x.set_id === id && x.version === version);
+    const s = (state.registry.selected_set && state.registry.selected_set.set_id === id && state.registry.selected_set.version === version) ? state.registry.selected_set : (state.registry.sets || []).find(x => x.set_id === id && x.version === version);
     const members = (s?.trigger_versions || s?.rules || []).map(x => ({trigger_id:x.trigger_id || x.rule_id, version:x.version || x.rule_version, display_name:x.display_name || x.name, condition:x.condition}));
     const detail = q("#set-details", desktop) || q("#setDetail", desktop);
     const triggerLinks = members.map(t => `<button class="reference-link js-open-trigger" data-trigger-id="${h(t.trigger_id)}" data-trigger-version="${h(t.version)}">${h(t.trigger_id)} ${h(t.version)}</button>`).join(" ");
@@ -2852,6 +2852,9 @@ def _reference_backend_script(payload: str) -> str:
   if(initialPage === "research-detail"){
     if(initialResearchId) window.openResearchById(initialResearchId, {preserveUrl:true});
     else showResearchUnavailable("Research record unavailable.");
+  }else if(initialPage === "sets" && state.registry.selected_set){
+    showPage(initialPage);
+    window.showSet(state.registry.selected_set.set_id, state.registry.selected_set.version);
   }else{
     showPage(initialPage);
   }
