@@ -80,6 +80,7 @@ jobs:
             --tag "${IMAGE}" \
             .
 
+          echo "IMAGE_TAG=${IMAGE_TAG}" >> "$GITHUB_ENV"
           echo "IMAGE=${IMAGE}" >> "$GITHUB_ENV"
 
       - name: Push Docker image
@@ -95,10 +96,15 @@ jobs:
         run: |
           set -euo pipefail
 
-          DIGEST="$(docker buildx imagetools inspect "$IMAGE" --format '{{.Digest}}')"
-          if [[ -z "$DIGEST" ]]; then
+          DIGEST="$(az acr manifest show-metadata \
+            --registry triggertradeacr \
+            --name "${ACR_REPOSITORY}:${IMAGE_TAG}" \
+            --query digest \
+            -o tsv)"
+          DIGEST_LINE_COUNT="$(printf '%s\n' "$DIGEST" | wc -l | tr -d ' ')"
+
+          if [[ -z "$DIGEST" || "$DIGEST_LINE_COUNT" != "1" || "$DIGEST" != sha256:* ]]; then
             echo "Unable to resolve pushed image digest for $IMAGE" >&2
-            docker buildx imagetools inspect "$IMAGE"
             exit 1
           fi
 

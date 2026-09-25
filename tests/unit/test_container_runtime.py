@@ -60,10 +60,16 @@ def test_github_workflow_has_cloud_build_only_mode_before_deploy():
     assert "triggertradeacr-dcfmhtd6fmaubtac.azurecr.io" in workflow
     assert "ACR_REPOSITORY: triggertrade-web" in workflow
     assert 'IMAGE_TAG="${GITHUB_SHA}"' in workflow
+    assert 'echo "IMAGE_TAG=${IMAGE_TAG}" >> "$GITHUB_ENV"' in workflow
     assert "docker build" in workflow
     assert "docker push" in workflow
-    assert "docker buildx imagetools inspect" in workflow
-    assert '--format \'{{.Digest}}\'' in workflow
+    assert "az acr manifest show-metadata" in workflow
+    assert '--name "${ACR_REPOSITORY}:${IMAGE_TAG}"' in workflow
+    assert "--query digest" in workflow
+    assert "DIGEST_LINE_COUNT" in workflow
+    assert "sha256:*" in workflow
+    assert "docker buildx imagetools inspect" not in workflow
+    assert "{{.Digest}}" not in workflow
     assert "Build-only mode complete" in workflow
     assert "Container Apps were not modified" in workflow
     assert "if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.deploy != 'true' }}" in workflow
