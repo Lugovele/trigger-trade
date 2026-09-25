@@ -39,6 +39,7 @@ from triggertrade.persistence import (
     TriggerSetStore,
     bootstrap_current_trigger_sets,
     current_futures_active_trigger_set,
+    current_futures_testing_trigger_set,
     InstrumentCatalogStore,
 )
 from triggertrade.persistence.futures_accounting_store import FuturesAccountingStore
@@ -51,7 +52,7 @@ from triggertrade.rules import DirectionMode, TakeProfitMode, TradingRulesServic
 from triggertrade.services.runtime import LEGACY_DEMO_FUTURES_RUNTIME_OPT_IN, RuntimeCycleResult, build_legacy_demo_futures_runtime_from_env
 from triggertrade.execution.position_lifecycle import PositionStatus, futures_position_id
 from triggertrade.strategies import IntegrationDirectionalFuturesStrategy
-from triggertrade.trigger_sets import Lane
+from triggertrade.trigger_sets import Lane, TriggerSetStatus
 from triggertrade.triggers import Signal, SignalType
 
 
@@ -59,7 +60,7 @@ def test_runtime_uses_one_linear_market_stream_for_active_and_test(tmp_path):
     client = LinearOnlyMarketClient()
     adapter = RecordingFuturesAdapter(order_status="New")
 
-    result = _runtime(tmp_path, client=client, active_adapter=adapter).process_once()
+    result = _runtime(tmp_path, client=client, active_adapter=adapter, with_test_lane=True).process_once()
 
     assert result.candle_id.endswith("2026-09-05T13:09:00+00:00")
     assert client.linear_instrument_calls == 1
@@ -73,7 +74,12 @@ def test_runtime_uses_one_linear_market_stream_for_active_and_test(tmp_path):
 def test_uncertified_active_formula_execution_is_fenced_by_default(tmp_path):
     adapter = RecordingFuturesAdapter(order_status="New")
 
-    result = _runtime(tmp_path, active_adapter=adapter, allow_uncertified_active_formula_execution=False).process_once()
+    result = _runtime(
+        tmp_path,
+        active_adapter=adapter,
+        allow_uncertified_active_formula_execution=False,
+        with_test_lane=True,
+    ).process_once()
 
     assert result.active[0].skipped_reason == FORMULA_CERTIFICATION_REQUIRED_REASON
     assert result.active[0].execution_status is None
@@ -1075,7 +1081,9 @@ def test_runtime_pins_current_trading_rules_version_and_resolved_snapshot(tmp_pa
 def test_runtime_new_active_entries_use_promoted_research_set_and_rules_pair(tmp_path):
     path = tmp_path / "runtime.sqlite3"
     config = load_config(_env(path))
-    bootstrap_current_trigger_sets(TriggerSetStore(path))
+    trigger_sets = TriggerSetStore(path)
+    bootstrap_current_trigger_sets(trigger_sets)
+    _create_runtime_test_lane(trigger_sets, set_id="unit-runtime-candidate", version="v1-test")
     rules = TradingRulesService(TradingRulesStore(path))
     original = rules.ensure_initial_version(config)
     candidate_rules = rules.create_rules_version_from_current(
@@ -1095,8 +1103,8 @@ def test_runtime_new_active_entries_use_promoted_research_set_and_rules_pair(tmp
         promotion_governance_store=_FakePromotionGovernanceStore(),
     )
     research = research_service.create_research(
-        set_id="triggertrade-futures-candidate",
-        set_version="v2-test",
+        set_id="unit-runtime-candidate",
+        set_version="v1-test",
         rules_version_id=candidate_rules.rules_version_id,
     )
     demo = ResearchStore(path).add_demo_run(
@@ -1124,8 +1132,8 @@ def test_runtime_new_active_entries_use_promoted_research_set_and_rules_pair(tmp
         symbol="BTCUSDT",
         timeframe="1m",
         candle_id=result.candle_id,
-        trigger_set_id="triggertrade-futures-candidate",
-        trigger_set_version="v2-test",
+        trigger_set_id="unit-runtime-candidate",
+        trigger_set_version="v1-test",
     )
     core_active = RuntimeStore(path).get_lane_lifecycle(
         lane="ACTIVE",
@@ -1228,7 +1236,7 @@ def test_runtime_daily_loss_latch_blocks_only_active_new_entries_and_creates_one
     accounting.record_closed_trade(_closed_trade("runtime-test-loss", Decimal("-50"), evidence_source="test_simulation"))
     adapter = RecordingFuturesAdapter(order_status="New")
 
-    result = _runtime(tmp_path, path=path, active_adapter=adapter).process_once()
+    result = _runtime(tmp_path, path=path, active_adapter=adapter, with_test_lane=True).process_once()
     active = RuntimeStore(path).get_lane_lifecycle(
         lane="ACTIVE",
         symbol="BTCUSDT",
@@ -1427,11 +1435,11 @@ def test_test_lane_simulates_source_aware_closed_trade_without_private_order(tmp
     path = tmp_path / "runtime.sqlite3"
     adapter = RecordingFuturesAdapter(order_status="New")
 
-    _runtime(tmp_path, path=path, active_adapter=adapter).process_once()
+    _runtime(tmp_path, path=path, active_adapter=adapter, with_test_lane=True).process_once()
     rows = FuturesAccountingStore(path).list_closed_trades(limit=10)
 
     assert len(rows) == 1
-    assert rows[0]["trigger_set_id"] == "triggertrade-futures-candidate"
+    assert rows[0]["trigger_set_id"] == "unit-runtime-test-set"
     assert rows[0]["evidence_source"] == "test_simulation"
     assert rows[0]["simulation_model_version"] == "test-sim-v1"
     assert adapter.create_calls == 1
@@ -1441,8 +1449,8 @@ def test_same_candle_restart_does_not_duplicate_active_or_test(tmp_path):
     path = tmp_path / "runtime.sqlite3"
     adapter = RecordingFuturesAdapter(order_status="New")
 
-    first = _runtime(tmp_path, path=path, active_adapter=adapter).process_once()
-    second = _runtime(tmp_path, path=path, active_adapter=adapter).process_once()
+    first = _runtime(tmp_path, path=path, active_adapter=adapter, with_test_lane=True).process_once()
+    second = _runtime(tmp_path, path=path, active_adapter=adapter, with_test_lane=True).process_once()
 
     assert second.active[0].skipped_reason == "already_processed"
     assert second.test[0].skipped_reason == "already_processed"
@@ -1453,8 +1461,8 @@ def test_same_candle_restart_does_not_duplicate_active_or_test(tmp_path):
         symbol="BTCUSDT",
         timeframe="1m",
         candle_id=first.candle_id,
-        trigger_set_id="triggertrade-futures-candidate",
-        trigger_set_version="v2-test",
+        trigger_set_id="unit-runtime-test-set",
+        trigger_set_version="v1-test",
     ) == 1
 
 
@@ -1542,6 +1550,7 @@ def test_missing_expected_move_blocks_strategy_before_execution(tmp_path):
         tmp_path,
         active_adapter=adapter,
         demo_expected_gross_move="",
+        with_test_lane=True,
     ).process_once()
 
     assert result.active[0].skipped_reason == "demo_expected_gross_move_unavailable"
@@ -1555,7 +1564,7 @@ def test_operator_pause_blocks_active_but_test_lane_continues(tmp_path):
     operator.pause(changed_at="2026-09-05T13:00:00+00:00", source="unit")
     adapter = RecordingFuturesAdapter(order_status="New")
 
-    result = _runtime(tmp_path, path=path, active_adapter=adapter, operator_store=operator).process_once()
+    result = _runtime(tmp_path, path=path, active_adapter=adapter, operator_store=operator, with_test_lane=True).process_once()
 
     assert result.active[0].skipped_reason == "active_execution_paused"
     assert result.test[0].execution_status == "test_simulated"
@@ -1567,6 +1576,8 @@ def test_legacy_demo_futures_builder_no_longer_forces_local_paper_and_requires_f
     env = _env(tmp_path / "runtime.sqlite3") | {
         "BYBIT_API_KEY": "unit-key",
         "BYBIT_API_SECRET": "unit-secret",
+        "TRIGGERTRADE_BYBIT_ENV": "demo",
+        "BYBIT_BASE_URL": "https://api-demo.bybit.com",
         LEGACY_DEMO_FUTURES_RUNTIME_OPT_IN: "1",
     }
 
@@ -1804,10 +1815,13 @@ def _runtime(
     demo_expected_gross_move="1",
     market="linear",
     allow_uncertified_active_formula_execution=True,
+    with_test_lane=False,
 ):
     db_path = path or (tmp_path / "runtime.sqlite3")
     trigger_sets = TriggerSetStore(db_path)
     bootstrap_current_trigger_sets(trigger_sets)
+    if with_test_lane:
+        _create_runtime_test_lane(trigger_sets)
     config = load_config(_env(db_path, demo_expected_gross_move=demo_expected_gross_move, market=market))
     instrument = _instrument()
     return FuturesDualLaneRuntime(
@@ -1827,6 +1841,25 @@ def _runtime(
         clock=clock or (lambda: datetime(2026, 9, 5, 13, 10, 30, tzinfo=UTC)),
         logger=lambda message: None,
     )
+
+
+def _create_runtime_test_lane(
+    trigger_sets: TriggerSetStore,
+    *,
+    set_id: str = "unit-runtime-test-set",
+    version: str = "v1-test",
+) -> tuple[str, str]:
+    if trigger_sets.get_set(set_id, version) is None:
+        trigger_sets.create_set(
+            replace(
+                current_futures_testing_trigger_set(created_at="2026-09-08T12:00:00+00:00"),
+                set_id=set_id,
+                version=version,
+                status=TriggerSetStatus.TESTING,
+                provenance="unit test synthetic runtime test-lane fixture",
+            )
+        )
+    return set_id, version
 
 
 def _fast_recovery_processor(runtime, processed):

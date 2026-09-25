@@ -38,6 +38,7 @@ from triggertrade.services.research import (
     ResearchService,
     ResearchServiceError,
 )
+from triggertrade.trigger_sets import TriggerSetStatus
 from tests.unit.test_backtest_replay import _config, _instrument, _trade_candles
 from tests.unit.test_futures_performance_analytics import _fill as _accounting_fill
 from triggertrade.accounting import close_futures_trade
@@ -370,6 +371,7 @@ def test_research_demo_safe_isolation_still_requires_canonical_handoff(tmp_path)
 
 def test_research_demo_stop_select_compare_and_make_active_requests_canonical_governance(tmp_path):
     db, rules = _research_db(tmp_path)
+    set_id, set_version = _create_promotable_research_set(db)
     governance = _FakePromotionGovernanceStore()
     service = _service(db, demo_isolation=_safe_demo_isolation(), promotion_governance_store=governance)
     pinned_rules = rules.create_rules_version_from_current(
@@ -379,8 +381,8 @@ def test_research_demo_stop_select_compare_and_make_active_requests_canonical_go
     previous_rules = pinned_rules.created_from_version_id
     _set_current_rules(db, previous_rules)
     research = service.create_research(
-        set_id="triggertrade-futures-candidate",
-        set_version="v2-test",
+        set_id=set_id,
+        set_version=set_version,
         rules_version_id=pinned_rules.rules_version_id,
     )
 
@@ -434,8 +436,8 @@ def test_research_demo_stop_select_compare_and_make_active_requests_canonical_go
         "command_idempotency_key": "promote-main",
     }
     assert governance.requests["research-promotion:promote-main"]["research_promotion_request"]["target"] == {
-        "set_id": "triggertrade-futures-candidate",
-        "set_version": "v2-test",
+        "set_id": set_id,
+        "set_version": set_version,
         "rules_version_id": pinned_rules.rules_version_id,
         "rules_display_version": pinned_rules.version,
         "rules_config_hash": pinned_rules.config_hash,
@@ -450,8 +452,8 @@ def test_research_demo_stop_select_compare_and_make_active_requests_canonical_go
         "RESEARCH_PROMOTION_REQUESTED",
     }.issubset(audit_types)
     requested_audit = TraceStore(db).list_audit_events(limit=10, event_type="RESEARCH_PROMOTION_REQUESTED")[0]
-    assert requested_audit.set_id == "triggertrade-futures-candidate"
-    assert requested_audit.set_version == "v2-test"
+    assert requested_audit.set_id == set_id
+    assert requested_audit.set_version == set_version
     assert requested_audit.rules_version_id == pinned_rules.rules_version_id
     assert requested_audit.safe_metadata["operator_principal"] == "unit-operator"
     assert requested_audit.safe_metadata["command_idempotency_key"] == "promote-main"
@@ -459,11 +461,12 @@ def test_research_demo_stop_select_compare_and_make_active_requests_canonical_go
 
 def test_make_active_requires_operator_command_and_selected_evidence(tmp_path):
     db, rules = _research_db(tmp_path)
+    set_id, set_version = _create_promotable_research_set(db)
     service = _service(db)
     candidate_rules = rules.create_rules_version_from_current(changes={"fixed_take_profit_pct": Decimal("0.026")}, created_source="unit").rules
     research = service.create_research(
-        set_id="triggertrade-futures-candidate",
-        set_version="v2-test",
+        set_id=set_id,
+        set_version=set_version,
         rules_version_id=candidate_rules.rules_version_id,
     )
 
@@ -485,13 +488,14 @@ def test_make_active_requires_operator_command_and_selected_evidence(tmp_path):
 
 def test_make_active_blocks_running_demo_without_changing_pair(tmp_path):
     db, rules = _research_db(tmp_path)
+    set_id, set_version = _create_promotable_research_set(db)
     service = _service(db, demo_isolation=_safe_demo_isolation())
     original_rules = rules.get_current_rules_version()
     new_rules = rules.create_rules_version_from_current(changes={"fixed_take_profit_pct": Decimal("0.018")}, created_source="unit").rules
     _set_current_rules(db, original_rules.rules_version_id)
     research = service.create_research(
-        set_id="triggertrade-futures-candidate",
-        set_version="v2-test",
+        set_id=set_id,
+        set_version=set_version,
         rules_version_id=new_rules.rules_version_id,
     )
     service.start_demo_run(research.research_id, created_at="2026-09-08T12:00:00+00:00")
@@ -521,13 +525,14 @@ def test_make_active_blocks_running_demo_without_changing_pair(tmp_path):
 
 def test_make_active_rolls_back_if_promotion_fails_mid_transaction(tmp_path):
     db, rules = _research_db(tmp_path)
+    set_id, set_version = _create_promotable_research_set(db)
     service = _service(db, legacy_sqlite_promotion_enabled=True)
     original_rules = rules.get_current_rules_version()
     new_rules = rules.create_rules_version_from_current(changes={"fixed_take_profit_pct": Decimal("0.019")}, created_source="unit").rules
     _set_current_rules(db, original_rules.rules_version_id)
     research = service.create_research(
-        set_id="triggertrade-futures-candidate",
-        set_version="v2-test",
+        set_id=set_id,
+        set_version=set_version,
         rules_version_id=new_rules.rules_version_id,
     )
     _select_stopped_demo_evidence(service, research.research_id)
@@ -542,19 +547,20 @@ def test_make_active_rolls_back_if_promotion_fails_mid_transaction(tmp_path):
     assert pair.trigger_set.set_id == "triggertrade-futures-core"
     assert pair.trigger_set.version == "v1"
     assert pair.rules_version.rules_version_id == original_rules.rules_version_id
-    assert TriggerSetStore(db).get_set("triggertrade-futures-candidate", "v2-test").status.value == "TESTING"
+    assert TriggerSetStore(db).get_set(set_id, set_version).status.value == "TESTING"
     assert reloaded.decision is ResearchDecision.NONE
 
 
 def test_make_active_rolls_back_if_set_update_fails_mid_transaction(tmp_path):
     db, rules = _research_db(tmp_path)
+    set_id, set_version = _create_promotable_research_set(db)
     service = _service(db, legacy_sqlite_promotion_enabled=True)
     original_rules = rules.get_current_rules_version()
     candidate_rules = rules.create_rules_version_from_current(changes={"fixed_take_profit_pct": Decimal("0.020")}, created_source="unit").rules
     _set_current_rules(db, original_rules.rules_version_id)
     research = service.create_research(
-        set_id="triggertrade-futures-candidate",
-        set_version="v2-test",
+        set_id=set_id,
+        set_version=set_version,
         rules_version_id=candidate_rules.rules_version_id,
     )
     _select_stopped_demo_evidence(service, research.research_id)
@@ -569,12 +575,13 @@ def test_make_active_rolls_back_if_set_update_fails_mid_transaction(tmp_path):
     assert pair.trigger_set.set_id == "triggertrade-futures-core"
     assert pair.trigger_set.version == "v1"
     assert pair.rules_version.rules_version_id == original_rules.rules_version_id
-    assert TriggerSetStore(db).get_set("triggertrade-futures-candidate", "v2-test").status.value == "TESTING"
+    assert TriggerSetStore(db).get_set(set_id, set_version).status.value == "TESTING"
     assert reloaded.decision is ResearchDecision.NONE
 
 
 def test_make_active_does_not_rewrite_existing_open_positions(tmp_path):
     db, rules = _research_db(tmp_path)
+    set_id, set_version = _create_promotable_research_set(db)
     original_rules = rules.get_current_rules_version()
     position = FuturesPositionRecord(
         position_id="pos-existing",
@@ -615,8 +622,8 @@ def test_make_active_does_not_rewrite_existing_open_positions(tmp_path):
     candidate_rules = rules.create_rules_version_from_current(changes={"fixed_take_profit_pct": Decimal("0.022")}, created_source="unit").rules
     _set_current_rules(db, original_rules.rules_version_id)
     research = _service(db).create_research(
-        set_id="triggertrade-futures-candidate",
-        set_version="v2-test",
+        set_id=set_id,
+        set_version=set_version,
         rules_version_id=candidate_rules.rules_version_id,
     )
     _select_stopped_demo_evidence(_service(db), research.research_id)
@@ -636,6 +643,7 @@ def test_make_active_does_not_rewrite_existing_open_positions(tmp_path):
 
 def test_make_active_survives_restart_and_blocks_unknown_or_unsupported_rules(tmp_path):
     db, rules = _research_db(tmp_path)
+    set_id, set_version = _create_promotable_research_set(db)
     original_rules = rules.get_current_rules_version()
     candidate_rules = rules.create_rules_version_from_current(changes={"fixed_take_profit_pct": Decimal("0.023")}, created_source="unit").rules
     dynamic_rules = rules.create_rules_version_from_current(
@@ -647,14 +655,14 @@ def test_make_active_survives_restart_and_blocks_unknown_or_unsupported_rules(tm
     with pytest.raises(ResearchServiceError, match="research id not found"):
         service.request_make_active("res-unknown", command=_promotion_command("promote-unknown"))
     dynamic_research = service.create_research(
-        set_id="triggertrade-futures-candidate",
-        set_version="v2-test",
+        set_id=set_id,
+        set_version=set_version,
         rules_version_id=dynamic_rules.rules_version_id,
     )
     blocked = service.request_make_active(dynamic_research.research_id, command=_promotion_command("promote-dynamic-blocked"))
     research = service.create_research(
-        set_id="triggertrade-futures-candidate",
-        set_version="v2-test",
+        set_id=set_id,
+        set_version=set_version,
         rules_version_id=candidate_rules.rules_version_id,
     )
     _select_stopped_demo_evidence(service, research.research_id)
@@ -676,12 +684,13 @@ def test_make_active_survives_restart_and_blocks_unknown_or_unsupported_rules(tm
 
 def test_concurrent_make_active_requests_leave_one_coherent_pair(tmp_path):
     db, rules = _research_db(tmp_path)
+    set_id, set_version = _create_promotable_research_set(db)
     original_rules = rules.get_current_rules_version()
     candidate_rules = rules.create_rules_version_from_current(changes={"fixed_take_profit_pct": Decimal("0.021")}, created_source="unit").rules
     _set_current_rules(db, original_rules.rules_version_id)
     research = _service(db).create_research(
-        set_id="triggertrade-futures-candidate",
-        set_version="v2-test",
+        set_id=set_id,
+        set_version=set_version,
         rules_version_id=candidate_rules.rules_version_id,
     )
     _select_stopped_demo_evidence(_service(db), research.research_id)
@@ -708,21 +717,20 @@ def test_concurrent_make_active_requests_leave_one_coherent_pair(tmp_path):
 
 def test_concurrent_different_research_promotions_leave_one_exact_pair(tmp_path):
     db, rules = _research_db(tmp_path)
-    store = TriggerSetStore(db)
-    alt = replace(current_futures_testing_trigger_set(created_at="2026-09-08T12:00:00+00:00"), set_id="triggertrade-futures-alt", version="v3-test")
-    store.create_set(alt)
+    first_set_id, first_set_version = _create_promotable_research_set(db, set_id="unit-research-candidate-a")
+    second_set_id, second_set_version = _create_promotable_research_set(db, set_id="unit-research-candidate-b")
     original_rules = rules.get_current_rules_version()
     first_rules = rules.create_rules_version_from_current(changes={"fixed_take_profit_pct": Decimal("0.024")}, created_source="unit").rules
     second_rules = rules.create_rules_version_from_current(changes={"fixed_take_profit_pct": Decimal("0.025")}, created_source="unit").rules
     _set_current_rules(db, original_rules.rules_version_id)
     first = _service(db).create_research(
-        set_id="triggertrade-futures-candidate",
-        set_version="v2-test",
+        set_id=first_set_id,
+        set_version=first_set_version,
         rules_version_id=first_rules.rules_version_id,
     )
     second = _service(db).create_research(
-        set_id=alt.set_id,
-        set_version=alt.version,
+        set_id=second_set_id,
+        set_version=second_set_version,
         rules_version_id=second_rules.rules_version_id,
     )
     _select_stopped_demo_evidence(_service(db), first.research_id)
@@ -979,6 +987,21 @@ def _research_db(tmp_path):
     rules = TradingRulesService(TradingRulesStore(db))
     rules.ensure_initial_version(_config(db))
     return db, rules
+
+
+def _create_promotable_research_set(db, *, set_id: str = "unit-research-candidate", version: str = "v1-test") -> tuple[str, str]:
+    store = TriggerSetStore(db)
+    if store.get_set(set_id, version) is None:
+        store.create_set(
+            replace(
+                current_futures_testing_trigger_set(created_at="2026-09-08T12:00:00+00:00"),
+                set_id=set_id,
+                version=version,
+                status=TriggerSetStatus.TESTING,
+                provenance="unit test synthetic Research promotion fixture",
+            )
+        )
+    return set_id, version
 
 
 def _service(
