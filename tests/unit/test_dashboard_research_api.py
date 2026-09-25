@@ -9,14 +9,18 @@ from triggertrade.dashboard.__main__ import create_server, render_dashboard
 from triggertrade.dashboard.read_model import DashboardReadModel
 from triggertrade.persistence import (
     MessageStore,
+    ResearchBacktestRunRecord,
     ResearchBacktestStatus,
     ResearchDecision,
+    ResearchDemoRunRecord,
     ResearchDemoStatus,
     ResearchRecord,
     ResearchStatus,
     ResearchStore,
+    ResearchStoreError,
 )
 from triggertrade.services.operator_auth import OperatorCommandAuthorizer
+from triggertrade.services.research import ResearchDemoExecutionHandoffResult
 from triggertrade.trigger_sets import TriggerSetStatus, TriggerSetVersion
 from tests.unit.test_dashboard_rules_api import _json_request, _start, _stop
 from tests.unit.test_operator_command_auth import _managed_principal_headers
@@ -468,7 +472,8 @@ def test_research_api_uses_postgres_registry_for_list_and_detail(tmp_path):
         rules=current,
         research=(record,),
     )
-    server = create_server(port=0, db_path=db, research_config_registry=registry)
+    run_store = _FakeResearchRunStore(research=(record,), backtests=(backtest,), demos=(demo,))
+    server = create_server(port=0, db_path=db, research_config_registry=registry, research_run_store=run_store)
     host, port = server.server_address
     thread = _start(server)
     try:
@@ -488,6 +493,223 @@ def test_research_api_uses_postgres_registry_for_list_and_detail(tmp_path):
         assert detail["demos"][0]["execution_scope_id"] == "demo-scope-001"
     finally:
         _stop(server, thread)
+
+
+def test_postgres_registry_research_without_sqlite_mirror_can_start_backtest_and_detail(tmp_path):
+    db, rules = _research_db(tmp_path)
+    current = rules.get_current_rules_version()
+    record = _research_record(
+        research_id="res-pg-only-001",
+        set_id="pg-canonical-set",
+        set_version="v42",
+        rules_version_id=current.rules_version_id,
+        rules_display_version=current.version,
+    )
+    registry = _FakeResearchConfigRegistry(
+        trigger_set=_trigger_set("pg-canonical-set", "v42"),
+        rules=current,
+        research=(record,),
+    )
+    run_store = _FakeResearchRunStore(research=(record,))
+    server = create_server(
+        port=0,
+        db_path=db,
+        operator_authorizer=OperatorCommandAuthorizer(db, auth_mode="local_dev_compat"),
+        research_config_registry=registry,
+        research_run_store=run_store,
+    )
+    host, port = server.server_address
+    thread = _start(server)
+    try:
+        result = _json_request(
+            host,
+            port,
+            "POST",
+            f"/api/research/{record.research_id}/backtests",
+            {
+                "token": server.operator_control_token,
+                "research_start": "2026-09-18T00:00:00+00:00",
+                "research_end": "2026-09-25T00:00:00+00:00",
+                "timeframe": "1m",
+                "idempotency_key": "research-backtest-pg-only-001",
+            },
+            expected=HTTPStatus.CREATED,
+        )
+        detail = _json_request(host, port, "GET", f"/api/research/{record.research_id}")
+
+        assert result["backtest"]["research_id"] == record.research_id
+        assert result["backtest"]["status"] == "FAILED"
+        assert detail["run_projection"] == {"available": True}
+        assert detail["backtests"][0]["run_id"] == result["backtest"]["run_id"]
+        assert detail["backtests"][0]["unavailable_reason"] == "backend_historical_replay_inputs_unavailable"
+    finally:
+        _stop(server, thread)
+
+
+def test_postgres_registry_research_without_sqlite_mirror_can_start_demo_and_detail(tmp_path):
+    db, rules = _research_db(tmp_path)
+    current = rules.get_current_rules_version()
+    record = _research_record(
+        research_id="res-pg-only-demo",
+        set_id="pg-canonical-set",
+        set_version="v42",
+        rules_version_id=current.rules_version_id,
+        rules_display_version=current.version,
+    )
+    registry = _FakeResearchConfigRegistry(
+        trigger_set=_trigger_set("pg-canonical-set", "v42"),
+        rules=current,
+        research=(record,),
+    )
+    run_store = _FakeResearchRunStore(research=(record,))
+    handoff = _FakeDemoHandoff()
+    server = create_server(
+        port=0,
+        db_path=db,
+        operator_authorizer=OperatorCommandAuthorizer(db, auth_mode="local_dev_compat"),
+        research_config_registry=registry,
+        research_run_store=run_store,
+        research_demo_handoff=handoff,
+    )
+    host, port = server.server_address
+    thread = _start(server)
+    try:
+        result = _json_request(
+            host,
+            port,
+            "POST",
+            f"/api/research/{record.research_id}/demo/start",
+            {"token": server.operator_control_token, "idempotency_key": "research-demo-pg-only-001"},
+            expected=HTTPStatus.CREATED,
+        )
+        detail = _json_request(host, port, "GET", f"/api/research/{record.research_id}")
+
+        assert result["demo"]["research_id"] == record.research_id
+        assert result["demo"]["status"] == "RUNNING"
+        assert handoff.requests[0]["research_id"] == record.research_id
+        assert detail["run_projection"] == {"available": True}
+        assert detail["demos"][0]["run_id"] == result["demo"]["run_id"]
+        assert detail["demos"][0]["status"] == "RUNNING"
+    finally:
+        _stop(server, thread)
+
+
+def test_demo_start_reuses_existing_running_postgres_run_without_duplicate_handoff(tmp_path):
+    db, rules = _research_db(tmp_path)
+    current = rules.get_current_rules_version()
+    record = _research_record(
+        research_id="res-pg-demo-retry",
+        set_id="pg-canonical-set",
+        set_version="v42",
+        rules_version_id=current.rules_version_id,
+        rules_display_version=current.version,
+    )
+    existing = ResearchDemoRunRecord(
+        research_id=record.research_id,
+        run_id="rdm-existing-running",
+        created_at="2026-09-25T00:00:00+00:00",
+        updated_at="2026-09-25T00:00:00+00:00",
+        status=ResearchDemoStatus.RUNNING,
+        started_at="2026-09-25T00:00:00+00:00",
+        stopped_at=None,
+        execution_scope_id="research-demo-worker",
+        account_scope="research-demo-account",
+        selected_for_use=False,
+        metrics={},
+        blocked_reason=None,
+        pin_payload={},
+        pin_digest="unit-existing-demo",
+    )
+    registry = _FakeResearchConfigRegistry(
+        trigger_set=_trigger_set("pg-canonical-set", "v42"),
+        rules=current,
+        research=(record,),
+    )
+    run_store = _FakeResearchRunStore(research=(record,), demos=(existing,))
+    handoff = _FakeDemoHandoff()
+    server = create_server(
+        port=0,
+        db_path=db,
+        operator_authorizer=OperatorCommandAuthorizer(db, auth_mode="local_dev_compat"),
+        research_config_registry=registry,
+        research_run_store=run_store,
+        research_demo_handoff=handoff,
+    )
+    host, port = server.server_address
+    thread = _start(server)
+    try:
+        result = _json_request(
+            host,
+            port,
+            "POST",
+            f"/api/research/{record.research_id}/demo/start",
+            {"token": server.operator_control_token, "idempotency_key": "research-demo-retry-001"},
+            expected=HTTPStatus.CREATED,
+        )
+
+        assert result["demo"]["run_id"] == existing.run_id
+        assert handoff.requests == []
+    finally:
+        _stop(server, thread)
+
+
+def test_postgres_research_runs_survive_service_reconstruction_and_replica_visibility(tmp_path):
+    db, rules = _research_db(tmp_path)
+    current = rules.get_current_rules_version()
+    record = _research_record(
+        research_id="res-shared-run-store",
+        set_id="pg-canonical-set",
+        set_version="v42",
+        rules_version_id=current.rules_version_id,
+        rules_display_version=current.version,
+    )
+    registry = _FakeResearchConfigRegistry(
+        trigger_set=_trigger_set("pg-canonical-set", "v42"),
+        rules=current,
+        research=(record,),
+    )
+    shared_state = _SharedResearchRunState(research=(record,))
+    first_replica = _FakeResearchRunStore(state=shared_state)
+    second_replica = _FakeResearchRunStore(state=shared_state)
+    server_a = create_server(
+        port=0,
+        db_path=db,
+        operator_authorizer=OperatorCommandAuthorizer(db, auth_mode="local_dev_compat"),
+        research_config_registry=registry,
+        research_run_store=first_replica,
+    )
+    host, port = server_a.server_address
+    thread = _start(server_a)
+    try:
+        created = _json_request(
+            host,
+            port,
+            "POST",
+            f"/api/research/{record.research_id}/backtests",
+            {
+                "token": server_a.operator_control_token,
+                "research_start": "2026-08-26T00:00:00+00:00",
+                "research_end": "2026-09-25T00:00:00+00:00",
+                "timeframe": "1m",
+                "idempotency_key": "research-backtest-replica-001",
+            },
+            expected=HTTPStatus.CREATED,
+        )
+    finally:
+        _stop(server_a, thread)
+
+    server_b = create_server(
+        port=0,
+        db_path=tmp_path / "replica-b-local.sqlite3",
+        research_config_registry=registry,
+        research_run_store=second_replica,
+    )
+    detail = dashboard_main._research_detail_payload(server_b, record.research_id)
+    server_b.server_close()
+
+    assert detail is not None
+    assert detail["run_projection"] == {"available": True}
+    assert detail["backtests"][0]["run_id"] == created["backtest"]["run_id"]
 
 
 def test_research_registry_unavailable_returns_503_not_empty_success(tmp_path):
@@ -558,6 +780,11 @@ class _FakeResearchConfigRegistry:
     def list_trigger_set_versions(self):
         return (self._trigger_set,)
 
+    def get_trigger_set_version(self, set_id, version):
+        if self._trigger_set.set_id == set_id and self._trigger_set.version == version:
+            return self._trigger_set
+        return None
+
     def list_trading_rules_versions(self):
         return (self._rules,)
 
@@ -569,6 +796,189 @@ class _FakeResearchConfigRegistry:
             if record.research_id == research_id:
                 return record
         return None
+
+    def put_configuration(self, *, research, trigger_set, rules):
+        if self.get_research(research.research_id) is None:
+            self._research = (*self._research, research)
+
+    def get_trading_rules_version(self, rules_version_id):
+        return self._rules if self._rules.rules_version_id == rules_version_id else None
+
+
+class _SharedResearchRunState:
+    def __init__(self, *, research=(), backtests=(), demos=()):
+        self.research = {record.research_id: record for record in research}
+        self.backtests = {}
+        self.demos = {}
+        for record in backtests:
+            self.backtests.setdefault(record.research_id, []).append(record)
+        for record in demos:
+            self.demos.setdefault(record.research_id, []).append(record)
+
+
+class _FakeResearchRunStore:
+    path = None
+
+    def __init__(self, *, state=None, research=(), backtests=(), demos=()):
+        self._state = state or _SharedResearchRunState(research=research, backtests=backtests, demos=demos)
+
+    def get_research(self, research_id):
+        return self._state.research.get(research_id)
+
+    def list_backtest_runs(self, research_id):
+        return tuple(self._state.backtests.get(research_id, ()))
+
+    def list_demo_runs(self, research_id):
+        return tuple(self._state.demos.get(research_id, ()))
+
+    def add_backtest_run(
+        self,
+        *,
+        research_id,
+        period_start,
+        period_end,
+        timeframe,
+        status,
+        engine_run_id=None,
+        metrics=None,
+        unavailable_reason=None,
+        pin_payload=None,
+        created_at=None,
+    ):
+        if research_id not in self._state.research:
+            raise ResearchStoreError("research id not found")
+        created_at = created_at or "2026-09-25T00:00:00+00:00"
+        run_id = f"rbt-unit-{len(self._state.backtests.get(research_id, ())) + 1}"
+        record = ResearchBacktestRunRecord(
+            research_id=research_id,
+            run_id=run_id,
+            created_at=created_at,
+            updated_at=created_at,
+            status=status,
+            period_start=period_start,
+            period_end=period_end,
+            timeframe=timeframe,
+            engine_run_id=engine_run_id,
+            selected_for_use=False,
+            metrics=metrics or {},
+            unavailable_reason=unavailable_reason,
+            pin_payload=pin_payload or {},
+            pin_digest="unit-run-digest",
+        )
+        self._state.backtests.setdefault(research_id, []).insert(0, record)
+        research = self._state.research[research_id]
+        self._state.research[research_id] = _record_with_status(
+            research,
+            ResearchStatus.FAILED if status is ResearchBacktestStatus.FAILED else ResearchStatus.BACKTEST_READY,
+            updated_at=created_at,
+        )
+        return record
+
+    def add_demo_run(
+        self,
+        *,
+        research_id,
+        status,
+        run_id=None,
+        started_at=None,
+        stopped_at=None,
+        execution_scope_id=None,
+        account_scope=None,
+        metrics=None,
+        blocked_reason=None,
+        pin_payload=None,
+        created_at=None,
+    ):
+        if research_id not in self._state.research:
+            raise ResearchStoreError("research id not found")
+        created_at = created_at or "2026-09-25T00:00:00+00:00"
+        run_id = run_id or f"rdm-unit-{len(self._state.demos.get(research_id, ())) + 1}"
+        record = ResearchDemoRunRecord(
+            research_id=research_id,
+            run_id=run_id,
+            created_at=created_at,
+            updated_at=created_at,
+            status=status,
+            started_at=started_at,
+            stopped_at=stopped_at,
+            execution_scope_id=execution_scope_id,
+            account_scope=account_scope,
+            selected_for_use=False,
+            metrics=metrics or {},
+            blocked_reason=blocked_reason,
+            pin_payload=pin_payload or {},
+            pin_digest="unit-demo-digest",
+        )
+        self._state.demos.setdefault(research_id, []).insert(0, record)
+        research = self._state.research[research_id]
+        self._state.research[research_id] = _record_with_status(
+            research,
+            ResearchStatus.DEMO_RUNNING if status is ResearchDemoStatus.RUNNING else ResearchStatus.BLOCKED,
+            updated_at=created_at,
+        )
+        return record
+
+
+class _FakeDemoHandoff:
+    canonical_worker_handoff = True
+
+    def __init__(self):
+        self.requests = []
+
+    def start_research_demo(self, *, research, trigger_set, rules, isolation, started_at, pin_payload, demo_run_id):
+        self.requests.append({"research_id": research.research_id, "demo_run_id": demo_run_id})
+        return ResearchDemoExecutionHandoffResult(
+            handoff_id=f"unit-handoff-{demo_run_id}",
+            execution_owner="trading-worker",
+            durable=True,
+        )
+
+
+def _record_with_status(record, status, *, updated_at):
+    return ResearchRecord(
+        research_id=record.research_id,
+        created_at=record.created_at,
+        updated_at=updated_at,
+        status=status,
+        set_id=record.set_id,
+        set_version=record.set_version,
+        rules_version_id=record.rules_version_id,
+        rules_display_version=record.rules_display_version,
+        selected_backtest_run_id=record.selected_backtest_run_id,
+        selected_demo_run_id=record.selected_demo_run_id,
+        decision=record.decision,
+        decision_at=record.decision_at,
+        archived_at=record.archived_at,
+        made_active_at=record.made_active_at,
+        promoted_set_id=record.promoted_set_id,
+        promoted_set_version=record.promoted_set_version,
+        promoted_rules_version_id=record.promoted_rules_version_id,
+        previous_active_set_id=record.previous_active_set_id,
+        previous_active_set_version=record.previous_active_set_version,
+        previous_rules_version_id=record.previous_rules_version_id,
+        promotion_result_metadata=record.promotion_result_metadata,
+        created_source=record.created_source,
+        schema_version=record.schema_version,
+        pin_payload=record.pin_payload,
+        pin_digest=record.pin_digest,
+    )
+
+
+def _trigger_set(set_id, version):
+    return TriggerSetVersion(
+        set_id=set_id,
+        version=version,
+        purpose="Research candidate",
+        status=TriggerSetStatus.TESTING,
+        symbol="BTCUSDT",
+        timeframe="1m",
+        rule_versions=(("TRG-001", "0.1.0"),),
+        strategy_version="strategy-v1",
+        risk_profile_version="risk-v1",
+        config_snapshot={},
+        created_at="2026-09-25T00:00:00+00:00",
+        provenance="unit",
+    )
 
 
 class _FailingResearchConfigRegistry:

@@ -56,12 +56,55 @@ class _FakeResearchConfigRegistry:
     def __init__(self):
         self.trigger_sets = set()
         self.rules_versions = set()
+        self.research = {}
+        self.backtests = {}
+        self.demos = {}
+        self.path = None
 
     def put_trigger_set_version(self, trigger_set):
         self.trigger_sets.add((trigger_set.set_id, trigger_set.version))
 
     def put_trading_rules_version(self, rules):
         self.rules_versions.add(rules.rules_version_id)
+
+    def get_research(self, research_id):
+        return self.research.get(research_id)
+
+    def create_research(self, **kwargs):
+        raise AssertionError("unit bootstrap fake should not create Research")
+
+    def list_backtest_runs(self, research_id):
+        return tuple(self.backtests.get(research_id, ()))
+
+    def list_demo_runs(self, research_id):
+        return tuple(self.demos.get(research_id, ()))
+
+    def add_backtest_run(self, **kwargs):
+        raise AssertionError("unit bootstrap fake should not execute Research backtests")
+
+    def get_backtest_run(self, research_id, run_id):
+        return None
+
+    def select_backtest_run(self, research_id, run_id, *, selected_at=None):
+        raise AssertionError("unit bootstrap fake should not select Research backtests")
+
+    def add_demo_run(self, **kwargs):
+        raise AssertionError("unit bootstrap fake should not execute Research demos")
+
+    def get_demo_run(self, research_id, run_id):
+        return None
+
+    def stop_demo_run(self, research_id, run_id, *, stopped_at=None):
+        raise AssertionError("unit bootstrap fake should not stop Research demos")
+
+    def select_demo_run(self, research_id, run_id, *, selected_at=None):
+        raise AssertionError("unit bootstrap fake should not select Research demos")
+
+    def archive_research(self, research_id, *, archived_at=None):
+        raise AssertionError("unit bootstrap fake should not archive Research")
+
+    def record_make_active_blocked(self, research_id, *, reason, decided_at=None):
+        raise AssertionError("unit bootstrap fake should not mutate Research decisions")
 
 
 def test_empty_runtime_db_bootstraps_canonical_registries_without_fake_evidence(tmp_path):

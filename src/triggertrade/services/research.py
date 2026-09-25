@@ -102,6 +102,10 @@ class ResearchConfigurationRegistry(Protocol):
         rules: TradingRulesVersion,
     ) -> None: ...
 
+    def get_trading_rules_version(self, rules_version_id: str) -> TradingRulesVersion | None: ...
+
+    def get_trigger_set_version(self, set_id: str, set_version: str) -> TriggerSetVersion | None: ...
+
 
 @dataclass(frozen=True)
 class ResearchPromotionCommand:
@@ -134,7 +138,8 @@ class ResearchService:
         self._trigger_set_store = trigger_set_store
         self._trading_rules_store = trading_rules_store
         self._message_store = message_store
-        self._trace_store = TraceStore(store.path)
+        store_path = getattr(store, "path", None)
+        self._trace_store = TraceStore(store_path) if store_path is not None else None
         self._config = config
         self._instrument = instrument
         self._demo_isolation = demo_isolation or ResearchDemoIsolation()
@@ -153,9 +158,7 @@ class ResearchService:
         created_source: str = "service",
         created_at: str | None = None,
     ) -> ResearchRecord:
-        trigger_set = self._trigger_set_store.get_set(set_id, set_version)
-        if trigger_set is None:
-            raise ResearchServiceError("exact trigger set version not found")
+        trigger_set = self._exact_trigger_set(set_id, set_version)
         rules = self._exact_rules_version(rules_version_id)
         pins = _research_config_pins(trigger_set, rules, created_source=created_source)
         record, _created = self._store.create_research(
@@ -210,10 +213,19 @@ class ResearchService:
                 pin_payload=run_pins,
                 created_at=(created_at or datetime.now(UTC)).isoformat(),
             )
+        store_path = getattr(self._store, "path", None)
+        if store_path is None:
+            return self._blocked_backtest(
+                research,
+                plan=plan,
+                reason="backend_historical_replay_store_unavailable",
+                pin_payload=run_pins,
+                created_at=(created_at or datetime.now(UTC)).isoformat(),
+            )
         try:
             result = self._backtest_runner(
                 config=_config_for_rules(self._config, rules),
-                db_path=self._store.path,
+                db_path=store_path,
                 trigger_set_id=research.set_id,
                 trigger_set_version=research.set_version,
                 plan=plan,
@@ -284,6 +296,9 @@ class ResearchService:
 
     def start_demo_run(self, research_id: str, *, created_at: str | None = None) -> ResearchDemoRunRecord:
         research = self._required_research(research_id)
+        existing_running = _latest_running_demo_run(self._store, research.research_id)
+        if existing_running is not None:
+            return existing_running
         trigger_set = self._exact_trigger_set(research.set_id, research.set_version)
         rules = self._exact_rules_version(research.rules_version_id)
         block_reason = self._demo_block_reason(rules)
@@ -1070,6 +1085,12 @@ class ResearchService:
         return record
 
     def _exact_trigger_set(self, set_id: str, set_version: str) -> TriggerSetVersion:
+        if self._research_config_registry is not None and callable(
+            getattr(self._research_config_registry, "get_trigger_set_version", None)
+        ):
+            trigger_set = self._research_config_registry.get_trigger_set_version(set_id, set_version)
+            if trigger_set is not None and trigger_set.set_id == set_id and trigger_set.version == set_version:
+                return trigger_set
         trigger_set = self._trigger_set_store.get_set(set_id, set_version)
         if trigger_set is None:
             raise ResearchServiceError("exact trigger set version not found")
@@ -1078,6 +1099,12 @@ class ResearchService:
         return trigger_set
 
     def _exact_rules_version(self, rules_version_id: str) -> TradingRulesVersion:
+        if self._research_config_registry is not None and callable(
+            getattr(self._research_config_registry, "get_trading_rules_version", None)
+        ):
+            rules = self._research_config_registry.get_trading_rules_version(rules_version_id)
+            if rules is not None and rules.rules_version_id == rules_version_id:
+                return rules
         rules = self._trading_rules_store.get_version(rules_version_id)
         if rules is None or rules.rules_version_id != rules_version_id:
             raise ResearchServiceError("exact trading rules version not found")
@@ -1104,6 +1131,8 @@ class ResearchService:
         metadata: dict[str, Any] | None = None,
         event_id: str | None = None,
     ) -> None:
+        if self._trace_store is None:
+            return
         try:
             self._trace_store.record_audit_event(
                 event_type=event_type,
@@ -1137,6 +1166,8 @@ class ResearchService:
         created_at: str,
         metadata: dict[str, Any] | None = None,
     ) -> None:
+        if self._trace_store is None:
+            return
         try:
             self._trace_store.record_audit_event(
                 event_type=event_type,
@@ -1167,6 +1198,8 @@ class ResearchService:
         *,
         decided_at: str,
     ) -> None:
+        if self._trace_store is None:
+            raise ResearchServiceError("research promotion audit store unavailable")
         event_id = f"audit-research-promotion-command-{command.idempotency_key}"
         existing = self._trace_store.get_audit_event(event_id)
         if existing is not None:
@@ -1240,6 +1273,17 @@ def _demo_isolation_scope_block_reason(isolation: ResearchDemoIsolation) -> str 
         return "research_demo_isolation_scope_unattributed"
     if any(_is_live_like_scope(str(value)) for value in scoped_values):
         return "research_demo_live_side_effect_scope_forbidden"
+    return None
+
+
+def _latest_running_demo_run(store, research_id: str) -> ResearchDemoRunRecord | None:
+    try:
+        runs = tuple(store.list_demo_runs(research_id))
+    except Exception:
+        return None
+    for run in runs:
+        if run.status is ResearchDemoStatus.RUNNING:
+            return run
     return None
 
 

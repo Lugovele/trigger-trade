@@ -166,6 +166,7 @@ from .research_promotion_governance import (
 from .postgres_research_registry import (
     PostgresResearchConfigurationRegistry,
     PostgresResearchConfigurationRegistryClient,
+    PostgresResearchRunStore,
     ResearchConfigurationRegistryError,
     ResearchDemoConfiguration,
 )
@@ -344,6 +345,7 @@ __all__ = [
     "ResearchPromotionGovernanceStore",
     "PostgresResearchConfigurationRegistry",
     "PostgresResearchConfigurationRegistryClient",
+    "PostgresResearchRunStore",
     "ResearchConfigurationRegistryError",
     "ResearchDemoConfiguration",
     "RuntimeCheckpoint",

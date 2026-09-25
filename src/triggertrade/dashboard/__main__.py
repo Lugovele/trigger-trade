@@ -54,7 +54,7 @@ from triggertrade.services.operator_auth import (
     operator_authorizer_from_env,
 )
 from triggertrade.services.operator_execution_bridge import DashboardOperatorExecutionBridge
-from triggertrade.services.research import ResearchService, ResearchServiceError
+from triggertrade.services.research import ResearchDemoIsolation, ResearchService, ResearchServiceError
 from triggertrade.services.research_demo_execution import PostgresResearchDemoExecutionHandoff
 
 
@@ -89,6 +89,7 @@ class DashboardServer(ThreadingHTTPServer):
         postgres_runtime_probe=None,
         postgres_registry_probe=None,
         research_config_registry=None,
+        research_run_store=None,
     ) -> None:
         super().__init__(server_address, handler_class)
         self.read_model = read_model
@@ -110,6 +111,7 @@ class DashboardServer(ThreadingHTTPServer):
         self.postgres_runtime_probe = postgres_runtime_probe
         self.postgres_registry_probe = postgres_registry_probe
         self.research_config_registry = research_config_registry
+        self.research_run_store = research_run_store
 
 
 class DashboardHandler(BaseHTTPRequestHandler):
@@ -860,9 +862,9 @@ def _research_detail_payload(server: DashboardServer, research_id: str) -> dict[
         raise DashboardRegistryUnavailable("PostgreSQL Research configuration registry unavailable") from exc
     if record is None:
         return None
-    run_detail = server.read_model.get_research_detail(research_id)
+    run_store = server.research_run_store
     research_payload = _research_record_payload(record)
-    if run_detail is None:
+    if run_store is None:
         return {
             "research": research_payload,
             "backtests": (),
@@ -876,25 +878,31 @@ def _research_detail_payload(server: DashboardServer, research_id: str) -> dict[
                 "reason": "factual Research run store unavailable for this Research",
             },
         }
-    run_research = run_detail.get("research")
-    if isinstance(run_research, dict):
-        mutable_fields = (
-            "status",
-            "selected_backtest_run_id",
-            "selected_demo_run_id",
-            "decision",
-            "decision_at",
-            "archived_at",
-            "made_active_at",
-            "updated_at",
-        )
-        for field in mutable_fields:
-            if field in run_research:
-                research_payload[field] = run_research[field]
+    try:
+        run_research = run_store.get_research(research_id)
+        backtests = tuple(_research_run_payload(row) for row in run_store.list_backtest_runs(research_id))
+        demos = tuple(_research_run_payload(row) for row in run_store.list_demo_runs(research_id))
+    except Exception as exc:
+        raise DashboardRegistryUnavailable("PostgreSQL Research run store unavailable") from exc
+    if run_research is None:
+        return None
+    mutable_payload = _research_record_payload(run_research)
+    mutable_fields = (
+        "status",
+        "selected_backtest_run_id",
+        "selected_demo_run_id",
+        "decision",
+        "decision_at",
+        "archived_at",
+        "made_active_at",
+        "updated_at",
+    )
+    for field in mutable_fields:
+        research_payload[field] = mutable_payload[field]
     return {
         "research": research_payload,
-        "backtests": tuple(run_detail.get("backtests") or ()),
-        "demos": tuple(run_detail.get("demos") or ()),
+        "backtests": backtests,
+        "demos": demos,
         "run_projection": {"available": True},
     }
 
@@ -987,6 +995,7 @@ def create_server(
     promotion_governance_store=None,
     research_demo_handoff=None,
     research_config_registry=None,
+    research_run_store=None,
 ) -> DashboardServer:
     if host not in ALLOWED_HOSTS:
         raise ValueError("dashboard host must be one of: 127.0.0.1, 0.0.0.0")
@@ -999,12 +1008,14 @@ def create_server(
         symbol_validator=catalog_service.validate_symbol,
         version_registry=research_config_registry,
     )
+    shared_research_run_store = research_run_store or _research_run_store_from_registry(research_config_registry)
     research_boundary = research_service or ResearchService(
-        store=ResearchStore(db_path),
+        store=shared_research_run_store or ResearchStore(db_path),
         trigger_set_store=TriggerSetStore(db_path, version_registry=research_config_registry),
         trading_rules_store=TradingRulesStore(db_path),
         message_store=message_store,
         promotion_governance_store=promotion_governance_store,
+        demo_isolation=_dashboard_research_demo_isolation(research_demo_handoff),
         demo_execution_handoff=research_demo_handoff,
         research_config_registry=research_config_registry,
     )
@@ -1035,12 +1046,48 @@ def create_server(
         postgres_runtime_probe=postgres_runtime_probe,
         postgres_registry_probe=postgres_registry_probe,
         research_config_registry=research_config_registry,
+        research_run_store=shared_research_run_store,
     )
     read_model.operator_control_token = server.operator_control_token
     read_model.operator_command_submit_enabled = authorizer.browser_commands_supported and (
         authorizer.auth_mode != LOCAL_DEV_AUTH_SOURCE or bool(server.operator_control_token)
     )
     return server
+
+
+def _research_run_store_from_registry(registry):
+    required_methods = (
+        "create_research",
+        "get_research",
+        "list_backtest_runs",
+        "add_backtest_run",
+        "get_backtest_run",
+        "select_backtest_run",
+        "list_demo_runs",
+        "add_demo_run",
+        "get_demo_run",
+        "stop_demo_run",
+        "select_demo_run",
+        "archive_research",
+        "record_make_active_blocked",
+    )
+    if registry is None:
+        return None
+    if all(callable(getattr(registry, method, None)) for method in required_methods):
+        return registry
+    return None
+
+
+def _dashboard_research_demo_isolation(research_demo_handoff) -> ResearchDemoIsolation | None:
+    if research_demo_handoff is None or not getattr(research_demo_handoff, "canonical_worker_handoff", False):
+        return None
+    return ResearchDemoIsolation(
+        available=True,
+        execution_scope_id="research-demo-worker",
+        account_scope="research-demo-account",
+        adapter_scope_id="bybit-demo-futures",
+        state_scope_id="research-demo-postgres",
+    )
 
 
 def _research_command_type(parts: list[str]) -> str:
@@ -1252,6 +1299,10 @@ def _require_production_postgres_configuration_path(
     research_service = server.research_service
     if getattr(research_service, "_research_config_registry", None) is not research_config_registry:
         raise ConfigError("production Research writes are not wired to PostgreSQL configuration registry")
+    if server.research_run_store is None:
+        raise ConfigError("production Research run writes are not wired to PostgreSQL run store")
+    if getattr(research_service, "_store", None) is not server.research_run_store:
+        raise ConfigError("production Research run writes are not wired to shared PostgreSQL run store")
     trigger_set_store = getattr(research_service, "_trigger_set_store", None)
     if getattr(trigger_set_store, "_version_registry", None) is not research_config_registry:
         raise ConfigError("production Trigger Set writes are not wired to PostgreSQL configuration registry")
