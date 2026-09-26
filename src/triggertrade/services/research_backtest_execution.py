@@ -8,8 +8,9 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any, Protocol
 
-from triggertrade.backtest import BacktestPlan, run_backtest
+from triggertrade.backtest import BacktestPlan, ExactBacktestTriggerSetResolver, run_backtest
 from triggertrade.backtest.data import HistoricalDataError
+from triggertrade.backtest.engine import BacktestEngineError
 from triggertrade.backtest.models import BACKTEST_DATA_SOURCE_VERSION
 from triggertrade.config import AppConfig
 from triggertrade.market_data import FuturesInstrumentMetadata
@@ -135,6 +136,7 @@ class CanonicalResearchBacktestExecutionExecutor:
                     set_version=research.set_version,
                     rules_version_id=research.rules_version_id,
                 )
+                _validate_authoritative_trigger_set(research=research, trigger_set=configuration.trigger_set)
             replay = self._historical_source.load(
                 symbol=plan.symbol,
                 category=plan.category,
@@ -155,6 +157,7 @@ class CanonicalResearchBacktestExecutionExecutor:
                 plan=plan,
                 candles=candles,
                 instrument=instrument,
+                trigger_set_store=ExactBacktestTriggerSetResolver(configuration.trigger_set),
             )
             status = ResearchBacktestStatus.COMPLETED if result.closed_trades > 0 else ResearchBacktestStatus.COMPLETED_NO_TRADES
             with PostgresUnitOfWork(self._factory) as uow:
@@ -168,7 +171,7 @@ class CanonicalResearchBacktestExecutionExecutor:
                     updated_at=datetime.now(UTC).isoformat(),
                 )
         except Exception as exc:  # noqa: BLE001 - worker persists bounded factual failure reason.
-            return self._mark_failed(record, _historical_unavailable_reason(exc))
+            return self._mark_failed(record, _backtest_unavailable_reason(exc))
 
     def _mark_failed(self, record: ResearchBacktestRunRecord, reason: str) -> ResearchBacktestRunRecord:
         with PostgresUnitOfWork(self._factory) as uow:
@@ -234,7 +237,12 @@ def _historical_replay_load_start(plan: BacktestPlan) -> datetime:
     return plan.research_start.astimezone(UTC) - interval_delta(plan.timeframe) * (plan.warmup_candles + 1)
 
 
-def _historical_unavailable_reason(exc: Exception) -> str:
+def _validate_authoritative_trigger_set(*, research: ResearchRecord, trigger_set: TriggerSetVersion) -> None:
+    if (research.set_id, research.set_version) != (trigger_set.set_id, trigger_set.version):
+        raise PostgresPersistenceError("research_backtest_trigger_set_identity_mismatch")
+
+
+def _backtest_unavailable_reason(exc: Exception) -> str:
     text = str(exc).lower()
     if isinstance(exc, HistoricalDataError):
         if "empty" in text:
@@ -244,7 +252,15 @@ def _historical_unavailable_reason(exc: Exception) -> str:
         return "historical_fetch_failed"
     if "403" in text or "forbidden" in text:
         return "historical_source_geo_blocked"
-    return "historical_fetch_failed"
+    if isinstance(exc, BacktestEngineError):
+        if "trigger set" in text or "unknown trigger set" in text:
+            return "research_trigger_set_unavailable"
+        return "backtest_engine_failed"
+    if isinstance(exc, PostgresPersistenceError):
+        if "trigger_set" in text or "configuration" in text or "research_backtest" in text:
+            return "research_configuration_unavailable"
+        return "research_persistence_unavailable"
+    return "backtest_engine_failed"
 
 
 def _message_id(run_id: str) -> str:

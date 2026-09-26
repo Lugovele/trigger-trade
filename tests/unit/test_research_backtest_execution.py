@@ -5,7 +5,8 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
 
-from triggertrade.backtest import BacktestResult, BacktestStatus
+from triggertrade.backtest import BacktestResult, BacktestStatus, ExactBacktestTriggerSetResolver
+from triggertrade.backtest.engine import BacktestEngineError
 from triggertrade.persistence import ResearchBacktestRunRecord, ResearchBacktestStatus
 from triggertrade.research_pins import research_run_pin_payload
 from triggertrade.services.research_backtest_execution import CanonicalResearchBacktestExecutionExecutor
@@ -67,6 +68,8 @@ def test_canonical_research_backtest_executor_loads_exact_config_fetches_history
     ]
     assert captured_engine["trigger_set_id"] == "triggertrade-futures-core"
     assert captured_engine["trigger_set_version"] == "v1"
+    assert isinstance(captured_engine["trigger_set_store"], ExactBacktestTriggerSetResolver)
+    assert captured_engine["trigger_set_store"].get_set("triggertrade-futures-core", "v1") == _trigger_set()
     assert captured_engine["plan"].symbol == "BTCUSDT"
     assert captured_engine["plan"].warmup_candles == 60
     assert captured_engine["candles"] == candles
@@ -132,6 +135,51 @@ def test_canonical_research_backtest_executor_does_not_mutate_existing_failed_ru
     assert store.records[historical_failed.run_id] == historical_failed
 
 
+def test_canonical_research_backtest_executor_mismatched_authoritative_set_fails_closed(tmp_path, monkeypatch):
+    record = _backtest_record(run_id="rbt-mismatch")
+    mismatched = replace(_trigger_set(), set_id="triggertrade-futures-candidate")
+    store = _install_executor_fakes(monkeypatch, record, trigger_set=mismatched)
+    executor = CanonicalResearchBacktestExecutionExecutor(
+        config=_config(tmp_path / "runtime.sqlite3"),
+        db_path=tmp_path / "runtime.sqlite3",
+        factory=object(),
+        historical_source=_FakeHistoricalSource(_trade_candles()),
+        instrument_provider=lambda symbol: _instrument(),
+    )
+
+    updated = executor.start_research_backtest(record)
+
+    assert updated.status is ResearchBacktestStatus.FAILED
+    assert updated.engine_run_id is None
+    assert updated.unavailable_reason == "research_configuration_unavailable"
+    assert store.updates[-1]["metrics"] == {}
+
+
+def test_canonical_research_backtest_executor_engine_errors_are_not_historical_fetch_failures(tmp_path, monkeypatch):
+    record = _backtest_record(run_id="rbt-engine-error")
+    store = _install_executor_fakes(monkeypatch, record)
+
+    def failing_run_backtest(**kwargs):
+        raise BacktestEngineError("unknown trigger set version")
+
+    monkeypatch.setattr("triggertrade.services.research_backtest_execution.run_backtest", failing_run_backtest)
+    executor = CanonicalResearchBacktestExecutionExecutor(
+        config=_config(tmp_path / "runtime.sqlite3"),
+        db_path=tmp_path / "runtime.sqlite3",
+        factory=object(),
+        historical_source=_FakeHistoricalSource(_trade_candles()),
+        instrument_provider=lambda symbol: _instrument(),
+    )
+
+    updated = executor.start_research_backtest(record)
+
+    assert updated.status is ResearchBacktestStatus.FAILED
+    assert updated.engine_run_id is None
+    assert updated.unavailable_reason == "research_trigger_set_unavailable"
+    assert updated.unavailable_reason != "historical_fetch_failed"
+    assert store.updates[-1]["metrics"] == {}
+
+
 class _FakeHistoricalSource:
     def __init__(self, candles):
         self.candles = tuple(candles)
@@ -168,7 +216,7 @@ class _FakeRunStore:
         return updated
 
 
-def _install_executor_fakes(monkeypatch, record, *, existing=()):
+def _install_executor_fakes(monkeypatch, record, *, existing=(), research=None, trigger_set=None):
     class FakeUnitOfWork:
         connection = object()
 
@@ -187,7 +235,7 @@ def _install_executor_fakes(monkeypatch, record, *, existing=()):
 
         def get_research(self, research_id):
             assert research_id == record.research_id
-            return _research_record()
+            return research or _research_record()
 
         def get_research_demo_configuration(self, *, research_id, set_id, set_version, rules_version_id):
             assert (research_id, set_id, set_version, rules_version_id) == (
@@ -196,7 +244,7 @@ def _install_executor_fakes(monkeypatch, record, *, existing=()):
                 "v1",
                 "rules-v1",
             )
-            return SimpleNamespace(research=_research_record(), trigger_set=_trigger_set(), rules=_rules_version())
+            return SimpleNamespace(research=research or _research_record(), trigger_set=trigger_set or _trigger_set(), rules=_rules_version())
 
     store = object.__new__(_FakeRunStore)
     store.records = {item.run_id: item for item in (record, *existing)}

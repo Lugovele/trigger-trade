@@ -8,9 +8,10 @@ import sqlite3
 
 import pytest
 
-from triggertrade.backtest import BACKTEST_EVIDENCE_SOURCE, BacktestPlan, run_backtest
+from triggertrade.backtest import BACKTEST_EVIDENCE_SOURCE, BacktestPlan, BacktestStatus, ExactBacktestTriggerSetResolver, run_backtest
 from triggertrade.backtest.comparison import compare_backtest_runs
 from triggertrade.backtest.data import HistoricalDataError, HistoricalKlineCache, validate_historical_candles
+from triggertrade.backtest.engine import BacktestEngineError
 from triggertrade.backtest.models import BACKTEST_SIMULATOR_VERSION, HistoricalCandle
 from triggertrade.backtest.simulator import BacktestFuturesSimulator, BacktestSimulationError
 from triggertrade.config import ExecutionVenue, load_config
@@ -19,7 +20,7 @@ from triggertrade.dashboard.read_model import DashboardReadModel
 from triggertrade.execution import OrderType
 from triggertrade.execution.futures import FuturesTradeIntent, PositionAction, PositionState
 from triggertrade.market_data import ContractCategory, FuturesInstrumentMetadata
-from triggertrade.persistence import FuturesExecutionStore, RuntimeStore, TraceStore, TriggerSetStore, bootstrap_current_trigger_sets
+from triggertrade.persistence import FuturesExecutionStore, RuntimeStore, TraceStore, TriggerSetStore, bootstrap_current_trigger_sets, current_futures_active_trigger_set
 from triggertrade.persistence.futures_accounting_store import FuturesAccountingStore
 
 
@@ -270,6 +271,31 @@ def test_backtest_enforces_warmup_before_evaluation_start(tmp_path):
 
     with pytest.raises(ValueError, match="warmup"):
         run_backtest(config=config, db_path=db, trigger_set_id="triggertrade-futures-core", trigger_set_version="v1", plan=plan, candles=candles, instrument=_instrument())
+
+
+def test_research_backtest_can_use_injected_pinned_set_without_local_sqlite_set(tmp_path):
+    db = tmp_path / "bt-exact-set.sqlite3"
+    config = _config(db)
+    candles = _trade_candles(volume_spike=True)[:-1]
+    plan = BacktestPlan("BTCUSDT", "linear", "1m", candles[60].close_time, candles[-1].close_time, warmup_candles=60)
+    trigger_set = current_futures_active_trigger_set(created_at="2026-09-05T00:00:00+00:00")
+
+    with pytest.raises(BacktestEngineError, match="unknown trigger set version"):
+        run_backtest(config=config, db_path=db, trigger_set_id=trigger_set.set_id, trigger_set_version=trigger_set.version, plan=plan, candles=candles, instrument=_instrument())
+
+    result = run_backtest(
+        config=config,
+        db_path=db,
+        trigger_set_id=trigger_set.set_id,
+        trigger_set_version=trigger_set.version,
+        plan=plan,
+        candles=candles,
+        instrument=_instrument(),
+        trigger_set_store=ExactBacktestTriggerSetResolver(trigger_set),
+    )
+
+    assert result.backtest_run_id
+    assert result.status is BacktestStatus.COMPLETED
 
 
 def _bootstrap(db):

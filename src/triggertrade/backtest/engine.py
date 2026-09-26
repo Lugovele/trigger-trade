@@ -8,6 +8,7 @@ from decimal import Decimal
 from hashlib import sha256
 import json
 import sqlite3
+from typing import Protocol
 
 from triggertrade.accounting import ACCOUNTING_VERSION
 from triggertrade.analytics import TradePerformanceFact, compute_futures_performance
@@ -21,7 +22,7 @@ from triggertrade.persistence.futures_accounting_store import FuturesAccountingS
 from triggertrade.services.futures_runtime import _intent_price, _intent_quantity, _is_futures_set
 from triggertrade.services.runtime import CompletedCandle, candle_id
 from triggertrade.strategies import IntegrationDirectionalFuturesStrategy
-from triggertrade.trigger_sets import Lane, TriggerSetVersion
+from triggertrade.trigger_sets import Lane, RuleDefinition, RuleStatus, RuleType, TriggerSetVersion
 from triggertrade.triggers import PercentagePriceMoveTrigger, RobustVolumeConfirmationTrigger, Signal, SignalType, VolumeConfirmationConfig, VolumeConfirmationResult
 
 from .data import cache_hash, historical_to_bybit, validate_historical_candles
@@ -34,12 +35,18 @@ class BacktestEngineError(ValueError):
     pass
 
 
+class BacktestTriggerSetResolver(Protocol):
+    def get_set(self, set_id: str, version: str) -> TriggerSetVersion | None: ...
+
+    def resolve_trigger_version(self, trigger_set: TriggerSetVersion, trigger_id: str) -> RuleDefinition: ...
+
+
 class BacktestEngine:
     def __init__(
         self,
         *,
         config: AppConfig,
-        trigger_set_store: TriggerSetStore,
+        trigger_set_store: BacktestTriggerSetResolver,
         accounting_store: FuturesAccountingStore,
         execution_store: FuturesExecutionStore,
         trace_store: TraceStore,
@@ -203,8 +210,60 @@ def _backtest_signal_id(trigger_set: TriggerSetVersion, raw_id: str) -> str:
     return f"btsig-{digest}-{raw_id}"
 
 
-def run_backtest(*, config: AppConfig, db_path, trigger_set_id: str, trigger_set_version: str, plan: BacktestPlan, candles: tuple[HistoricalCandle, ...], instrument: FuturesInstrumentMetadata) -> BacktestResult:
-    return BacktestEngine(config=config, trigger_set_store=TriggerSetStore(db_path), accounting_store=FuturesAccountingStore(db_path), execution_store=FuturesExecutionStore(db_path), trace_store=TraceStore(db_path), runtime_store=RuntimeStore(db_path), backtest_store=BacktestStore(db_path), instrument=instrument).run(plan=plan, trigger_set_id=trigger_set_id, trigger_set_version=trigger_set_version, candles=candles)
+def run_backtest(
+    *,
+    config: AppConfig,
+    db_path,
+    trigger_set_id: str,
+    trigger_set_version: str,
+    plan: BacktestPlan,
+    candles: tuple[HistoricalCandle, ...],
+    instrument: FuturesInstrumentMetadata,
+    trigger_set_store: BacktestTriggerSetResolver | None = None,
+) -> BacktestResult:
+    return BacktestEngine(
+        config=config,
+        trigger_set_store=trigger_set_store or TriggerSetStore(db_path),
+        accounting_store=FuturesAccountingStore(db_path),
+        execution_store=FuturesExecutionStore(db_path),
+        trace_store=TraceStore(db_path),
+        runtime_store=RuntimeStore(db_path),
+        backtest_store=BacktestStore(db_path),
+        instrument=instrument,
+    ).run(plan=plan, trigger_set_id=trigger_set_id, trigger_set_version=trigger_set_version, candles=candles)
+
+
+class ExactBacktestTriggerSetResolver:
+    """Read-only exact Trigger Set resolver for canonical Research backtests."""
+
+    def __init__(self, trigger_set: TriggerSetVersion) -> None:
+        self._trigger_set = trigger_set
+
+    def get_set(self, set_id: str, version: str) -> TriggerSetVersion | None:
+        if (self._trigger_set.set_id, self._trigger_set.version) != (set_id, version):
+            return None
+        return self._trigger_set
+
+    def resolve_trigger_version(self, trigger_set: TriggerSetVersion, trigger_id: str) -> RuleDefinition:
+        versions = [version for rule_id, version in trigger_set.rule_versions if rule_id == trigger_id]
+        if not versions:
+            raise BacktestEngineError(f"trigger set does not include exact trigger version: {trigger_id}")
+        if len(versions) > 1:
+            raise BacktestEngineError(f"trigger set has ambiguous trigger version: {trigger_id}")
+        version = versions[0]
+        return RuleDefinition(
+            rule_id=trigger_id,
+            version=version,
+            name=trigger_id,
+            status=RuleStatus.ACTIVE,
+            asset_scope=trigger_set.symbol,
+            rule_type=RuleType.TRIGGER,
+            condition=f"exact pinned Research Backtest trigger {trigger_id}@{version}",
+            definition={"source": "research_backtest_exact_pinned_config"},
+            created_at=trigger_set.created_at,
+            provenance="postgres_research_configuration_registry",
+            semantic_hash="POSTGRES_PINNED_TRIGGER_VERSION",
+        )
 
 
 def _run_from_inputs(*, config: AppConfig, plan: BacktestPlan, trigger_set: TriggerSetVersion, candles: tuple[HistoricalCandle, ...], instrument: FuturesInstrumentMetadata, created_at: datetime) -> BacktestRun:
