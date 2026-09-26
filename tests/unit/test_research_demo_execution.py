@@ -274,6 +274,9 @@ def test_research_demo_postgres_handoff_persists_state_outbox_and_idempotency():
         assert state.set_id == "triggertrade-futures-core"
         assert state.set_version == "v1"
         assert state.rules_version_id == "rules-v1"
+        assert state.progress["duration_seconds"] == 7 * 24 * 60 * 60
+        assert state.progress["duration_elapsed"] is False
+        assert state.progress["factual_progress_source"] == "canonical_research_demo_owner_state"
         assert outbox is not None
         assert outbox.producer == RESEARCH_DEMO_PRODUCER
         assert outbox.consumer == RESEARCH_DEMO_CONSUMER
@@ -343,10 +346,260 @@ def test_canonical_research_demo_executor_reconstructs_config_and_projects_runni
     assert result["progress"]["duration_elapsed"] is False
 
 
+def test_canonical_research_demo_executor_progress_uses_processed_candle_time(monkeypatch):
+    executor = _executor(
+        monkeypatch,
+        now="2026-09-25T00:00:00+00:00",
+        trading_cycle=_CycleWithRuntime("BTCUSDT:1m:2026-09-24T00:05:00Z"),
+    )
+    record = _copy_record(_demo_record(), started_at="2026-09-24T00:00:00Z", requested_at="2026-09-24T00:00:00Z")
+
+    result = executor.start_research_demo(record)
+
+    assert result["terminal"] is False
+    assert result["progress"]["observed_at"] == "2026-09-24T00:05:00Z"
+    assert result["progress"]["elapsed_seconds"] == 300
+    assert result["progress"]["started_at"] == "2026-09-24T00:00:00Z"
+
+
+def test_canonical_research_demo_dispatch_repeated_cycles_refresh_same_parent(monkeypatch):
+    record = _copy_record(_demo_record(), started_at="2026-09-24T00:00:00Z", requested_at="2026-09-24T00:00:00Z")
+    store = _FakeResearchDemoStore(record)
+    first = _executor(
+        monkeypatch,
+        trading_cycle=_CycleWithRuntime("BTCUSDT:1m:2026-09-24T00:05:00Z"),
+    )
+    second = _executor(
+        monkeypatch,
+        trading_cycle=_CycleWithRuntime("BTCUSDT:1m:2026-09-24T00:10:00Z"),
+    )
+
+    first_detail = ResearchDemoExecutionDispatcher(store=store, executor=first).dispatch(record.demo_run_id)
+    second_detail = ResearchDemoExecutionDispatcher(store=store, executor=second).dispatch(record.demo_run_id)
+
+    assert first_detail == f"research_demo_running:{record.demo_run_id}"
+    assert second_detail == f"research_demo_running:{record.demo_run_id}"
+    assert store.record.demo_run_id == record.demo_run_id
+    assert store.record.revision > record.revision
+    assert store.record.progress["observed_at"] == "2026-09-24T00:10:00Z"
+    assert store.record.progress["elapsed_seconds"] == 600
+    assert store.record.started_at == "2026-09-24T00:00:00Z"
+    assert store.rechecks == [record.demo_run_id, record.demo_run_id]
+
+
+def test_canonical_research_demo_executor_no_signal_cycle_advances_progress(monkeypatch):
+    executor = _executor(
+        monkeypatch,
+        trading_cycle=_CycleWithRuntime("BTCUSDT:1m:2026-09-24T00:07:00Z", signal_type="NO_SIGNAL", execution_status=None),
+    )
+    record = _copy_record(_demo_record(), started_at="2026-09-24T00:00:00Z", requested_at="2026-09-24T00:00:00Z")
+
+    result = executor.start_research_demo(record)
+
+    assert result["progress"]["observed_at"] == "2026-09-24T00:07:00Z"
+    assert result["progress"]["elapsed_seconds"] == 420
+
+
+def test_canonical_research_demo_executor_checkpoint_recovery_advances_progress(monkeypatch):
+    executor = _executor(
+        monkeypatch,
+        trading_cycle=_CycleWithRuntime(
+            "BTCUSDT:1m:2026-09-24T00:11:00Z",
+            skipped_reason="checkpoint_recovery_processed",
+        ),
+    )
+    record = _copy_record(_demo_record(), started_at="2026-09-24T00:00:00Z", requested_at="2026-09-24T00:00:00Z")
+
+    result = executor.start_research_demo(record)
+
+    assert result["progress"]["observed_at"] == "2026-09-24T00:11:00Z"
+    assert result["progress"]["elapsed_seconds"] == 660
+    assert result["progress"]["started_at"] == "2026-09-24T00:00:00Z"
+
+
+def test_canonical_research_demo_executor_older_replay_preserves_newer_parent_progress(monkeypatch):
+    executor = _executor(
+        monkeypatch,
+        trading_cycle=_CycleWithRuntime("BTCUSDT:1m:2026-09-24T00:05:00Z"),
+    )
+    record = _copy_record(
+        _demo_record(),
+        started_at="2026-09-24T00:00:00Z",
+        requested_at="2026-09-24T00:00:00Z",
+        progress={
+            "observed_at": "2026-09-24T00:10:00Z",
+            "elapsed_seconds": 600,
+            "duration_seconds": 604800,
+            "duration_elapsed": False,
+            "factual_progress_source": "canonical_research_demo_owner_state",
+        },
+    )
+
+    result = executor.start_research_demo(record)
+
+    assert result["terminal"] is False
+    assert result["progress"]["observed_at"] == "2026-09-24T00:10:00Z"
+    assert result["progress"]["elapsed_seconds"] == 600
+    assert result["progress"]["duration_elapsed"] is False
+
+
+def test_canonical_research_demo_dispatch_same_candle_replay_is_semantically_idempotent(monkeypatch):
+    record = _copy_record(_demo_record(), started_at="2026-09-24T00:00:00Z", requested_at="2026-09-24T00:00:00Z")
+    store = _FakeResearchDemoStore(record)
+    executor = _executor(
+        monkeypatch,
+        trading_cycle=_CycleWithRuntime("BTCUSDT:1m:2026-09-24T00:05:00Z"),
+    )
+
+    first = ResearchDemoExecutionDispatcher(store=store, executor=executor).dispatch(record.demo_run_id)
+    progress_after_first = dict(store.record.progress)
+    second = ResearchDemoExecutionDispatcher(store=store, executor=executor).dispatch(record.demo_run_id)
+
+    assert first == f"research_demo_running:{record.demo_run_id}"
+    assert second == f"research_demo_running:{record.demo_run_id}"
+    assert store.record.demo_run_id == record.demo_run_id
+    assert store.record.progress["observed_at"] == "2026-09-24T00:05:00Z"
+    assert store.record.progress["elapsed_seconds"] == 300
+    assert store.record.progress["duration_elapsed"] == progress_after_first["duration_elapsed"]
+    assert store.record.progress["observed_at"] == progress_after_first["observed_at"]
+    assert store.record.progress["elapsed_seconds"] == progress_after_first["elapsed_seconds"]
+
+
+def test_canonical_research_demo_executor_no_factual_timestamp_does_not_use_wall_clock(monkeypatch):
+    executor = _executor(
+        monkeypatch,
+        now="2026-10-02T00:00:01+00:00",
+        trading_cycle=_CycleWithRuntime("unparseable-candle-id"),
+        accounting=_FakeAccountingStore(({"trade_id": "must-not-complete"},)),
+    )
+    record = _copy_record(
+        _demo_record(),
+        started_at="2026-09-24T00:00:00Z",
+        requested_at="2026-09-24T00:00:00Z",
+        progress={
+            "observed_at": "2026-09-24T00:05:00Z",
+            "elapsed_seconds": 300,
+            "duration_seconds": 604800,
+            "duration_elapsed": False,
+            "factual_progress_source": "canonical_research_demo_owner_state",
+        },
+    )
+
+    result = executor.start_research_demo(record)
+
+    assert result["terminal"] is False
+    assert "progress" not in result
+    assert "result" not in result
+
+
+def test_canonical_research_demo_completion_requires_factual_progress_boundary(monkeypatch):
+    record = _copy_record(
+        _demo_record(),
+        started_at="2026-09-24T00:00:00Z",
+        requested_at="2026-09-24T00:00:00Z",
+        progress={
+            "observed_at": "2026-09-30T23:59:00Z",
+            "elapsed_seconds": 604740,
+            "duration_seconds": 604800,
+            "duration_elapsed": False,
+            "factual_progress_source": "canonical_research_demo_owner_state",
+        },
+    )
+    no_timestamp = _executor(
+        monkeypatch,
+        now="2026-10-02T00:00:01+00:00",
+        trading_cycle=_CycleWithRuntime("unparseable-candle-id"),
+        accounting=_FakeAccountingStore(({"trade_id": "must-not-complete"},)),
+    )
+    factual_boundary = _executor(
+        monkeypatch,
+        now="2026-10-02T00:00:01+00:00",
+        trading_cycle=_CycleWithRuntime("BTCUSDT:1m:2026-10-01T00:00:00Z"),
+        accounting=_FakeAccountingStore(()),
+    )
+
+    before = no_timestamp.start_research_demo(record)
+    after = factual_boundary.start_research_demo(record)
+
+    assert before["terminal"] is False
+    assert "progress" not in before
+    assert after["terminal"] is True
+    assert after["progress"]["observed_at"] == "2026-10-01T00:00:00Z"
+    assert after["progress"]["elapsed_seconds"] == 604800
+    assert after["progress"]["duration_elapsed"] is True
+    assert after["result"]["source"] == "canonical_futures_accounting"
+
+
+def test_canonical_research_demo_executor_checkpoint_recovery_older_does_not_regress(monkeypatch):
+    executor = _executor(
+        monkeypatch,
+        trading_cycle=_CycleWithRuntime(
+            "BTCUSDT:1m:2026-09-24T00:04:00Z",
+            skipped_reason="checkpoint_recovery_processed",
+        ),
+    )
+    record = _copy_record(
+        _demo_record(),
+        started_at="2026-09-24T00:00:00Z",
+        requested_at="2026-09-24T00:00:00Z",
+        progress={
+            "observed_at": "2026-09-24T00:11:00Z",
+            "elapsed_seconds": 660,
+            "duration_seconds": 604800,
+            "duration_elapsed": False,
+            "factual_progress_source": "canonical_research_demo_owner_state",
+        },
+    )
+
+    result = executor.start_research_demo(record)
+
+    assert result["progress"]["observed_at"] == "2026-09-24T00:11:00Z"
+    assert result["progress"]["elapsed_seconds"] == 660
+
+
+def test_canonical_research_demo_dispatch_blocked_cycle_does_not_refresh_successful_progress(monkeypatch):
+    record = _copy_record(
+        _demo_record(),
+        status="RUNNING",
+        started_at="2026-09-24T00:00:00Z",
+        requested_at="2026-09-24T00:00:00Z",
+        progress={
+            "observed_at": "2026-09-24T00:05:00Z",
+            "elapsed_seconds": 300,
+            "factual_progress_source": "canonical_research_demo_owner_state",
+        },
+    )
+    store = _FakeResearchDemoStore(record)
+    executor = _executor(monkeypatch, trading_cycle=_FakeTradingCycle(canonical=False))
+
+    with pytest.raises(PostgresPersistenceError, match="research_demo_canonical_execution_cycle_unavailable"):
+        ResearchDemoExecutionDispatcher(store=store, executor=executor).dispatch(record.demo_run_id)
+
+    assert store.record.progress["observed_at"] == "2026-09-24T00:05:00Z"
+    assert store.record.progress["elapsed_seconds"] == 300
+
+
+def test_demo_execution_projection_uses_progress_observed_at_as_updated_at():
+    execution = _demo_from_execution_owner(
+        _execution_owner_record(
+            status="RUNNING",
+            started_at="2026-09-24T00:00:00Z",
+            progress={
+                "observed_at": "2026-09-24T00:12:00Z",
+                "elapsed_seconds": 720,
+                "factual_progress_source": "canonical_research_demo_owner_state",
+            },
+        )
+    )
+
+    assert execution.updated_at == "2026-09-24T00:12:00Z"
+
+
 def test_canonical_research_demo_executor_finalizes_result_from_accounting_once(monkeypatch):
     executor = _executor(
         monkeypatch,
         now="2026-10-02T00:00:01+00:00",
+        trading_cycle=_CycleWithRuntime("BTCUSDT:1m:2026-10-02T00:00:01Z"),
         accounting=_FakeAccountingStore(
             (
                 {
@@ -630,6 +883,7 @@ def test_canonical_research_demo_executor_allows_runtime_wait_state(monkeypatch)
 
     assert result["terminal"] is False
     assert result["cycle"]["canonical_runtime_wait_state"] is True
+    assert "progress" not in result
 
 
 def test_canonical_research_demo_result_projection_fails_closed_on_attribution_query_error(monkeypatch):
@@ -962,6 +1216,7 @@ def test_research_demo_dispatch_completes_terminal_result_with_canonical_executo
     executor = _executor(
         monkeypatch,
         now="2026-10-02T00:00:01+00:00",
+        trading_cycle=_CycleWithRuntime("BTCUSDT:1m:2026-10-02T00:00:01Z"),
         accounting=_FakeAccountingStore(()),
     )
     record = _copy_record(_demo_record(), started_at="2026-09-24T00:00:00Z", requested_at="2026-09-24T00:00:00Z")
@@ -997,7 +1252,7 @@ def test_research_demo_postgres_executor_persists_progress_completion_and_reconn
         executor = CanonicalResearchDemoExecutionExecutor(
             config=load_config(_demo_runtime_env()),
             factory=factory,
-            trading_cycle=_FakeTradingCycle(),
+            trading_cycle=_FakeTradingCycle(candle_id="BTCUSDT:1m:2026-10-02T00:00:01Z"),
             accounting_store=_FakeAccountingStore(()),
             clock=lambda: datetime.fromisoformat("2026-10-02T00:00:01+00:00"),
         )
@@ -1037,7 +1292,14 @@ class _FakeResearchDemoStore:
 
     def mark_running(self, demo_run_id: str, *, progress=None):
         self.transitions.append("RUNNING")
-        self.record = _copy_record(self.record, status="RUNNING", started_at="2026-09-24T00:00:01Z")
+        started_at = self.record.started_at or "2026-09-24T00:00:01Z"
+        merged_progress = None if progress is None else research_demo_execution._monotonic_progress(record=self.record, candidate=progress)
+        self.record = _copy_record(
+            self.record,
+            status="RUNNING",
+            started_at=started_at,
+            progress={**self.record.progress, **(merged_progress or {}), "started_at": started_at},
+        )
         return self.record
 
     def mark_completed(self, demo_run_id: str, *, result):
@@ -1063,10 +1325,18 @@ class _FakeResearchDemoExecutor:
 class _FakeTradingCycle:
     canonical_research_demo_trading_cycle = True
 
-    def __init__(self, *, unresolved=0, canonical=True, execution_status="ACKNOWLEDGED"):
+    def __init__(
+        self,
+        *,
+        unresolved=0,
+        canonical=True,
+        execution_status="ACKNOWLEDGED",
+        candle_id="BTCUSDT:1m:2026-09-25T00:00:00Z",
+    ):
         self.unresolved = unresolved
         self.canonical = canonical
         self.execution_status = execution_status
+        self.candle_id = candle_id
         self.calls = []
 
     def run_research_demo_cycle(self, *, record, configuration):
@@ -1079,6 +1349,56 @@ class _FakeTradingCycle:
             "canonical_lifecycle_invoked": self.canonical,
             "canonical_futures_execution_invoked": self.canonical and self.execution_status is not None,
             "unresolved_obligations": self.unresolved,
+            "runtime": {
+                "active": (
+                    {
+                        "candle_id": self.candle_id,
+                        "signal_type": "CONFIRMED",
+                        "intent_id": "intent-unit",
+                        "risk_decision_id": "risk-unit",
+                        "risk_approved": True,
+                        "execution_status": self.execution_status,
+                        "skipped_reason": None,
+                    },
+                ),
+                "test": (),
+            },
+        }
+
+
+class _CycleWithRuntime:
+    canonical_research_demo_trading_cycle = True
+
+    def __init__(self, candle_id: str, *, signal_type: str = "CONFIRMED", execution_status="ACKNOWLEDGED", skipped_reason=None):
+        self.candle_id = candle_id
+        self.signal_type = signal_type
+        self.execution_status = execution_status
+        self.skipped_reason = skipped_reason
+
+    def run_research_demo_cycle(self, *, record, configuration):
+        return {
+            "canonical_cycle": True,
+            "reconciliation_before_resubmit": True,
+            "resubmitted_without_reconciliation": False,
+            "canonical_runtime_wait_state": False,
+            "canonical_trading_decisions_invoked": True,
+            "canonical_lifecycle_invoked": True,
+            "canonical_futures_execution_invoked": self.execution_status is not None,
+            "unresolved_obligations": 0,
+            "runtime": {
+                "active": (
+                    {
+                        "candle_id": self.candle_id,
+                        "signal_type": self.signal_type,
+                        "intent_id": "intent-unit",
+                        "risk_decision_id": "risk-unit",
+                        "risk_approved": True,
+                        "execution_status": self.execution_status,
+                        "skipped_reason": self.skipped_reason,
+                    },
+                ),
+                "test": (),
+            },
         }
 
 
@@ -1182,7 +1502,7 @@ def _demo_run_projection(*, status: ResearchDemoStatus, started_at=None, stopped
     )
 
 
-def _execution_owner_record(*, status: str, started_at, completed_at=None, error=None, result=None):
+def _execution_owner_record(*, status: str, started_at, completed_at=None, error=None, result=None, progress=None):
     payload = {
         "demo_run_id": "rdm-unit-1",
         "research_id": "res-unit-1",
@@ -1196,7 +1516,7 @@ def _execution_owner_record(*, status: str, started_at, completed_at=None, error
         "execution_owner": "trading-worker",
         "handoff_message_id": "research-demo-start-unit-1",
         "status": status,
-        "progress": {"factual_progress_source": "canonical_research_demo_owner_state"},
+        "progress": progress or {"factual_progress_source": "canonical_research_demo_owner_state"},
         "result": result,
         "error": error,
         "pin_payload": {"pin": "research-demo-execution"},

@@ -1182,13 +1182,16 @@ def _demo_from_execution_owner(record: OwnerStateRecord) -> ResearchDemoRunRecor
     result = payload.get("result")
     metrics = dict(result) if isinstance(result, dict) else {}
     progress = payload.get("progress")
+    progress_observed_at = (
+        _optional_text(progress.get("observed_at"), field="progress.observed_at") if isinstance(progress, dict) else None
+    )
     if isinstance(progress, dict) and "progress_days" in progress and "progress_days" not in metrics:
         metrics = {**metrics, "progress_days": progress.get("progress_days")}
     return ResearchDemoRunRecord(
         research_id=_required_text(payload.get("research_id"), field="research_id"),
         run_id=_required_text(payload.get("demo_run_id"), field="demo_run_id"),
         created_at=created_at,
-        updated_at=completed_at or _optional_text(payload.get("started_at"), field="started_at") or created_at,
+        updated_at=completed_at or progress_observed_at or _optional_text(payload.get("started_at"), field="started_at") or created_at,
         status=status,
         started_at=_optional_text(payload.get("started_at"), field="started_at"),
         stopped_at=completed_at,

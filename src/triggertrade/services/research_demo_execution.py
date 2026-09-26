@@ -270,7 +270,26 @@ class CanonicalResearchDemoExecutionExecutor:
             raise PostgresPersistenceError("research_demo_reconciliation_before_resubmit_failed")
         _require_canonical_cycle_evidence(cycle_result)
         unresolved = int(cycle_result.get("unresolved_obligations") or 0)
-        progress = _progress(record=record, now=self._clock())
+        if bool(cycle_result.get("canonical_runtime_wait_state")):
+            return {
+                "terminal": False,
+                "execution_owner": "trading-worker",
+                "durable": True,
+                "canonical_execution": True,
+                "configuration": _configuration_identity(configuration),
+                "cycle": dict(cycle_result),
+            }
+        progress_at = _cycle_progress_observed_at(cycle_result)
+        if progress_at is None:
+            return {
+                "terminal": False,
+                "execution_owner": "trading-worker",
+                "durable": True,
+                "canonical_execution": True,
+                "configuration": _configuration_identity(configuration),
+                "cycle": dict(cycle_result),
+            }
+        progress = _monotonic_progress(record=record, candidate=_progress(record=record, now=progress_at))
         if not progress["duration_elapsed"]:
             return {
                 "terminal": False,
@@ -419,6 +438,9 @@ class ResearchDemoExecutionStore:
             status="PENDING",
             progress={
                 "duration_days": 7,
+                "duration_seconds": DEMO_DURATION_DAYS * 24 * 60 * 60,
+                "elapsed_seconds": 0,
+                "duration_elapsed": False,
                 "started_at": None,
                 "completed_at": None,
                 "factual_progress_source": "canonical_research_demo_owner_state",
@@ -453,11 +475,12 @@ class ResearchDemoExecutionStore:
         if current.status in TERMINAL_RESEARCH_DEMO_STATUSES:
             return current
         now = _timestamp()
+        merged_progress = None if progress is None else _monotonic_progress(record=current, candidate=progress)
         return self._transition(
             current,
             status="RUNNING",
             started_at=current.started_at or now,
-            progress={**current.progress, **(progress or {}), "started_at": current.started_at or now},
+            progress={**current.progress, **(merged_progress or {}), "started_at": current.started_at or now},
         )
 
     def mark_completed(self, demo_run_id: str, *, result: dict[str, Any]) -> ResearchDemoExecutionRecord:
@@ -1326,9 +1349,9 @@ def _message_record_from_payload(payload: dict[str, Any]) -> MessageRecord:
 def _progress(*, record: ResearchDemoExecutionRecord, now: datetime) -> dict[str, Any]:
     started_at = _parse_time(record.started_at or record.requested_at)
     elapsed = max(now.astimezone(UTC) - started_at, timedelta(0))
-    duration = timedelta(days=DEMO_DURATION_DAYS)
+    duration_seconds = _progress_duration_seconds(record.progress)
+    duration = timedelta(seconds=duration_seconds)
     elapsed_seconds = int(elapsed.total_seconds())
-    duration_seconds = int(duration.total_seconds())
     return {
         "duration_days": DEMO_DURATION_DAYS,
         "started_at": started_at.isoformat().replace("+00:00", "Z"),
@@ -1338,6 +1361,105 @@ def _progress(*, record: ResearchDemoExecutionRecord, now: datetime) -> dict[str
         "duration_elapsed": elapsed >= duration,
         "factual_progress_source": "canonical_research_demo_owner_state",
     }
+
+
+def _monotonic_progress(*, record: ResearchDemoExecutionRecord, candidate: dict[str, Any]) -> dict[str, Any]:
+    existing = dict(record.progress or {})
+    candidate_progress = dict(candidate or {})
+    existing_observed = _optional_progress_time(existing.get("observed_at"))
+    candidate_observed = _optional_progress_time(candidate_progress.get("observed_at"))
+    if candidate_observed is None:
+        return existing
+    if existing_observed is not None and candidate_observed <= existing_observed:
+        return _normalize_existing_progress(record=record, existing=existing)
+    started_at = _parse_time(record.started_at or record.requested_at).isoformat().replace("+00:00", "Z")
+    duration_seconds = _progress_duration_seconds(existing or candidate_progress)
+    elapsed_seconds = max(_progress_elapsed_seconds(existing), _progress_elapsed_seconds(candidate_progress))
+    duration_elapsed = bool(existing.get("duration_elapsed")) or elapsed_seconds >= duration_seconds
+    return {
+        **existing,
+        **candidate_progress,
+        "started_at": existing.get("started_at") or started_at,
+        "duration_days": existing.get("duration_days") or DEMO_DURATION_DAYS,
+        "duration_seconds": duration_seconds,
+        "elapsed_seconds": elapsed_seconds,
+        "duration_elapsed": duration_elapsed,
+        "factual_progress_source": "canonical_research_demo_owner_state",
+    }
+
+
+def _normalize_existing_progress(*, record: ResearchDemoExecutionRecord, existing: dict[str, Any]) -> dict[str, Any]:
+    if not existing:
+        return existing
+    started_at = _parse_time(record.started_at or record.requested_at).isoformat().replace("+00:00", "Z")
+    duration_seconds = _progress_duration_seconds(existing)
+    elapsed_seconds = _progress_elapsed_seconds(existing)
+    return {
+        **existing,
+        "started_at": existing.get("started_at") or started_at,
+        "duration_days": existing.get("duration_days") or DEMO_DURATION_DAYS,
+        "duration_seconds": duration_seconds,
+        "elapsed_seconds": elapsed_seconds,
+        "duration_elapsed": bool(existing.get("duration_elapsed")) or elapsed_seconds >= duration_seconds,
+        "factual_progress_source": existing.get("factual_progress_source") or "canonical_research_demo_owner_state",
+    }
+
+
+def _progress_duration_seconds(progress: dict[str, Any]) -> int:
+    try:
+        value = int(progress.get("duration_seconds") or 0)
+    except (TypeError, ValueError):
+        value = 0
+    return value if value > 0 else DEMO_DURATION_DAYS * 24 * 60 * 60
+
+
+def _progress_elapsed_seconds(progress: dict[str, Any]) -> int:
+    try:
+        return max(0, int(progress.get("elapsed_seconds") or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _optional_progress_time(value: object) -> datetime | None:
+    if value is None:
+        return None
+    try:
+        return _parse_time(str(value))
+    except PostgresPersistenceError:
+        return None
+
+
+def _cycle_progress_observed_at(cycle_result: dict[str, Any]) -> datetime | None:
+    runtime = cycle_result.get("runtime")
+    if not isinstance(runtime, dict):
+        return None
+    candidates: list[datetime] = []
+    for lane in ("active", "test"):
+        rows = runtime.get(lane) or ()
+        if not isinstance(rows, (list, tuple)):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            candle_id = row.get("candle_id")
+            if not candle_id:
+                continue
+            observed_at = _observed_at_from_candle_id(str(candle_id))
+            if observed_at is not None:
+                candidates.append(observed_at)
+    if not candidates:
+        return None
+    return max(candidates)
+
+
+def _observed_at_from_candle_id(candle_id: str) -> datetime | None:
+    parts = candle_id.split(":", 2)
+    if len(parts) != 3:
+        return None
+    try:
+        return _parse_time(parts[2])
+    except PostgresPersistenceError:
+        return None
 
 
 def _project_result_from_accounting(
