@@ -6,7 +6,7 @@ from html import escape
 from http import HTTPStatus
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 import json
 import os
@@ -1550,14 +1550,26 @@ def _bool_value(value: object) -> bool:
 def _backtest_plan_from_payload(payload: dict) -> BacktestPlan:
     start = _iso_datetime(str(payload.get("research_start") or payload.get("start") or ""))
     end = _iso_datetime(str(payload.get("research_end") or payload.get("end") or ""))
+    timeframe = str(payload.get("timeframe") or "1m")
+    if timeframe == "1m":
+        start, end = _normalized_backtest_1m_window(start=start, end=end)
     return BacktestPlan(
         symbol=str(payload.get("symbol") or "BTCUSDT").upper(),
         category=str(payload.get("category") or "linear").lower(),
-        timeframe=str(payload.get("timeframe") or "1m"),
+        timeframe=timeframe,
         research_start=start,
         research_end=end,
         warmup_candles=int(payload.get("warmup_candles") or 60),
     )
+
+
+def _normalized_backtest_1m_window(*, start: datetime, end: datetime) -> tuple[datetime, datetime]:
+    duration = end - start
+    if duration <= timedelta(0):
+        raise ValueError("invalid backtest window")
+    normalized_end = end.astimezone(UTC).replace(second=0, microsecond=0)
+    normalized_start = normalized_end - duration
+    return normalized_start.replace(second=0, microsecond=0), normalized_end
 
 
 def _iso_datetime(value: str) -> datetime:

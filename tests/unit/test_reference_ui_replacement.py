@@ -338,7 +338,14 @@ def test_research_reference_actions_are_backend_wired_without_fixture_values():
     assert 'commandHeaders("application/json")' in html
     assert "window.runBacktest = async function(period)" in html
     assert "research_start:start.toISOString()" in html
+    assert "<th>Window</th>" in html
+    assert "<th>Started</th>" in html
+    assert "<th>Period</th>" in html
+    assert 'technical id: ${h(r.run_id || r.backtest_run_id)}' in html
     assert "window.runDemo = async function()" in html
+    assert 'id="demoActiveNotice"' in html
+    assert "function activeDemoRun()" in html
+    assert "Demo already running" in html
     assert "window.setDecision = async function(value)" in html
     assert 'idempotency_key:"ui-"+Date.now()' in html
     assert "<td>R-001</td>" not in html
@@ -378,7 +385,7 @@ def test_research_detail_deep_link_hydrates_id_before_page_rewrite():
     assert "function showResearchLoading(id)" in html
     assert "currentResearch = {research:{research_id:id}, backtests:null, demos:null, loading:true}" in html
     assert 'const loading = !!currentResearch?.loading;' in html
-    assert 'loading ? \'<tr><td colspan="6" class="empty">Loading Research detail.</td></tr>\' : runRows(backtests, "backtest")' in html
+    assert 'loading ? \'<tr><td colspan="7" class="empty">Loading Research detail.</td></tr>\' : runRows(backtests, "backtest")' in html
     assert 'const backtestState = loading ? {label:"LOADING", done:false, failed:false} : workflowBacktestState(backtests)' in html
     assert 'if(!currentResearchId || loading) setResearchActionButtonsDisabled(true)' in html
     assert 'fetch(`/api/research/${encodeURIComponent(safeId)}`, {credentials:"same-origin"})' in html
@@ -419,6 +426,7 @@ def test_research_detail_backtest_and_demo_actions_have_visible_checked_feedback
     assert 'await fetch(`/api/research/${{encodeURIComponent(currentResearchId)}}/backtests`' not in html
 
     assert 'window.runDemo = async function()' in html
+    assert 'const active = activeDemoRun(); if(active){ setResearchActionStatus(`Demo already running: ${active.run_id || "active run"}`, "neutral"); applyCommandAvailability(); return; }' in html
     assert 'await postJson(`/api/research/${encodeURIComponent(currentResearchId)}/demo/start`' in html
     assert 'idempotency_key:commandIdempotencyKey("research-demo")' in html
     assert 'setResearchActionStatus("Starting demo...", "neutral")' in html
@@ -432,6 +440,8 @@ def test_research_detail_demo_and_compare_use_factual_backend_state_only():
 
     assert 'if(kind === "demo" && status === "RUNNING")' in html
     assert 'return progress === null || progress === undefined || progress === "" ? "RUNNING" : `RUNNING · ${h(progress)} / 7`' in html
+    assert 'const activeDemo = node.getAttribute("onclick") === "runDemo()" ? activeDemoRun() : null;' in html
+    assert 'node.title = `Demo already running: ${activeDemo.run_id || "active run"}`' in html
     assert 'setWorkflowCard("#wfCompare, #workflow-compare", "#wfCompareState, #workflow-compare-state", {label:currentCompare?.available ? "AVAILABLE" : "WAITING"' in html
     assert 'if(!currentCompare?.available){ table.innerHTML = `<tbody><tr><td class="empty">${h(currentCompare?.reason || "Compare unavailable")}</td></tr></tbody>`; return; }' in html
     assert 'currentCompare.available?"Complete":"Pending"' not in html

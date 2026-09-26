@@ -1758,8 +1758,8 @@ def render_product_dashboard(
 <section class="page" id="research-detail">
   <div class="research-detail-head"><div class="research-detail-title" id="researchTitle">Research</div><button class="btn" onclick="exportResearch()">Export</button></div>
   <div class="workflow"><div class="workflow-step" id="wfBacktest"><div class="workflow-label">Backtest</div><div class="workflow-state" id="wfBacktestState">Pending</div></div><div class="workflow-step" id="wfDemo"><div class="workflow-label">Demo</div><div class="workflow-state" id="wfDemoState">Pending</div><div class="demo-segments" id="demoSegments"></div></div><div class="workflow-step" id="wfCompare"><div class="workflow-label">Compare</div><div class="workflow-state" id="wfCompareState">Pending</div></div><div class="workflow-step" id="wfDecision"><div class="workflow-label">Decision</div><div class="workflow-state" id="wfDecisionState">NONE</div></div></div>
-  <section class="panel"><div class="panel-header"><div class="panel-title">Backtest</div><div class="run-actions"><button class="btn" onclick="runBacktest('7D')">Run 7D</button><button class="btn" onclick="runBacktest('30D')">Run 30D</button><button class="btn" onclick="runBacktest('90D')">Run 90D</button></div></div><div class="table-wrap"><table><thead><tr><th>Run</th><th>Period</th><th>Trades</th><th>Net P/L</th><th>Profit Factor</th><th>Result</th></tr></thead><tbody id="backtestBody"></tbody></table></div></section>
-  <section class="panel"><div class="panel-header"><div class="panel-title">Demo</div><button class="btn" onclick="runDemo()">Run Demo 7D</button></div><div class="table-wrap"><table><thead><tr><th>Run</th><th>Period</th><th>Trades</th><th>Net P/L</th><th>Profit Factor</th><th>Result</th></tr></thead><tbody id="demoBody"></tbody></table></div></section>
+  <section class="panel"><div class="panel-header"><div class="panel-title">Backtest</div><div class="run-actions"><button class="btn" onclick="runBacktest('7D')">Run 7D</button><button class="btn" onclick="runBacktest('30D')">Run 30D</button><button class="btn" onclick="runBacktest('90D')">Run 90D</button></div></div><div class="table-wrap"><table><thead><tr><th>Window</th><th>Started</th><th>Period</th><th>Trades</th><th>Net P/L</th><th>Profit Factor</th><th>Result</th></tr></thead><tbody id="backtestBody"></tbody></table></div></section>
+  <section class="panel"><div class="panel-header"><div><div class="panel-title">Demo</div><div class="panel-meta" id="demoActiveNotice"></div></div><button class="btn" onclick="runDemo()">Run Demo 7D</button></div><div class="table-wrap"><table><thead><tr><th>Run</th><th>Period</th><th>Trades</th><th>Net P/L</th><th>Profit Factor</th><th>Result</th></tr></thead><tbody id="demoBody"></tbody></table></div></section>
   <section class="panel"><div class="panel-header"><div class="panel-title">Compare</div></div><div class="compare-toolbar"><div class="compare-tabs"><button class="compare-tab active" data-scope="overall">Overall</button><button class="compare-tab" data-scope="segment">By Segment</button><button class="compare-tab" data-scope="coin">By Coin</button><button class="compare-tab" data-scope="direction">By Direction</button></div><div class="compare-periods"><button class="compare-period active" data-period="7D">7D</button><button class="compare-period" data-period="30D">30D</button><button class="compare-period" data-period="90D">90D</button></div></div><div class="table-wrap"><table id="compareTable"></table></div></section>
   <section class="panel"><div class="panel-header"><div><div class="panel-title">Decision</div><div class="panel-meta" id="decisionStateInline">NONE</div></div><div class="decision-actions"><button class="btn danger" onclick="setDecision('reject')">Reject</button><button class="btn primary" onclick="setDecision('make-active')">Make Active</button></div></div></section>
 </section>
@@ -1864,6 +1864,34 @@ def _without_reference_scripts(body: str) -> str:
 def _neutral_research_detail_placeholders(body: str) -> str:
     """Remove prototype Research detail values from the final server-composed DOM."""
 
+    body = body.replace(
+        """<th>Run</th>
+            <th>Period</th>
+            <th>Trades</th>
+            <th>Net P/L</th>
+            <th>Profit Factor</th>
+            <th>Result</th>""",
+        """<th>Window</th>
+            <th>Started</th>
+            <th>Period</th>
+            <th>Trades</th>
+            <th>Net P/L</th>
+            <th>Profit Factor</th>
+            <th>Result</th>""",
+        1,
+    )
+    body = body.replace(
+        """<div class="panel-title">
+        Demo
+      </div>""",
+        """<div>
+        <div class="panel-title">
+          Demo
+        </div>
+        <div class="panel-meta" id="demoActiveNotice"></div>
+      </div>""",
+        1,
+    )
     replacements = {
         "R-022 · SET-012 V2 · Rules V14": "Research",
         "SET-012": "SET unavailable",
@@ -1968,9 +1996,13 @@ def _reference_backend_script(payload: str) -> str:
     });
     qa('button[onclick^="runBacktest"], button[onclick="runDemo()"], button[onclick^="setDecision"], button[onclick="openNewResearch()"]', desktop).forEach(node => {
       const unavailable = commandUnavailable || researchRegistryUnavailable();
-      node.disabled = unavailable;
-      node.setAttribute("aria-disabled", unavailable ? "true" : "false");
-      if(unavailable) node.title = researchRegistryUnavailable() ? state.research.unavailable_reason : commandUnavailableMessage();
+      const activeDemo = node.getAttribute("onclick") === "runDemo()" ? activeDemoRun() : null;
+      const disabled = unavailable || !!activeDemo;
+      node.disabled = disabled;
+      node.setAttribute("aria-disabled", disabled ? "true" : "false");
+      if(activeDemo) node.title = `Demo already running: ${activeDemo.run_id || "active run"}`;
+      else if(unavailable) node.title = researchRegistryUnavailable() ? state.research.unavailable_reason : commandUnavailableMessage();
+      else node.removeAttribute("title");
     });
   }
   function normalizeCoinAllocation(v){
@@ -2681,6 +2713,21 @@ def _reference_backend_script(payload: str) -> str:
     }
     return status || "UNKNOWN";
   }
+  function parseTime(value){
+    const time = Date.parse(value || "");
+    return Number.isFinite(time) ? time : null;
+  }
+  function backtestWindowLabel(row){
+    const start = parseTime(row?.period_start);
+    const end = parseTime(row?.period_end);
+    if(start === null || end === null || end <= start) return "—";
+    const days = Math.round((end - start) / 86400000);
+    return [7,30,90].includes(days) ? `${days}D` : `${days}D`;
+  }
+  function activeDemoRun(){
+    const demos = Array.isArray(currentResearch?.demos) ? currentResearch.demos : [];
+    return demos.find(row => isRunningStatus(row?.status));
+  }
   function workflowBacktestState(rows){
     if(!rows.length) return {label:"NOT STARTED", done:false, failed:false};
     const latest = rows[0] || {};
@@ -2712,7 +2759,15 @@ def _reference_backend_script(payload: str) -> str:
     }
     segments.innerHTML = Array.from({length:7}, (_, i) => `<div class="demo-segment ${i < progress ? "filled" : ""}"></div>`).join("");
   }
-  function runRows(rows, kind){ return rows.length ? rows.map(r => `<tr><td>${h(r.run_id || r.backtest_run_id)}</td><td>${h((r.period_start || r.started_at || "—") + " -> " + (r.period_end || r.stopped_at || "—"))}</td><td>${h(r.metrics?.closed_trades ?? "—")}</td><td>${h(r.metrics?.net_pnl ?? "—")}</td><td>${h(r.metrics?.profit_factor ?? "—")}</td><td>${h(factualRunStatus(r, kind))}</td></tr>`).join("") : '<tr><td colspan="6" class="empty">No runs.</td></tr>'; }
+  function runRows(rows, kind){
+    if(!rows.length) return `<tr><td colspan="${kind === "backtest" ? 7 : 6}" class="empty">No runs.</td></tr>`;
+    return rows.map(r => {
+      const period = h((r.period_start || r.started_at || "—") + " -> " + (r.period_end || r.stopped_at || "—"));
+      const metrics = `<td>${h(r.metrics?.closed_trades ?? "—")}</td><td>${h(r.metrics?.net_pnl ?? "—")}</td><td>${h(r.metrics?.profit_factor ?? "—")}</td><td>${h(factualRunStatus(r, kind))}</td>`;
+      if(kind === "backtest") return `<tr><td><strong>${h(backtestWindowLabel(r))}</strong><div class="panel-meta">technical id: ${h(r.run_id || r.backtest_run_id)}</div></td><td>${h(r.created_at || "—")}</td><td>${period}</td>${metrics}</tr>`;
+      return `<tr><td>${h(r.run_id || r.backtest_run_id)}</td><td>${period}</td>${metrics}</tr>`;
+    }).join("");
+  }
   function renderResearchDetail(){
     const r = currentResearch?.research || {};
     const decisionValue = r.decision || r.status || "NONE";
@@ -2723,13 +2778,16 @@ def _reference_backend_script(payload: str) -> str:
     if(title) title.textContent = r.research_id ? `${r.research_id} · ${r.set_id} ${r.set_version} · Rules ${r.rules_display_version || r.rules_version_id}` : "Research";
     const bt = q("#backtest-body", desktop) || q("#backtestBody", desktop);
     const dm = q("#demo-body", desktop) || q("#demoBody", desktop);
-    if(bt) bt.innerHTML = loading ? '<tr><td colspan="6" class="empty">Loading Research detail.</td></tr>' : runRows(backtests, "backtest");
+    if(bt) bt.innerHTML = loading ? '<tr><td colspan="7" class="empty">Loading Research detail.</td></tr>' : runRows(backtests, "backtest");
     if(dm) dm.innerHTML = loading ? '<tr><td colspan="6" class="empty">Loading Research detail.</td></tr>' : runRows(demos, "demo");
     const backtestState = loading ? {label:"LOADING", done:false, failed:false} : workflowBacktestState(backtests);
     const demoState = loading ? {label:"LOADING", done:false, failed:false, progress:null} : workflowDemoState(demos);
     setWorkflowCard("#wfBacktest, #workflow-backtest", "#wfBacktestState, #workflow-backtest-state", backtestState);
     setWorkflowCard("#wfDemo, #workflow-demo", "#wfDemoState, #workflow-demo-state", demoState);
     renderDemoSegments(demoState.progress);
+    const activeDemo = activeDemoRun();
+    const demoNotice = q("#demoActiveNotice", desktop);
+    if(demoNotice) demoNotice.textContent = activeDemo ? `Demo already running: ${activeDemo.run_id || "active run"}` : "";
     const decision = q("#decision-state", desktop) || q("#decisionStateInline", desktop);
     if(decision){ decision.textContent = decisionValue; decision.className = "badge " + String(decisionValue || "none").toLowerCase(); }
     const workflowDecision = q("#wfDecisionState, #workflow-decision-state", desktop) || q("#flowDecisionState", desktop);
@@ -2811,9 +2869,10 @@ def _reference_backend_script(payload: str) -> str:
   };
   function setResearchActionButtonsDisabled(disabled){
     qa('button[onclick^="runBacktest"], button[onclick="runDemo()"]', desktop).forEach(node => node.disabled = !!disabled);
+    if(!disabled) applyCommandAvailability();
   }
   window.runBacktest = async function(period){ if(!currentResearchId){ setResearchActionStatus("Research record unavailable.", "negative"); return; } if(!canSubmit()){ setResearchActionStatus(commandUnavailableMessage(), "negative"); return; } if(researchRegistryUnavailable()){ setResearchActionStatus(state.research.unavailable_reason, "negative"); return; } const days = period === "90D" ? 90 : period === "30D" ? 30 : 7; const end = new Date(), start = new Date(end.getTime() - days * 86400000); setResearchActionButtonsDisabled(true); try{ setResearchActionStatus("Submitting backtest...", "neutral"); await postJson(`/api/research/${encodeURIComponent(currentResearchId)}/backtests`, {research_start:start.toISOString(),research_end:end.toISOString(),idempotency_key:commandIdempotencyKey("research-backtest")}); setResearchActionStatus("Backtest submitted.", "positive"); await window.openResearchById(currentResearchId); }catch(error){ currentCompare = {available:false, reason:error.message || "Backtest unavailable"}; setResearchActionStatus(error.message || "Backtest unavailable.", "negative"); renderCompare(); } finally { setResearchActionButtonsDisabled(false); } };
-  window.runDemo = async function(){ if(!currentResearchId){ setResearchActionStatus("Research record unavailable.", "negative"); return; } if(!canSubmit()){ setResearchActionStatus(commandUnavailableMessage(), "negative"); return; } if(researchRegistryUnavailable()){ setResearchActionStatus(state.research.unavailable_reason, "negative"); return; } setResearchActionButtonsDisabled(true); try{ setResearchActionStatus("Starting demo...", "neutral"); await postJson(`/api/research/${encodeURIComponent(currentResearchId)}/demo/start`, {idempotency_key:commandIdempotencyKey("research-demo")}); setResearchActionStatus("Demo submitted.", "positive"); await window.openResearchById(currentResearchId); }catch(error){ currentCompare = {available:false, reason:error.message || "Demo start unavailable"}; setResearchActionStatus(error.message || "Demo start unavailable.", "negative"); renderCompare(); } finally { setResearchActionButtonsDisabled(false); } };
+  window.runDemo = async function(){ if(!currentResearchId){ setResearchActionStatus("Research record unavailable.", "negative"); return; } if(!canSubmit()){ setResearchActionStatus(commandUnavailableMessage(), "negative"); return; } if(researchRegistryUnavailable()){ setResearchActionStatus(state.research.unavailable_reason, "negative"); return; } const active = activeDemoRun(); if(active){ setResearchActionStatus(`Demo already running: ${active.run_id || "active run"}`, "neutral"); applyCommandAvailability(); return; } setResearchActionButtonsDisabled(true); try{ setResearchActionStatus("Starting demo...", "neutral"); await postJson(`/api/research/${encodeURIComponent(currentResearchId)}/demo/start`, {idempotency_key:commandIdempotencyKey("research-demo")}); setResearchActionStatus("Demo submitted.", "positive"); await window.openResearchById(currentResearchId); }catch(error){ currentCompare = {available:false, reason:error.message || "Demo start unavailable"}; setResearchActionStatus(error.message || "Demo start unavailable.", "negative"); renderCompare(); } finally { setResearchActionButtonsDisabled(false); } };
   window.setDecision = async function(value){ if(!currentResearchId){ setResearchActionStatus("Research record unavailable.", "negative"); return; } if(!canSubmit()){ setResearchActionStatus(commandUnavailableMessage(), "negative"); return; } if(researchRegistryUnavailable()){ setResearchActionStatus(state.research.unavailable_reason, "negative"); return; } const normalized = String(value || "").toUpperCase(); const url = normalized === "REJECT" ? `/api/research/${encodeURIComponent(currentResearchId)}/archive` : `/api/research/${encodeURIComponent(currentResearchId)}/decision/make-active`; try{ setResearchActionStatus("Submitting decision...", "neutral"); await postJson(url, {idempotency_key:"ui-"+Date.now()}); setResearchActionStatus("Decision submitted.", "positive"); }catch(error){ currentCompare = {available:false, reason:error.message || "Decision unavailable"}; setResearchActionStatus(error.message || "Decision unavailable.", "negative"); renderCompare(); } await window.openResearchById(currentResearchId); };
   window.exportResearch = function(){ const blob = new Blob([JSON.stringify({research:currentResearch, compare:currentCompare}, null, 2)], {type:"application/json"}); const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `${currentResearchId || "research"}-research.json`; a.click(); };
   function setupNewResearch(){

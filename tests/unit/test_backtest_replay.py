@@ -39,6 +39,29 @@ def test_historical_candles_reject_invalid_order_duplicates_gaps_and_scope():
         validate_historical_candles((replace(candles[0], completed=False),))
 
 
+def test_aligned_7d_historical_window_passes_strict_boundary_validation():
+    start = datetime(2026, 9, 19, 10, 49, tzinfo=UTC)
+    end = datetime(2026, 9, 26, 10, 49, tzinfo=UTC)
+    candles = tuple(_candle(index, start=start) for index in range(7 * 24 * 60))
+
+    validated = validate_historical_candles(candles, start=start, end=end)
+
+    assert validated[0].open_time == start
+    assert validated[-1].close_time == end
+    assert len(validated) == 10080
+
+
+def test_off_boundary_historical_window_still_fails_closed():
+    start = datetime(2026, 9, 19, 10, 49, tzinfo=UTC)
+    end = datetime(2026, 9, 19, 10, 52, tzinfo=UTC)
+    candles = tuple(_candle(index, start=start) for index in range(3))
+
+    with pytest.raises(HistoricalDataError, match="boundary"):
+        validate_historical_candles(candles, start=start + timedelta(seconds=58, microseconds=413000), end=end)
+    with pytest.raises(HistoricalDataError, match="boundary"):
+        validate_historical_candles(candles, start=start, end=end + timedelta(seconds=58, microseconds=413000))
+
+
 def test_historical_cache_reuses_same_validated_content(tmp_path):
     cache = HistoricalKlineCache(tmp_path / "history")
     candles = _candles(5)

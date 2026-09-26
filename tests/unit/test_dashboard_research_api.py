@@ -1,5 +1,6 @@
 from http import HTTPStatus
 from http.client import HTTPConnection
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from decimal import Decimal
 import json
@@ -22,7 +23,7 @@ from triggertrade.persistence import (
     current_futures_active_trigger_set,
 )
 from triggertrade.services.operator_auth import OperatorCommandAuthorizer
-from triggertrade.services.research import ResearchDemoExecutionHandoffResult
+from triggertrade.services.research import ResearchBacktestExecutionHandoffResult, ResearchDemoExecutionHandoffResult
 from triggertrade.trigger_sets import TriggerSetStatus, TriggerSetVersion
 from tests.unit.test_backtest_replay import _instrument, _trade_candles
 from tests.unit.test_dashboard_rules_api import _json_request, _start, _stop
@@ -784,6 +785,18 @@ def test_research_registry_unavailable_returns_503_not_empty_success(tmp_path):
         _stop(server, thread)
 
 
+def test_research_backtest_payload_normalizes_7d_window_before_pinning(tmp_path):
+    _assert_backtest_payload_normalizes_window(tmp_path, days=7, run_id="res-normalized-7d")
+
+
+def test_research_backtest_payload_normalizes_30d_window_before_pinning(tmp_path):
+    _assert_backtest_payload_normalizes_window(tmp_path, days=30, run_id="res-normalized-30d")
+
+
+def test_research_backtest_payload_normalizes_90d_window_before_pinning(tmp_path):
+    _assert_backtest_payload_normalizes_window(tmp_path, days=90, run_id="res-normalized-90d")
+
+
 def test_research_registry_unavailable_renders_unavailable_state_not_empty_success(tmp_path):
     db, _rules = _research_db(tmp_path)
     html = render_dashboard(
@@ -826,6 +839,68 @@ def _managed_json_request(
     data = response.read().decode("utf-8")
     assert response.status == expected
     return json.loads(data)
+
+
+def _assert_backtest_payload_normalizes_window(tmp_path, *, days: int, run_id: str):
+    db, rules = _research_db(tmp_path)
+    current = rules.get_current_rules_version()
+    record = _research_record(
+        research_id=run_id,
+        set_id="triggertrade-futures-core",
+        set_version="v1",
+        rules_version_id=current.rules_version_id,
+        rules_display_version=current.version,
+    )
+    registry = _FakeResearchConfigRegistry(
+        trigger_set=current_futures_active_trigger_set(created_at="2026-09-08T00:00:00+00:00"),
+        rules=current,
+        research=(record,),
+    )
+    run_store = _FakeResearchRunStore(research=(record,))
+    handoff = _FakeBacktestHandoff(run_store)
+    server = create_server(
+        port=0,
+        db_path=db,
+        operator_authorizer=OperatorCommandAuthorizer(db, auth_mode="local_dev_compat"),
+        research_config_registry=registry,
+        research_run_store=run_store,
+        research_backtest_handoff=handoff,
+        research_backtest_config=_config(db),
+    )
+    host, port = server.server_address
+    thread = _start(server)
+    request_end = datetime(2026, 9, 26, 10, 49, 58, 413000, tzinfo=UTC)
+    expected_end = datetime(2026, 9, 26, 10, 49, tzinfo=UTC)
+    expected_start = expected_end - timedelta(days=days)
+    try:
+        result = _json_request(
+            host,
+            port,
+            "POST",
+            f"/api/research/{record.research_id}/backtests",
+            {
+                "token": server.operator_control_token,
+                "research_start": (request_end - timedelta(days=days)).isoformat(),
+                "research_end": request_end.isoformat(),
+                "timeframe": "1m",
+                "idempotency_key": f"research-backtest-normalized-{days}",
+            },
+            expected=HTTPStatus.CREATED,
+        )
+
+        assert result["backtest"]["period_start"] == expected_start.isoformat()
+        assert result["backtest"]["period_end"] == expected_end.isoformat()
+        assert "pin_payload" not in result["backtest"]
+        assert handoff.plans[0].research_start == expected_start
+        assert handoff.plans[0].research_end == expected_end
+        assert handoff.plans[0].research_end - handoff.plans[0].research_start == timedelta(days=days)
+        plan_pin = handoff.pin_payloads[0]["run_inputs"]["plan"]
+        assert plan_pin["research_start"] == expected_start.isoformat()
+        assert plan_pin["research_end"] == expected_end.isoformat()
+        assert expected_start.second == expected_end.second == 0
+        assert expected_start.microsecond == expected_end.microsecond == 0
+    finally:
+        _stop(server, thread)
 
 
 class _FakeResearchConfigRegistry:
@@ -974,6 +1049,34 @@ class _FakeResearchRunStore:
             updated_at=created_at,
         )
         return record
+
+
+class _FakeBacktestHandoff:
+    canonical_worker_handoff = True
+
+    def __init__(self, store):
+        self._store = store
+        self.plans = []
+        self.pin_payloads = []
+
+    def start_research_backtest(self, *, research, trigger_set, rules, plan, created_at, pin_payload):
+        self.plans.append(plan)
+        self.pin_payloads.append(pin_payload)
+        record = self._store.add_backtest_run(
+            research_id=research.research_id,
+            period_start=plan.research_start.astimezone(UTC).isoformat(),
+            period_end=plan.research_end.astimezone(UTC).isoformat(),
+            timeframe=plan.timeframe,
+            status=ResearchBacktestStatus.RUNNING,
+            pin_payload=pin_payload,
+            created_at=created_at,
+        )
+        return ResearchBacktestExecutionHandoffResult(
+            handoff_id=f"unit-backtest-handoff-{record.run_id}",
+            execution_owner="trading-worker",
+            durable=True,
+            record=record,
+        )
 
 
 class _FakeDemoHandoff:
