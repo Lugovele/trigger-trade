@@ -362,8 +362,13 @@ def test_checkpoint_recovery_records_deduped_messages(tmp_path):
     ).process_once()
 
     messages = MessageStore(path).list_messages(limit=10)
+    checkpoint_gap = [message for message in messages if message.title == "Runtime checkpoint gap detected"]
 
-    assert sum(1 for message in messages if message.title == "Runtime checkpoint gap detected") == 1
+    assert len(checkpoint_gap) == 1
+    assert checkpoint_gap[0].dedupe_key == (
+        "checkpoint-gap:triggertrade-futures-core:v1:2026-09-05T13:04:00+00:00"
+    )
+    assert checkpoint_gap[0].metadata["checkpoint_before"] == "2026-09-05T13:04:00+00:00"
     assert sum(1 for message in messages if message.title == "Runtime checkpoint recovery completed") == 1
 
 

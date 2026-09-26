@@ -866,7 +866,10 @@ class FuturesDualLaneRuntime:
             source="futures_runtime",
             entity_type="runtime_checkpoint",
             entity_id=f"{active_set.set_id}:{active_set.version}",
-            dedupe_key=f"checkpoint-gap:{active_set.set_id}:{active_set.version}",
+            dedupe_key=(
+                f"checkpoint-gap:{active_set.set_id}:{active_set.version}:"
+                f"{active_checkpoint.last_processed_candle_open_time}"
+            ),
             metadata={
                 "symbol": active_checkpoint.symbol,
                 "timeframe": active_checkpoint.timeframe,

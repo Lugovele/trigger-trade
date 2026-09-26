@@ -1051,7 +1051,7 @@ def test_research_demo_message_store_replays_same_dedupe_message_with_new_create
         "source": "futures_runtime",
         "entity_type": "runtime_checkpoint",
         "entity_id": "triggertrade-futures-core:v1",
-        "dedupe_key": "checkpoint-gap:triggertrade-futures-core:v1",
+        "dedupe_key": "checkpoint-gap:triggertrade-futures-core:v1:2026-09-26T12:01:00+00:00",
         "metadata": {
             "symbol": "BTCUSDT",
             "timeframe": "1m",
@@ -1065,6 +1065,188 @@ def test_research_demo_message_store_replays_same_dedupe_message_with_new_create
     assert replay.message_id == first.message_id
     assert replay.created_at == first.created_at
     assert len(records) == 1
+
+
+def test_research_demo_message_store_distinguishes_new_checkpoint_gap_episode(monkeypatch):
+    records: dict[tuple[str, str, str], OwnerStateRecord] = {}
+
+    class FakeOwnerStateStore:
+        def __init__(self, connection):
+            pass
+
+        def get(self, *, owner, state_type, state_id):
+            return records.get((owner, state_type, state_id))
+
+        def put_if_absent(self, *, owner, state_type, state_id, payload):
+            key = (owner, state_type, state_id)
+            digest = canonical_json_digest(payload)
+            existing = records.get(key)
+            if existing is not None:
+                if existing.payload_digest != digest:
+                    raise OwnerStateConflict("owner state identity already exists with different canonical content")
+                return existing, False
+            record = OwnerStateRecord(
+                owner=owner,
+                state_type=state_type,
+                state_id=state_id,
+                payload=payload,
+                payload_digest=digest,
+                revision=1,
+            )
+            records[key] = record
+            return record, True
+
+    class FakeUnitOfWork:
+        connection = object()
+
+        def __init__(self, factory):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(research_demo_execution, "OwnerStateStore", FakeOwnerStateStore)
+    monkeypatch.setattr(research_demo_execution, "PostgresUnitOfWork", FakeUnitOfWork)
+    store = _PostgresResearchDemoMessageStore(object())
+    common = {
+        "severity": "ATTENTION",
+        "title": "Runtime checkpoint gap detected",
+        "body": "Futures runtime detected missed completed candles and is recovering before resuming normal execution.",
+        "source": "futures_runtime",
+        "entity_type": "runtime_checkpoint",
+        "entity_id": "triggertrade-futures-core:v1",
+    }
+
+    first = store.create_message(
+        created_at="2026-09-26T12:00:00+00:00",
+        dedupe_key="checkpoint-gap:triggertrade-futures-core:v1:2026-09-26T11:41:00+00:00",
+        metadata={
+            "symbol": "BTCUSDT",
+            "timeframe": "1m",
+            "checkpoint_before": "2026-09-26T11:41:00+00:00",
+        },
+        **common,
+    )
+    later = store.create_message(
+        created_at="2026-09-26T12:20:00+00:00",
+        dedupe_key="checkpoint-gap:triggertrade-futures-core:v1:2026-09-26T12:01:00+00:00",
+        metadata={
+            "symbol": "BTCUSDT",
+            "timeframe": "1m",
+            "checkpoint_before": "2026-09-26T12:01:00+00:00",
+        },
+        **common,
+    )
+
+    assert later.message_id != first.message_id
+    assert len(records) == 2
+
+
+def test_research_demo_message_store_keeps_legacy_checkpoint_gap_record_while_creating_new_episode(monkeypatch):
+    records: dict[tuple[str, str, str], OwnerStateRecord] = {}
+
+    class FakeOwnerStateStore:
+        def __init__(self, connection):
+            pass
+
+        def get(self, *, owner, state_type, state_id):
+            return records.get((owner, state_type, state_id))
+
+        def put_if_absent(self, *, owner, state_type, state_id, payload):
+            key = (owner, state_type, state_id)
+            digest = canonical_json_digest(payload)
+            existing = records.get(key)
+            if existing is not None:
+                if existing.payload_digest != digest:
+                    raise OwnerStateConflict("owner state identity already exists with different canonical content")
+                return existing, False
+            record = OwnerStateRecord(
+                owner=owner,
+                state_type=state_type,
+                state_id=state_id,
+                payload=payload,
+                payload_digest=digest,
+                revision=1,
+            )
+            records[key] = record
+            return record, True
+
+    class FakeUnitOfWork:
+        connection = object()
+
+        def __init__(self, factory):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(research_demo_execution, "OwnerStateStore", FakeOwnerStateStore)
+    monkeypatch.setattr(research_demo_execution, "PostgresUnitOfWork", FakeUnitOfWork)
+    set_id = "triggertrade-futures-core"
+    scoped_version = "rdm-d280829f281213271f73::v1"
+    old_key = f"checkpoint-gap:{set_id}:{scoped_version}"
+    old_message_id = "research-demo-msg-" + research_demo_execution.sha256(old_key.encode("utf-8")).hexdigest()[:32]
+    old_payload = {
+        "message_id": old_message_id,
+        "created_at": "2026-09-26T11:42:00+00:00",
+        "type": "ATTENTION",
+        "severity": "ATTENTION",
+        "title": "Runtime checkpoint gap detected",
+        "body": "Futures runtime detected missed completed candles and is recovering before resuming normal execution.",
+        "source": "futures_runtime",
+        "entity_type": "runtime_checkpoint",
+        "entity_id": f"{set_id}:{scoped_version}",
+        "is_read": False,
+        "read_at": None,
+        "dedupe_key": old_key,
+        "expires_at": None,
+        "metadata": {
+            "symbol": "BTCUSDT",
+            "timeframe": "1m",
+            "checkpoint_before": "2026-09-26T11:41:00+00:00",
+        },
+    }
+    legacy_key = (research_demo_execution.RESEARCH_DEMO_OWNER, "research_demo_message", old_message_id)
+    records[legacy_key] = OwnerStateRecord(
+        owner=legacy_key[0],
+        state_type=legacy_key[1],
+        state_id=legacy_key[2],
+        payload=dict(old_payload),
+        payload_digest=canonical_json_digest(old_payload),
+        revision=1,
+    )
+
+    store = _PostgresResearchDemoMessageStore(object())
+    common = {
+        "severity": "ATTENTION",
+        "title": "Runtime checkpoint gap detected",
+        "body": "Futures runtime detected missed completed candles and is recovering before resuming normal execution.",
+        "source": "futures_runtime",
+        "entity_type": "runtime_checkpoint",
+        "entity_id": f"{set_id}:{scoped_version}",
+        "dedupe_key": f"checkpoint-gap:{set_id}:{scoped_version}:2026-09-26T12:01:00+00:00",
+        "metadata": {
+            "symbol": "BTCUSDT",
+            "timeframe": "1m",
+            "checkpoint_before": "2026-09-26T12:01:00+00:00",
+        },
+    }
+
+    created = store.create_message(created_at="2026-09-26T12:02:00+00:00", **common)
+    replay = store.create_message(created_at="2026-09-26T12:05:00+00:00", **common)
+
+    assert created.message_id != old_message_id
+    assert replay.message_id == created.message_id
+    assert replay.created_at == created.created_at
+    assert records[legacy_key].payload == old_payload
+    assert old_payload["dedupe_key"] == old_key
+    assert len(records) == 2
 
 
 def test_research_demo_message_store_still_blocks_conflicting_dedupe_content(monkeypatch):
@@ -1117,7 +1299,7 @@ def test_research_demo_message_store_still_blocks_conflicting_dedupe_content(mon
         "source": "futures_runtime",
         "entity_type": "runtime_checkpoint",
         "entity_id": "triggertrade-futures-core:v1",
-        "dedupe_key": "checkpoint-gap:triggertrade-futures-core:v1",
+        "dedupe_key": "checkpoint-gap:triggertrade-futures-core:v1:2026-09-26T12:01:00+00:00",
         "metadata": {
             "symbol": "BTCUSDT",
             "timeframe": "1m",
