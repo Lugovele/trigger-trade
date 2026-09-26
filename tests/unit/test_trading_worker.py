@@ -21,8 +21,9 @@ class FakeRuntimeStore:
 
 
 class FakeMessageClient:
-    def __init__(self, messages=()) -> None:
+    def __init__(self, messages=(), dispatch_results=None) -> None:
         self._messages = tuple(messages)
+        self._dispatch_results = dict(dispatch_results or {})
         self.claims: list[dict[str, object]] = []
         self.dispatched = []
 
@@ -32,6 +33,8 @@ class FakeMessageClient:
 
     def dispatch_claimed(self, message):
         self.dispatched.append(message)
+        if getattr(message, "message_type") in self._dispatch_results:
+            return self._dispatch_results[message.message_type]
         if getattr(message, "message_type") == "ORDER_SPEC":
             return OwnerDispatchResult(processed=True, detail="processed:Lifecycle:ORDER_SPEC:start_gate")
         raise OwnerDispatchBlocked(
@@ -117,3 +120,34 @@ def test_target_trading_worker_dispatches_registered_payload_complete_route():
     assert result.detail == "processed:1"
     assert client.dispatched == [message]
     assert runtime_store.heartbeats[-2].detail == "processed:Lifecycle:ORDER_SPEC:start_gate"
+
+
+def test_target_trading_worker_research_demo_recheck_resume_records_running_heartbeat():
+    runtime_store = FakeRuntimeStore()
+    message = SimpleNamespace(
+        message_id="research-demo-recheck-unit",
+        producer="Research",
+        consumer=RESEARCH_DEMO_CONSUMER,
+        message_type="RESEARCH_DEMO_START",
+        message_version="1",
+        payload={"research_demo": {"demo_run_id": "rdm-unit-1"}},
+    )
+    client = FakeMessageClient(
+        (message,),
+        dispatch_results={"RESEARCH_DEMO_START": OwnerDispatchResult(processed=True, detail="research_demo_running:rdm-unit-1")},
+    )
+    worker = TargetTradingWorker(
+        runtime_store=runtime_store,
+        message_client_factory=lambda: client,
+        worker_id="worker-1",
+        clock=lambda: datetime(2026, 9, 15, tzinfo=UTC),
+    )
+
+    result = worker.process_once()
+
+    assert result.blocked is False
+    assert result.detail == "processed:1"
+    assert client.dispatched == [message]
+    assert runtime_store.heartbeats[-2].status == "RUNNING"
+    assert runtime_store.heartbeats[-2].detail == "research_demo_running:rdm-unit-1"
+    assert runtime_store.heartbeats[-2].metadata["message_id"] == "research-demo-recheck-unit"

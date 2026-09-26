@@ -43,6 +43,7 @@ from triggertrade.services.research_demo_execution import (
     ResearchDemoExecutionStore,
     _ResearchDemoAccountingStore,
     _PostgresResearchDemoDailyLossStore,
+    _PostgresResearchDemoMessageStore,
 )
 from triggertrade.services.futures_runtime import FuturesDualLaneResult
 from triggertrade.services.runtime import RuntimeCycleResult
@@ -997,6 +998,136 @@ def test_research_demo_daily_loss_store_isolates_same_trading_day_by_demo_run(mo
 
     assert second.get_record("2026-09-24").latched is False
     assert {state_id for _, _, state_id in records} == {"rdm-one::2026-09-24", "rdm-two::2026-09-24"}
+
+
+def test_research_demo_message_store_replays_same_dedupe_message_with_new_created_at(monkeypatch):
+    records: dict[tuple[str, str, str], OwnerStateRecord] = {}
+
+    class FakeOwnerStateStore:
+        def __init__(self, connection):
+            pass
+
+        def get(self, *, owner, state_type, state_id):
+            return records.get((owner, state_type, state_id))
+
+        def put_if_absent(self, *, owner, state_type, state_id, payload):
+            key = (owner, state_type, state_id)
+            digest = canonical_json_digest(payload)
+            existing = records.get(key)
+            if existing is not None:
+                if existing.payload_digest != digest:
+                    raise OwnerStateConflict("owner state identity already exists with different canonical content")
+                return existing, False
+            record = OwnerStateRecord(
+                owner=owner,
+                state_type=state_type,
+                state_id=state_id,
+                payload=payload,
+                payload_digest=digest,
+                revision=1,
+            )
+            records[key] = record
+            return record, True
+
+    class FakeUnitOfWork:
+        connection = object()
+
+        def __init__(self, factory):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(research_demo_execution, "OwnerStateStore", FakeOwnerStateStore)
+    monkeypatch.setattr(research_demo_execution, "PostgresUnitOfWork", FakeUnitOfWork)
+    store = _PostgresResearchDemoMessageStore(object())
+    kwargs = {
+        "severity": "ATTENTION",
+        "title": "Runtime checkpoint gap detected",
+        "body": "Futures runtime detected missed completed candles and is recovering before resuming normal execution.",
+        "source": "futures_runtime",
+        "entity_type": "runtime_checkpoint",
+        "entity_id": "triggertrade-futures-core:v1",
+        "dedupe_key": "checkpoint-gap:triggertrade-futures-core:v1",
+        "metadata": {
+            "symbol": "BTCUSDT",
+            "timeframe": "1m",
+            "checkpoint_before": "2026-09-26T12:01:00+00:00",
+        },
+    }
+
+    first = store.create_message(created_at="2026-09-26T12:00:00+00:00", **kwargs)
+    replay = store.create_message(created_at="2026-09-26T12:05:00+00:00", **kwargs)
+
+    assert replay.message_id == first.message_id
+    assert replay.created_at == first.created_at
+    assert len(records) == 1
+
+
+def test_research_demo_message_store_still_blocks_conflicting_dedupe_content(monkeypatch):
+    records: dict[tuple[str, str, str], OwnerStateRecord] = {}
+
+    class FakeOwnerStateStore:
+        def __init__(self, connection):
+            pass
+
+        def get(self, *, owner, state_type, state_id):
+            return records.get((owner, state_type, state_id))
+
+        def put_if_absent(self, *, owner, state_type, state_id, payload):
+            key = (owner, state_type, state_id)
+            digest = canonical_json_digest(payload)
+            existing = records.get(key)
+            if existing is not None:
+                if existing.payload_digest != digest:
+                    raise OwnerStateConflict("owner state identity already exists with different canonical content")
+                return existing, False
+            record = OwnerStateRecord(
+                owner=owner,
+                state_type=state_type,
+                state_id=state_id,
+                payload=payload,
+                payload_digest=digest,
+                revision=1,
+            )
+            records[key] = record
+            return record, True
+
+    class FakeUnitOfWork:
+        connection = object()
+
+        def __init__(self, factory):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(research_demo_execution, "OwnerStateStore", FakeOwnerStateStore)
+    monkeypatch.setattr(research_demo_execution, "PostgresUnitOfWork", FakeUnitOfWork)
+    store = _PostgresResearchDemoMessageStore(object())
+    common = {
+        "severity": "ATTENTION",
+        "title": "Runtime checkpoint gap detected",
+        "source": "futures_runtime",
+        "entity_type": "runtime_checkpoint",
+        "entity_id": "triggertrade-futures-core:v1",
+        "dedupe_key": "checkpoint-gap:triggertrade-futures-core:v1",
+        "metadata": {
+            "symbol": "BTCUSDT",
+            "timeframe": "1m",
+            "checkpoint_before": "2026-09-26T12:01:00+00:00",
+        },
+    }
+
+    store.create_message(created_at="2026-09-26T12:00:00+00:00", body="original", **common)
+    with pytest.raises(PostgresPersistenceError, match="research demo message identity conflict"):
+        store.create_message(created_at="2026-09-26T12:05:00+00:00", body="changed", **common)
 
 
 def test_research_demo_accounting_daily_loss_reads_are_demo_run_scoped(monkeypatch):

@@ -16,6 +16,7 @@ from triggertrade.persistence.durable_messages import DurableMessageStore
 from triggertrade.persistence.message_store import MessageRecord, MessageSeverity
 from triggertrade.persistence.postgres_research_registry import PostgresResearchConfigurationRegistry
 from triggertrade.persistence.postgres import (
+    OwnerStateConflict,
     OwnerStateRecord,
     OwnerStateRevisionConflict,
     OwnerStateStore,
@@ -1267,12 +1268,22 @@ class _PostgresResearchDemoMessageStore:
             "metadata": dict(kwargs.get("metadata") or {}),
         }
         with PostgresUnitOfWork(self._factory) as uow:
-            record, _ = OwnerStateStore(uow.connection).put_if_absent(
-                owner=RESEARCH_DEMO_OWNER,
-                state_type="research_demo_message",
-                state_id=message_id,
-                payload=payload,
-            )
+            store = OwnerStateStore(uow.connection)
+            record = store.get(owner=RESEARCH_DEMO_OWNER, state_type="research_demo_message", state_id=message_id)
+            if record is None:
+                try:
+                    record, _ = store.put_if_absent(
+                        owner=RESEARCH_DEMO_OWNER,
+                        state_type="research_demo_message",
+                        state_id=message_id,
+                        payload=payload,
+                    )
+                except OwnerStateConflict:
+                    record = store.get(owner=RESEARCH_DEMO_OWNER, state_type="research_demo_message", state_id=message_id)
+                    if record is None:
+                        raise
+            if not _same_research_demo_message_identity(record.payload, payload):
+                raise PostgresPersistenceError("research demo message identity conflict")
         return _message_record_from_payload(record.payload)
 
 
@@ -1344,6 +1355,23 @@ def _message_record_from_payload(payload: dict[str, Any]) -> MessageRecord:
         expires_at=_optional_payload_text(payload.get("expires_at")),
         metadata=dict(payload.get("metadata") or {}),
     )
+
+
+def _same_research_demo_message_identity(existing: dict[str, Any], candidate: dict[str, Any]) -> bool:
+    stable_fields = (
+        "message_id",
+        "type",
+        "severity",
+        "title",
+        "body",
+        "source",
+        "entity_type",
+        "entity_id",
+        "dedupe_key",
+        "expires_at",
+        "metadata",
+    )
+    return all(existing.get(field) == candidate.get(field) for field in stable_fields)
 
 
 def _progress(*, record: ResearchDemoExecutionRecord, now: datetime) -> dict[str, Any]:
