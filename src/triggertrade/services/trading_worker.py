@@ -94,6 +94,13 @@ class TargetTradingWorker:
     def run_forever(self, max_cycles: int | None = None) -> None:
         cycles = 0
         self._record_heartbeat("RUNNING", "worker hydrated durable state")
+        recovered = self._recover_startup_work()
+        if recovered:
+            self._record_heartbeat(
+                "RUNNING",
+                f"research_demo_recovery_scheduled:{recovered}",
+                metadata={"research_demo_recovery_scheduled": str(recovered)},
+            )
         while not self._stop_requested:
             result = self.process_once()
             cycles += 1
@@ -157,6 +164,13 @@ class TargetTradingWorker:
             )
         )
 
+    def _recover_startup_work(self) -> int:
+        client = self._message_client_factory()
+        recover = getattr(client, "recover_startup_research_demos", None)
+        if not callable(recover):
+            return 0
+        return int(recover())
+
 
 def build_target_trading_worker(
     *,
@@ -213,6 +227,18 @@ class _PostgresMessageClient:
                 research_backtest_executor=self._research_backtest_executor,
                 research_demo_executor=self._research_demo_executor,
             ).dispatch(message)
+
+    def recover_startup_research_demos(self) -> int:
+        from triggertrade.services.research_demo_execution import ResearchDemoExecutionStore
+
+        with PostgresUnitOfWork(self._factory) as uow:
+            store = ResearchDemoExecutionStore(uow.connection)
+            records = store.list_resume_candidates()
+            scheduled = 0
+            for record in records:
+                if store.enqueue_startup_recovery(record):
+                    scheduled += 1
+            return scheduled
 
 
 def _worker_id(value: str | None) -> str:

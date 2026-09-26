@@ -6,6 +6,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, DivisionByZero, InvalidOperation
 from hashlib import sha256
+import json
 from typing import Any, Protocol
 
 from triggertrade.canonical_json import canonical_json_digest
@@ -399,6 +400,7 @@ class ResearchDemoExecutionStore:
     """PostgreSQL owner-state wrapper for durable Research Demo execution state."""
 
     def __init__(self, connection) -> None:
+        self._connection = connection
         self._owner_state = OwnerStateStore(connection)
         self._messages = DurableMessageStore(connection)
 
@@ -468,6 +470,22 @@ class ResearchDemoExecutionStore:
             state_id=_required_text(demo_run_id, field="demo_run_id"),
         )
         return None if record is None else _record_from_owner(record)
+
+    def list_resume_candidates(self) -> tuple[ResearchDemoExecutionRecord, ...]:
+        with self._connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT owner, state_type, state_id, revision, payload_json::text, payload_digest
+                FROM triggertrade_owner_state_records
+                WHERE owner = %s
+                  AND state_type = %s
+                  AND payload_json->>'status' = %s
+                ORDER BY payload_json->>'requested_at', state_id
+                """,
+                (RESEARCH_DEMO_OWNER, RESEARCH_DEMO_STATE_TYPE, "RUNNING"),
+            )
+            rows = cursor.fetchall()
+        return tuple(_record_from_owner(_owner_state_record_from_row(row)) for row in rows)
 
     def mark_running(self, demo_run_id: str, *, progress: dict[str, Any] | None = None) -> ResearchDemoExecutionRecord:
         current = self.get(demo_run_id)
@@ -593,9 +611,89 @@ class ResearchDemoExecutionStore:
             aggregate_id=record.research_id,
             causation_id=record.handoff_message_id,
             correlation_id=record.demo_run_id,
-            dedupe_key=f"RESEARCH_DEMO_RECHECK:{record.demo_run_id}:{record.revision}",
+            dedupe_key=_recheck_dedupe_key(record),
             available_at=datetime.now(UTC) + timedelta(seconds=RESEARCH_DEMO_RECHECK_DELAY_SECONDS),
         )
+
+    def enqueue_startup_recovery(self, record: ResearchDemoExecutionRecord) -> bool:
+        if record.status in TERMINAL_RESEARCH_DEMO_STATUSES:
+            return False
+        if self._has_claimable_recovery_recheck(record):
+            return False
+        attempt = self._next_recovery_attempt(record)
+        self._messages.append_outbox(
+            message_id=_startup_recovery_message_id(record, attempt),
+            producer=RESEARCH_DEMO_PRODUCER,
+            consumer=RESEARCH_DEMO_CONSUMER,
+            message_type=RESEARCH_DEMO_MESSAGE_TYPE,
+            message_version=RESEARCH_DEMO_MESSAGE_VERSION,
+            payload={"research_demo": _record_payload(record)},
+            aggregate_id=record.research_id,
+            causation_id=record.handoff_message_id,
+            correlation_id=record.demo_run_id,
+            dedupe_key=_startup_recovery_dedupe_key(record, attempt),
+        )
+        return True
+
+    def _has_claimable_recovery_recheck(self, record: ResearchDemoExecutionRecord) -> bool:
+        with self._connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT 1
+                FROM triggertrade_outbox_messages
+                WHERE producer = %s
+                  AND consumer = %s
+                  AND message_type = %s
+                  AND message_version = %s
+                  AND correlation_id = %s
+                  AND status IN ('PENDING', 'IN_FLIGHT')
+                  AND (
+                    dedupe_key = %s
+                    OR dedupe_key LIKE %s
+                  )
+                LIMIT 1
+                """,
+                (
+                    RESEARCH_DEMO_PRODUCER,
+                    RESEARCH_DEMO_CONSUMER,
+                    RESEARCH_DEMO_MESSAGE_TYPE,
+                    RESEARCH_DEMO_MESSAGE_VERSION,
+                    record.demo_run_id,
+                    _recheck_dedupe_key(record),
+                    _startup_recovery_dedupe_prefix(record) + "%",
+                ),
+            )
+            return cursor.fetchone() is not None
+
+    def _next_recovery_attempt(self, record: ResearchDemoExecutionRecord) -> int:
+        with self._connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT count(*)
+                FROM triggertrade_outbox_messages
+                WHERE producer = %s
+                  AND consumer = %s
+                  AND message_type = %s
+                  AND message_version = %s
+                  AND correlation_id = %s
+                  AND status = 'CONSUMED'
+                  AND (
+                    dedupe_key = %s
+                    OR dedupe_key LIKE %s
+                  )
+                """,
+                (
+                    RESEARCH_DEMO_PRODUCER,
+                    RESEARCH_DEMO_CONSUMER,
+                    RESEARCH_DEMO_MESSAGE_TYPE,
+                    RESEARCH_DEMO_MESSAGE_VERSION,
+                    record.demo_run_id,
+                    _recheck_dedupe_key(record),
+                    _startup_recovery_dedupe_prefix(record) + "%",
+                ),
+            )
+            row = cursor.fetchone()
+        return int(row[0] if row else 0) + 1
 
 
 class ResearchDemoExecutionDispatcher:
@@ -684,6 +782,17 @@ def _record_from_owner(record: OwnerStateRecord) -> ResearchDemoExecutionRecord:
         pin_payload=dict(payload.get("pin_payload") or {}),
         pin_digest=_required_text(payload.get("pin_digest"), field="pin_digest"),
         revision=record.revision,
+    )
+
+
+def _owner_state_record_from_row(row) -> OwnerStateRecord:
+    return OwnerStateRecord(
+        owner=str(row[0]),
+        state_type=str(row[1]),
+        state_id=str(row[2]),
+        revision=int(row[3]),
+        payload=json.loads(str(row[4]), parse_float=Decimal),
+        payload_digest=str(row[5]),
     )
 
 
@@ -1678,6 +1787,23 @@ def _message_id(demo_run_id: str) -> str:
 def _recheck_message_id(record: ResearchDemoExecutionRecord) -> str:
     source = f"{record.demo_run_id}\x1f{record.revision}\x1f{record.status}"
     return f"research-demo-recheck-{sha256(source.encode('utf-8')).hexdigest()[:32]}"
+
+
+def _recheck_dedupe_key(record: ResearchDemoExecutionRecord) -> str:
+    return f"RESEARCH_DEMO_RECHECK:{record.demo_run_id}:{record.revision}"
+
+
+def _startup_recovery_dedupe_prefix(record: ResearchDemoExecutionRecord) -> str:
+    return f"RESEARCH_DEMO_RECOVERY:{record.demo_run_id}:{record.revision}:{record.status}:"
+
+
+def _startup_recovery_dedupe_key(record: ResearchDemoExecutionRecord, attempt: int) -> str:
+    return f"{_startup_recovery_dedupe_prefix(record)}{attempt}"
+
+
+def _startup_recovery_message_id(record: ResearchDemoExecutionRecord, attempt: int) -> str:
+    source = f"{record.demo_run_id}\x1f{record.revision}\x1f{record.status}\x1frecovery\x1f{attempt}"
+    return f"research-demo-recovery-{sha256(source.encode('utf-8')).hexdigest()[:32]}"
 
 
 def _required_text(value: object, *, field: str) -> str:

@@ -21,18 +21,30 @@ class FakeRuntimeStore:
 
 
 class FakeMessageClient:
-    def __init__(self, messages=(), dispatch_results=None) -> None:
+    def __init__(self, messages=(), dispatch_results=None, startup_recovered=0) -> None:
         self._messages = tuple(messages)
         self._dispatch_results = dict(dispatch_results or {})
+        self._startup_recovered = startup_recovered
+        self.recoveries = 0
         self.claims: list[dict[str, object]] = []
         self.dispatched = []
+        self.consumed_message_ids = set()
+
+    def recover_startup_research_demos(self):
+        self.recoveries += 1
+        return self._startup_recovered
 
     def claim_outbox(self, **kwargs):
         self.claims.append(kwargs)
-        return tuple(message for message in self._messages if message.consumer == kwargs["consumer"])
+        return tuple(
+            message
+            for message in self._messages
+            if message.consumer == kwargs["consumer"] and message.message_id not in self.consumed_message_ids
+        )
 
     def dispatch_claimed(self, message):
         self.dispatched.append(message)
+        self.consumed_message_ids.add(message.message_id)
         if getattr(message, "message_type") in self._dispatch_results:
             return self._dispatch_results[message.message_type]
         if getattr(message, "message_type") == "ORDER_SPEC":
@@ -58,6 +70,7 @@ def test_target_trading_worker_hydrates_and_idles_without_legacy_runtime():
 
     assert [heartbeat.status for heartbeat in runtime_store.heartbeats] == ["RUNNING", "RUNNING"]
     assert runtime_store.heartbeats[-1].detail == "idle"
+    assert client.recoveries == 1
     assert {claim["consumer"] for claim in client.claims} == {
         "Portfolio",
         "Set",
@@ -67,6 +80,108 @@ def test_target_trading_worker_hydrates_and_idles_without_legacy_runtime():
         RESEARCH_BACKTEST_CONSUMER,
         RESEARCH_DEMO_CONSUMER,
     }
+
+
+def test_target_trading_worker_startup_recovery_without_running_demo_keeps_idle_behavior():
+    runtime_store = FakeRuntimeStore()
+    client = FakeMessageClient(startup_recovered=0)
+    worker = TargetTradingWorker(
+        runtime_store=runtime_store,
+        message_client_factory=lambda: client,
+        worker_id="worker-1",
+        poll_seconds=1,
+        sleeper=lambda _: None,
+        clock=lambda: datetime(2026, 9, 15, tzinfo=UTC),
+    )
+
+    worker.run_forever(max_cycles=1)
+
+    assert client.recoveries == 1
+    assert client.dispatched == []
+    assert [heartbeat.detail for heartbeat in runtime_store.heartbeats] == ["worker hydrated durable state", "idle"]
+
+
+def test_target_trading_worker_startup_recovery_schedules_and_dispatches_running_demo_recheck():
+    runtime_store = FakeRuntimeStore()
+    message = SimpleNamespace(
+        message_id="research-demo-recheck-recovered",
+        producer="Research",
+        consumer=RESEARCH_DEMO_CONSUMER,
+        message_type="RESEARCH_DEMO_START",
+        message_version="1",
+        payload={"research_demo": {"demo_run_id": "rdm-existing"}},
+    )
+    client = FakeMessageClient(
+        (message,),
+        dispatch_results={"RESEARCH_DEMO_START": OwnerDispatchResult(processed=True, detail="research_demo_running:rdm-existing")},
+        startup_recovered=1,
+    )
+    worker = TargetTradingWorker(
+        runtime_store=runtime_store,
+        message_client_factory=lambda: client,
+        worker_id="worker-1",
+        poll_seconds=1,
+        sleeper=lambda _: None,
+        clock=lambda: datetime(2026, 9, 15, tzinfo=UTC),
+    )
+
+    worker.run_forever(max_cycles=1)
+
+    assert client.recoveries == 1
+    assert client.dispatched == [message]
+    assert runtime_store.heartbeats[1].detail == "research_demo_recovery_scheduled:1"
+    assert runtime_store.heartbeats[-2].detail == "research_demo_running:rdm-existing"
+    assert runtime_store.heartbeats[-2].metadata["message_id"] == "research-demo-recheck-recovered"
+
+
+def test_target_trading_worker_startup_recovery_is_idempotent_across_cycles():
+    runtime_store = FakeRuntimeStore()
+    message = SimpleNamespace(
+        message_id="research-demo-recheck-pending",
+        producer="Research",
+        consumer=RESEARCH_DEMO_CONSUMER,
+        message_type="RESEARCH_DEMO_START",
+        message_version="1",
+        payload={"research_demo": {"demo_run_id": "rdm-existing"}},
+    )
+    client = FakeMessageClient(
+        (message,),
+        dispatch_results={"RESEARCH_DEMO_START": OwnerDispatchResult(processed=True, detail="research_demo_running:rdm-existing")},
+        startup_recovered=1,
+    )
+    worker = TargetTradingWorker(
+        runtime_store=runtime_store,
+        message_client_factory=lambda: client,
+        worker_id="worker-1",
+        poll_seconds=1,
+        sleeper=lambda _: None,
+        clock=lambda: datetime(2026, 9, 15, tzinfo=UTC),
+    )
+
+    worker.run_forever(max_cycles=2)
+
+    assert client.recoveries == 1
+    assert client.dispatched == [message]
+    assert runtime_store.heartbeats[-1].detail == "idle"
+
+
+def test_target_trading_worker_startup_recovery_ignores_terminal_demo_candidates():
+    runtime_store = FakeRuntimeStore()
+    client = FakeMessageClient(startup_recovered=0)
+    worker = TargetTradingWorker(
+        runtime_store=runtime_store,
+        message_client_factory=lambda: client,
+        worker_id="worker-1",
+        poll_seconds=1,
+        sleeper=lambda _: None,
+        clock=lambda: datetime(2026, 9, 15, tzinfo=UTC),
+    )
+
+    worker.run_forever(max_cycles=1)
+
+    assert client.recoveries == 1
+    assert client.dispatched == []
+    assert runtime_store.heartbeats[-1].detail == "idle"
 
 
 def test_target_trading_worker_fails_closed_for_unhandled_business_message():

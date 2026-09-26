@@ -329,6 +329,122 @@ def test_research_config_registry_rejects_immutable_conflicts():
                 cursor.execute(f'DROP SCHEMA IF EXISTS "{settings.schema}" CASCADE')
 
 
+def test_research_demo_startup_recovery_schedules_real_claimable_message_after_consumed_recheck():
+    psycopg = pytest.importorskip("psycopg")
+    settings = _settings()
+    try:
+        apply_postgres_migrations(dsn=settings.dsn, schema=settings.schema)
+        factory = PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)
+        with PostgresUnitOfWork(factory) as uow:
+            store = ResearchDemoExecutionStore(uow.connection)
+            messages = DurableMessageStore(uow.connection)
+            record = _running_postgres_demo_record(store, messages, demo_run_id="rdm-recovery-consumed")
+            store.enqueue_recheck(record)
+            messages.mark_outbox_consumed(message_id=research_demo_execution._recheck_message_id(record))
+
+        with PostgresUnitOfWork(factory) as uow:
+            store = ResearchDemoExecutionStore(uow.connection)
+            messages = DurableMessageStore(uow.connection)
+            record = store.get("rdm-recovery-consumed")
+            assert record is not None
+            assert store.enqueue_startup_recovery(record) is True
+            claimed = messages.claim_outbox(
+                consumer=RESEARCH_DEMO_CONSUMER,
+                worker_id="worker-1",
+                limit=10,
+            )
+
+        assert len(claimed) == 1
+        assert claimed[0].status == "IN_FLIGHT"
+        assert claimed[0].message_id != research_demo_execution._recheck_message_id(record)
+        assert claimed[0].dedupe_key.startswith("RESEARCH_DEMO_RECOVERY:rdm-recovery-consumed:")
+        assert claimed[0].payload["research_demo"]["demo_run_id"] == "rdm-recovery-consumed"
+    finally:
+        with psycopg.connect(settings.dsn, autocommit=True) as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(f'DROP SCHEMA IF EXISTS "{settings.schema}" CASCADE')
+
+
+def test_research_demo_startup_recovery_dedupes_pending_recovery_message():
+    psycopg = pytest.importorskip("psycopg")
+    settings = _settings()
+    try:
+        apply_postgres_migrations(dsn=settings.dsn, schema=settings.schema)
+        factory = PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)
+        with PostgresUnitOfWork(factory) as uow:
+            store = ResearchDemoExecutionStore(uow.connection)
+            messages = DurableMessageStore(uow.connection)
+            record = _running_postgres_demo_record(store, messages, demo_run_id="rdm-recovery-pending")
+            assert store.enqueue_startup_recovery(record) is True
+            assert store.enqueue_startup_recovery(record) is False
+            claimed = messages.claim_outbox(
+                consumer=RESEARCH_DEMO_CONSUMER,
+                worker_id="worker-1",
+                limit=10,
+            )
+
+        assert len(claimed) == 1
+        assert claimed[0].payload["research_demo"]["demo_run_id"] == "rdm-recovery-pending"
+    finally:
+        with psycopg.connect(settings.dsn, autocommit=True) as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(f'DROP SCHEMA IF EXISTS "{settings.schema}" CASCADE')
+
+
+def test_research_demo_startup_recovery_can_repeat_after_previous_recovery_consumed():
+    psycopg = pytest.importorskip("psycopg")
+    settings = _settings()
+    try:
+        apply_postgres_migrations(dsn=settings.dsn, schema=settings.schema)
+        factory = PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)
+        with PostgresUnitOfWork(factory) as uow:
+            store = ResearchDemoExecutionStore(uow.connection)
+            messages = DurableMessageStore(uow.connection)
+            record = _running_postgres_demo_record(store, messages, demo_run_id="rdm-recovery-repeat")
+            assert store.enqueue_startup_recovery(record) is True
+            first = messages.claim_outbox(consumer=RESEARCH_DEMO_CONSUMER, worker_id="worker-1", limit=10)
+            assert len(first) == 1
+            messages.mark_outbox_consumed(message_id=first[0].message_id)
+            assert store.enqueue_startup_recovery(record) is True
+            second = messages.claim_outbox(consumer=RESEARCH_DEMO_CONSUMER, worker_id="worker-2", limit=10)
+
+        assert len(second) == 1
+        assert second[0].message_id != first[0].message_id
+        assert second[0].payload["research_demo"]["demo_run_id"] == "rdm-recovery-repeat"
+    finally:
+        with psycopg.connect(settings.dsn, autocommit=True) as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(f'DROP SCHEMA IF EXISTS "{settings.schema}" CASCADE')
+
+
+def test_research_demo_startup_recovery_excludes_terminal_postgres_demo():
+    psycopg = pytest.importorskip("psycopg")
+    settings = _settings()
+    try:
+        apply_postgres_migrations(dsn=settings.dsn, schema=settings.schema)
+        factory = PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)
+        with PostgresUnitOfWork(factory) as uow:
+            store = ResearchDemoExecutionStore(uow.connection)
+            messages = DurableMessageStore(uow.connection)
+            record = _running_postgres_demo_record(store, messages, demo_run_id="rdm-recovery-terminal")
+            store.mark_completed(record.demo_run_id, result={"terminal": True})
+            assert store.list_resume_candidates() == ()
+            completed = store.get(record.demo_run_id)
+            assert completed is not None
+            assert store.enqueue_startup_recovery(completed) is False
+            claimed = messages.claim_outbox(
+                consumer=RESEARCH_DEMO_CONSUMER,
+                worker_id="worker-1",
+                limit=10,
+            )
+
+        assert claimed == ()
+    finally:
+        with psycopg.connect(settings.dsn, autocommit=True) as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(f'DROP SCHEMA IF EXISTS "{settings.schema}" CASCADE')
+
+
 def test_canonical_research_demo_executor_reconstructs_config_and_projects_running_progress(monkeypatch):
     executor = _executor(monkeypatch, now="2026-09-25T00:00:00+00:00")
     record = _copy_record(_demo_record(), started_at="2026-09-24T00:00:00Z", requested_at="2026-09-24T00:00:00Z")
@@ -1794,6 +1910,26 @@ def _demo_record() -> ResearchDemoExecutionRecord:
         pin_digest="pin-digest",
         revision=1,
     )
+
+
+def _running_postgres_demo_record(
+    store: ResearchDemoExecutionStore,
+    messages: DurableMessageStore,
+    *,
+    demo_run_id: str,
+) -> ResearchDemoExecutionRecord:
+    research = _research_record()
+    rules = _rules_version()
+    pending = store.submit(
+        research=research,
+        rules=rules,
+        isolation=_isolation(),
+        started_at="2026-09-24T00:00:00+00:00",
+        pin_payload={"pin": "research-demo", "research_id": research.research_id, "demo_run_id": demo_run_id},
+        demo_run_id=demo_run_id,
+    )
+    messages.mark_outbox_consumed(message_id=pending.handoff_message_id)
+    return store.mark_running(pending.demo_run_id)
 
 
 def _demo_run_projection(*, status: ResearchDemoStatus, started_at=None, stopped_at=None, metrics=None, blocked_reason=None):
