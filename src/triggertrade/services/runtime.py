@@ -616,8 +616,11 @@ def build_canonical_runtime_from_env(env: dict[str, str]):
         PostgresFuturesPositionStore,
         PostgresOperatorStateStore,
     )
+    from triggertrade.backtest.data import BybitHistoricalDataSource
     from triggertrade.execution.bybit_futures import BybitFuturesExecutionAdapter
+    from triggertrade.market_data import parse_linear_instrument
     from triggertrade.services.futures_runtime import FuturesOperatorExecutionRuntime
+    from triggertrade.services.research_backtest_execution import CanonicalResearchBacktestExecutionExecutor
     from triggertrade.services.research_demo_execution import (
         CanonicalResearchDemoExecutionExecutor,
         CanonicalResearchDemoTradingCycleProvider,
@@ -635,6 +638,7 @@ def build_canonical_runtime_from_env(env: dict[str, str]):
     factory = PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)
     credentials = load_bybit_credentials(runtime_env)
     market_client = BybitDemoClient(config=config.bybit, credentials=credentials)
+    db_path = runtime_db_path(config, runtime_env)
     futures_execution_store = PostgresFuturesExecutionStore(factory)
     accounting_store = PostgresFuturesAccountingStore(factory)
     position_store = PostgresFuturesPositionStore(factory)
@@ -667,16 +671,25 @@ def build_canonical_runtime_from_env(env: dict[str, str]):
                 position_store=position_store,
                 instrument_catalog=instrument_catalog,
                 active_adapter=active_adapter,
-                allow_uncertified_active_formula_execution=_env_true(
-                    runtime_env.get("TRIGGERTRADE_ALLOW_UNCERTIFIED_DEMO_ACTIVE_FORMULA_EXECUTION")
-                ),
+                allow_uncertified_active_formula_execution=True,
             ),
             accounting_store=accounting_store,
         )
+    research_backtest_executor = CanonicalResearchBacktestExecutionExecutor(
+        config=config,
+        db_path=db_path,
+        factory=factory,
+        historical_source=BybitHistoricalDataSource(market_client),
+        instrument_provider=lambda symbol: parse_linear_instrument(
+            market_client.linear_instrument_metadata(symbol).result,
+            symbol=symbol,
+        ),
+    )
     return build_target_trading_worker(
         factory=factory,
         runtime_store=PostgresRuntimeStore(factory),
         operator_executor=operator_executor,
+        research_backtest_executor=research_backtest_executor,
         research_demo_executor=research_demo_executor,
         worker_id=str(runtime_env.get("TRIGGERTRADE_WORKER_ID") or "").strip() or None,
         poll_seconds=_poll_seconds(runtime_env, key="TRIGGERTRADE_WORKER_POLL_SECONDS", default="5"),

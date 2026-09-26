@@ -278,6 +278,7 @@ def test_production_dashboard_wires_canonical_postgres_configuration_registry(tm
     monkeypatch.setattr("triggertrade.dashboard.__main__._promotion_governance_from_env", lambda env: None)
     monkeypatch.setattr("triggertrade.dashboard.__main__._operator_execution_bridge_from_env", lambda env: None)
     monkeypatch.setattr("triggertrade.dashboard.__main__._research_demo_handoff_from_env", lambda env: None)
+    monkeypatch.setattr("triggertrade.dashboard.__main__._research_backtest_handoff_from_env", lambda env: object())
     db = tmp_path / "dashboard-production.sqlite3"
     server, initialized_db = create_server_from_env(
         {
@@ -305,6 +306,7 @@ def test_web_process_role_wires_canonical_postgres_configuration_registry(tmp_pa
     monkeypatch.setattr("triggertrade.dashboard.__main__._promotion_governance_from_env", lambda env: None)
     monkeypatch.setattr("triggertrade.dashboard.__main__._operator_execution_bridge_from_env", lambda env: None)
     monkeypatch.setattr("triggertrade.dashboard.__main__._research_demo_handoff_from_env", lambda env: None)
+    monkeypatch.setattr("triggertrade.dashboard.__main__._research_backtest_handoff_from_env", lambda env: object())
     server, _initialized_db = create_server_from_env(
         {
             "TRIGGERTRADE_PROCESS_ROLE": "web",
@@ -327,6 +329,7 @@ def test_production_dashboard_fails_closed_when_registry_wiring_is_missing(tmp_p
     monkeypatch.setattr("triggertrade.dashboard.__main__._promotion_governance_from_env", lambda env: None)
     monkeypatch.setattr("triggertrade.dashboard.__main__._operator_execution_bridge_from_env", lambda env: None)
     monkeypatch.setattr("triggertrade.dashboard.__main__._research_demo_handoff_from_env", lambda env: None)
+    monkeypatch.setattr("triggertrade.dashboard.__main__._research_backtest_handoff_from_env", lambda env: object())
 
     with pytest.raises(ConfigError, match="PostgreSQL Research configuration registry"):
         create_server_from_env(

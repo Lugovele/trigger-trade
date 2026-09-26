@@ -379,6 +379,48 @@ class PostgresResearchRunStore:
         )
         return None if record is None else _backtest_from_owner(record)
 
+    def update_backtest_run(
+        self,
+        *,
+        research_id: str,
+        run_id: str,
+        status: ResearchBacktestStatus,
+        engine_run_id: str | None = None,
+        metrics: dict[str, Any] | None = None,
+        unavailable_reason: str | None = None,
+        updated_at: str | None = None,
+    ) -> ResearchBacktestRunRecord:
+        research_id = _checked(research_id, "research_id")
+        run_id = _checked(run_id, "run_id")
+        updated_at = updated_at or _now()
+        state_id = _run_state_key(research_id, run_id)
+        for _ in range(3):
+            owner = self._store.get(owner=RESEARCH_RUN_OWNER, state_type=RESEARCH_BACKTEST_RUN_STATE_TYPE, state_id=state_id)
+            if owner is None:
+                raise ResearchStoreError("backtest run id not found for research")
+            current = _backtest_from_owner(owner)
+            updated = replace(
+                current,
+                updated_at=updated_at,
+                status=status,
+                engine_run_id=None if engine_run_id is None else _checked(engine_run_id, "engine_run_id"),
+                metrics=_jsonable(metrics or {}),
+                unavailable_reason=None if unavailable_reason is None else _clean_text(unavailable_reason, "unavailable_reason", 240),
+            )
+            try:
+                stored = self._store.compare_and_set(
+                    owner=RESEARCH_RUN_OWNER,
+                    state_type=RESEARCH_BACKTEST_RUN_STATE_TYPE,
+                    state_id=state_id,
+                    expected_revision=owner.revision,
+                    payload=_backtest_payload(updated),
+                )
+                self._update_mutable_state(research_id, updated_at=updated_at, status=_research_status_after_backtest(status))
+                return _backtest_from_owner(stored)
+            except OwnerStateRevisionConflict:
+                continue
+        raise OwnerStateRevisionConflict("research backtest run changed concurrently")
+
     def list_backtest_runs(self, research_id: str) -> tuple[ResearchBacktestRunRecord, ...]:
         research_id = _checked(research_id, "research_id")
         rows = self._list_run_records(state_type=RESEARCH_BACKTEST_RUN_STATE_TYPE, research_id=research_id)
@@ -474,14 +516,14 @@ class PostgresResearchRunStore:
     def list_demo_runs(self, research_id: str) -> tuple[ResearchDemoRunRecord, ...]:
         research_id = _checked(research_id, "research_id")
         rows = self._list_run_records(state_type=RESEARCH_DEMO_RUN_STATE_TYPE, research_id=research_id)
-        projected = tuple(_demo_from_owner(record) for record in rows)
-        projected_ids = {record.run_id for record in projected}
-        recovered = tuple(
-            _demo_from_execution_owner(record)
-            for record in self._list_research_demo_execution_records(research_id)
-            if str(record.payload.get("demo_run_id") or "") not in projected_ids
-        )
-        return tuple(sorted((*projected, *recovered), key=lambda record: (record.created_at, record.run_id), reverse=True))
+        projected_by_id = {record.run_id: record for record in (_demo_from_owner(row) for row in rows)}
+        for execution_record in self._list_research_demo_execution_records(research_id):
+            execution_projection = _demo_from_execution_owner(execution_record)
+            existing = projected_by_id.get(execution_projection.run_id)
+            projected_by_id[execution_projection.run_id] = (
+                execution_projection if existing is None else _merge_demo_execution_projection(existing, execution_projection)
+            )
+        return tuple(sorted(projected_by_id.values(), key=lambda record: (record.created_at, record.run_id), reverse=True))
 
     def stop_demo_run(self, research_id: str, run_id: str, *, stopped_at: str | None = None) -> ResearchDemoRunRecord:
         stopped_at = stopped_at or _now()
@@ -1148,7 +1190,7 @@ def _demo_from_execution_owner(record: OwnerStateRecord) -> ResearchDemoRunRecor
         created_at=created_at,
         updated_at=completed_at or _optional_text(payload.get("started_at"), field="started_at") or created_at,
         status=status,
-        started_at=_optional_text(payload.get("started_at"), field="started_at") or (created_at if status is ResearchDemoStatus.RUNNING else None),
+        started_at=_optional_text(payload.get("started_at"), field="started_at"),
         stopped_at=completed_at,
         execution_scope_id=f"research:{_required_text(payload.get('research_id'), field='research_id')}",
         account_scope=f"research:{_required_text(payload.get('research_id'), field='research_id')}",
@@ -1160,8 +1202,24 @@ def _demo_from_execution_owner(record: OwnerStateRecord) -> ResearchDemoRunRecor
     )
 
 
+def _merge_demo_execution_projection(existing: ResearchDemoRunRecord, execution: ResearchDemoRunRecord) -> ResearchDemoRunRecord:
+    return replace(
+        existing,
+        updated_at=execution.updated_at,
+        status=execution.status,
+        started_at=execution.started_at,
+        stopped_at=execution.stopped_at,
+        execution_scope_id=execution.execution_scope_id or existing.execution_scope_id,
+        account_scope=execution.account_scope or existing.account_scope,
+        metrics=execution.metrics,
+        blocked_reason=execution.blocked_reason,
+    )
+
+
 def _demo_status_from_execution_status(status: str) -> ResearchDemoStatus:
     normalized = status.upper()
+    if normalized == "PENDING":
+        return ResearchDemoStatus.PENDING
     if normalized == "COMPLETED":
         return ResearchDemoStatus.STOPPED
     if normalized == "FAILED":

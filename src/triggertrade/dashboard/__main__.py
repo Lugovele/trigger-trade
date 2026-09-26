@@ -28,8 +28,6 @@ from triggertrade.dashboard.commands import DashboardCommandBoundary, DashboardC
 from triggertrade.dashboard.metrics_library import get_metric, metrics_payload
 from triggertrade.exchanges import BybitDemoClient
 from triggertrade.backtest import BacktestPlan
-from triggertrade.backtest.data import BybitHistoricalDataSource
-from triggertrade.market_data import parse_linear_instrument
 from triggertrade.persistence import (
     InstrumentCatalogStore,
     MessageStore,
@@ -57,6 +55,7 @@ from triggertrade.services.operator_auth import (
 )
 from triggertrade.services.operator_execution_bridge import DashboardOperatorExecutionBridge
 from triggertrade.services.research import ResearchDemoIsolation, ResearchService, ResearchServiceError
+from triggertrade.services.research_backtest_execution import PostgresResearchBacktestExecutionHandoff
 from triggertrade.services.research_demo_execution import PostgresResearchDemoExecutionHandoff
 from triggertrade.trigger_sets import is_current_selectable_trigger_set
 
@@ -1042,6 +1041,7 @@ def create_server(
     historical_replay_source=None,
     research_backtest_config=None,
     backtest_instrument_provider=None,
+    research_backtest_handoff=None,
 ) -> DashboardServer:
     if host not in ALLOWED_HOSTS:
         raise ValueError("dashboard host must be one of: 127.0.0.1, 0.0.0.0")
@@ -1063,6 +1063,7 @@ def create_server(
         promotion_governance_store=promotion_governance_store,
         demo_isolation=_dashboard_research_demo_isolation(research_demo_handoff),
         demo_execution_handoff=research_demo_handoff,
+        backtest_execution_handoff=research_backtest_handoff,
         research_config_registry=research_config_registry,
         config=research_backtest_config,
         backtest_db_path=db_path,
@@ -1301,6 +1302,7 @@ def create_server_from_env(
         version_registry=research_config_registry,
     )
     research_demo_handoff = _research_demo_handoff_from_env(env)
+    research_backtest_handoff = _research_backtest_handoff_from_env(env) if research_config_registry is not None else None
     server = create_server(
         host=host,
         port=port,
@@ -1312,22 +1314,17 @@ def create_server_from_env(
         promotion_governance_store=promotion_governance,
         research_demo_handoff=research_demo_handoff,
         research_config_registry=research_config_registry,
-        historical_replay_source=BybitHistoricalDataSource(bybit_client),
         research_backtest_config=config,
-        backtest_instrument_provider=lambda symbol: _linear_instrument_for_backtest(bybit_client, symbol),
+        research_backtest_handoff=research_backtest_handoff,
     )
     _require_production_postgres_configuration_path(
         env,
         research_config_registry=research_config_registry,
         research_demo_handoff=research_demo_handoff,
+        research_backtest_handoff=research_backtest_handoff,
         server=server,
     )
     return server, bootstrap.db_path
-
-
-def _linear_instrument_for_backtest(client: BybitDemoClient, symbol: str):
-    return parse_linear_instrument(client.linear_instrument_metadata(symbol).result, symbol=symbol)
-
 
 def _require_explicit_dashboard_persistence(env: dict[str, str]) -> None:
     runtime_mode = str(env.get("TRIGGERTRADE_RUNTIME_MODE") or "").strip().lower()
@@ -1345,6 +1342,7 @@ def _require_production_postgres_configuration_path(
     *,
     research_config_registry,
     research_demo_handoff,
+    research_backtest_handoff,
     server: DashboardServer,
 ) -> None:
     runtime_mode = str(env.get("TRIGGERTRADE_RUNTIME_MODE") or "").strip().lower()
@@ -1367,6 +1365,10 @@ def _require_production_postgres_configuration_path(
     rules_service = server.trading_rules_service
     if getattr(rules_service, "_version_registry", None) is not research_config_registry:
         raise ConfigError("production Trading Rules writes are not wired to PostgreSQL configuration registry")
+    if research_backtest_handoff is None:
+        raise ConfigError("production Research Backtest writes are not wired to PostgreSQL worker handoff")
+    if getattr(research_service, "_backtest_execution_handoff", None) is not research_backtest_handoff:
+        raise ConfigError("production Research Backtest writes are not wired to PostgreSQL worker handoff")
     if _env_true(env.get("TRIGGERTRADE_RESEARCH_DEMO_HANDOFF_ENABLED")) and research_demo_handoff is None:
         raise ConfigError("production Research Demo handoff is enabled but PostgreSQL handoff is unavailable")
 
@@ -1413,6 +1415,16 @@ def _research_demo_handoff_from_env(env: dict[str, str]):
     settings = PostgresSettings.from_env(env)
     apply_postgres_migrations(dsn=settings.dsn, schema=settings.schema)
     return PostgresResearchDemoExecutionHandoff(
+        factory=PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)
+    )
+
+
+def _research_backtest_handoff_from_env(env: dict[str, str]):
+    if not env.get("TRIGGERTRADE_POSTGRES_DSN"):
+        return None
+    settings = PostgresSettings.from_env(env)
+    apply_postgres_migrations(dsn=settings.dsn, schema=settings.schema)
+    return PostgresResearchBacktestExecutionHandoff(
         factory=PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)
     )
 

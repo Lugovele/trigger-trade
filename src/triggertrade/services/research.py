@@ -77,6 +77,14 @@ class ResearchDemoExecutionHandoffResult:
     durable: bool
 
 
+@dataclass(frozen=True)
+class ResearchBacktestExecutionHandoffResult:
+    handoff_id: str
+    execution_owner: str
+    durable: bool
+    record: ResearchBacktestRunRecord
+
+
 class ResearchDemoExecutionHandoff(Protocol):
     canonical_worker_handoff: bool
 
@@ -91,6 +99,21 @@ class ResearchDemoExecutionHandoff(Protocol):
         pin_payload: dict[str, Any],
         demo_run_id: str,
     ) -> ResearchDemoExecutionHandoffResult: ...
+
+
+class ResearchBacktestExecutionHandoff(Protocol):
+    canonical_worker_handoff: bool
+
+    def start_research_backtest(
+        self,
+        *,
+        research: ResearchRecord,
+        trigger_set: TriggerSetVersion,
+        rules: TradingRulesVersion,
+        plan: BacktestPlan,
+        created_at: str,
+        pin_payload: dict[str, Any],
+    ) -> ResearchBacktestExecutionHandoffResult: ...
 
 
 class ResearchConfigurationRegistry(Protocol):
@@ -129,6 +152,7 @@ class ResearchService:
         instrument: FuturesInstrumentMetadata | None = None,
         demo_isolation: ResearchDemoIsolation | None = None,
         demo_execution_handoff: ResearchDemoExecutionHandoff | None = None,
+        backtest_execution_handoff: ResearchBacktestExecutionHandoff | None = None,
         research_config_registry: ResearchConfigurationRegistry | None = None,
         backtest_runner: BacktestRunner | None = None,
         backtest_db_path: str | Path | None = None,
@@ -145,6 +169,7 @@ class ResearchService:
         self._instrument = instrument
         self._demo_isolation = demo_isolation or ResearchDemoIsolation()
         self._demo_execution_handoff = demo_execution_handoff
+        self._backtest_execution_handoff = backtest_execution_handoff
         self._research_config_registry = research_config_registry
         self._backtest_runner = backtest_runner or run_backtest
         self._backtest_db_path = Path(backtest_db_path) if backtest_db_path is not None else None
@@ -200,6 +225,53 @@ class ResearchService:
         research = self._required_research(research_id)
         run_pins = _backtest_run_pins(research, plan)
         backtest_instrument = instrument or self._instrument
+        handoff = self._backtest_execution_handoff
+        if not candles and handoff is not None and getattr(handoff, "canonical_worker_handoff", False):
+            if self._config is None:
+                return self._blocked_backtest(
+                    research,
+                    plan=plan,
+                    reason="backend_historical_replay_inputs_unavailable",
+                    pin_payload=run_pins,
+                    created_at=(created_at or datetime.now(UTC)).isoformat(),
+                )
+            trigger_set = self._exact_trigger_set(research.set_id, research.set_version)
+            rules = self._exact_rules_version(research.rules_version_id)
+            block_reason = _backtest_block_reason(rules, self._config, plan)
+            if block_reason is not None:
+                return self._blocked_backtest(
+                    research,
+                    plan=plan,
+                    reason=block_reason,
+                    pin_payload=run_pins,
+                    created_at=(created_at or datetime.now(UTC)).isoformat(),
+                )
+            now = (created_at or datetime.now(UTC)).isoformat()
+            result = handoff.start_research_backtest(
+                research=research,
+                trigger_set=trigger_set,
+                rules=rules,
+                plan=plan,
+                created_at=now,
+                pin_payload=run_pins,
+            )
+            if result.execution_owner != "trading-worker" or not result.durable:
+                return self._blocked_backtest(
+                    research,
+                    plan=plan,
+                    reason="historical_provider_unavailable",
+                    pin_payload=run_pins,
+                    created_at=now,
+                )
+            self._audit_research_run_event(
+                "BACKTEST_RUN_SUBMITTED",
+                research,
+                run_id=result.record.run_id,
+                result=result.record.status.value,
+                created_at=result.record.created_at,
+                metadata={"handoff_id": result.handoff_id, "execution_owner": result.execution_owner},
+            )
+            return result.record
         if self._config is None or backtest_instrument is None or not candles:
             return self._blocked_backtest(
                 research,

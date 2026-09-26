@@ -14,11 +14,20 @@ from triggertrade.persistence.postgres import PostgresConnectionFactory, Postgre
 from triggertrade.persistence.postgres_runtime_store import PostgresRuntimeStore
 from triggertrade.services.owner_dispatch import OwnerDispatchBlocked, OwnerDispatchResult
 from triggertrade.services.operator_execution_bridge import OPERATOR_EXECUTION_CONSUMER, OperatorExecutionExecutor
+from triggertrade.services.research_backtest_execution import RESEARCH_BACKTEST_CONSUMER, ResearchBacktestExecutionExecutor
 from triggertrade.services.research_demo_execution import RESEARCH_DEMO_CONSUMER, ResearchDemoExecutionExecutor
 
 
 TRADING_WORKER_COMPONENT = "trading-worker"
-TRADING_WORKER_CONSUMERS = ("Portfolio", "Set", "Position", "Lifecycle", OPERATOR_EXECUTION_CONSUMER, RESEARCH_DEMO_CONSUMER)
+TRADING_WORKER_CONSUMERS = (
+    "Portfolio",
+    "Set",
+    "Position",
+    "Lifecycle",
+    OPERATOR_EXECUTION_CONSUMER,
+    RESEARCH_BACKTEST_CONSUMER,
+    RESEARCH_DEMO_CONSUMER,
+)
 
 
 class TradingWorkerBlocked(RuntimeError):
@@ -154,6 +163,7 @@ def build_target_trading_worker(
     factory: PostgresConnectionFactory,
     runtime_store: PostgresRuntimeStore,
     operator_executor: OperatorExecutionExecutor | None = None,
+    research_backtest_executor: ResearchBacktestExecutionExecutor | None = None,
     research_demo_executor: ResearchDemoExecutionExecutor | None = None,
     worker_id: str | None = None,
     consumers: Iterable[str] = TRADING_WORKER_CONSUMERS,
@@ -164,6 +174,7 @@ def build_target_trading_worker(
         message_client_factory=lambda: _PostgresMessageClient(
             factory,
             operator_executor=operator_executor,
+            research_backtest_executor=research_backtest_executor,
             research_demo_executor=research_demo_executor,
         ),
         worker_id=worker_id,
@@ -178,10 +189,12 @@ class _PostgresMessageClient:
         factory: PostgresConnectionFactory,
         *,
         operator_executor: OperatorExecutionExecutor | None = None,
+        research_backtest_executor: ResearchBacktestExecutionExecutor | None = None,
         research_demo_executor: ResearchDemoExecutionExecutor | None = None,
     ) -> None:
         self._factory = factory
         self._operator_executor = operator_executor
+        self._research_backtest_executor = research_backtest_executor
         self._research_demo_executor = research_demo_executor
 
     def claim_outbox(self, **kwargs):
@@ -197,6 +210,7 @@ class _PostgresMessageClient:
             return CanonicalOwnerDispatcher(
                 uow.connection,
                 operator_executor=self._operator_executor,
+                research_backtest_executor=self._research_backtest_executor,
                 research_demo_executor=self._research_demo_executor,
             ).dispatch(message)
 

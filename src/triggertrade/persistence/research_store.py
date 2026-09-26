@@ -55,6 +55,7 @@ class ResearchBacktestStatus(StrEnum):
 
 
 class ResearchDemoStatus(StrEnum):
+    PENDING = "PENDING"
     RUNNING = "RUNNING"
     STOPPED = "STOPPED"
     BLOCKED = "BLOCKED"

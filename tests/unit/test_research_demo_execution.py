@@ -21,8 +21,12 @@ from triggertrade.persistence.postgres import (
     apply_postgres_migrations,
 )
 from triggertrade.canonical_json import canonical_json_digest
-from triggertrade.persistence.postgres_research_registry import PostgresResearchConfigurationRegistry
-from triggertrade.persistence.research_store import ResearchDecision, ResearchRecord, ResearchStatus
+from triggertrade.persistence.postgres_research_registry import (
+    PostgresResearchConfigurationRegistry,
+    _demo_from_execution_owner,
+    _merge_demo_execution_projection,
+)
+from triggertrade.persistence.research_store import ResearchDecision, ResearchDemoRunRecord, ResearchDemoStatus, ResearchRecord, ResearchStatus
 from triggertrade.config import ConfigError, ExecutionVenue, load_config
 from triggertrade.rules import CoinRule, DirectionMode, TakeProfitMode, TradingRulesVersion, TradingRulesVersionDraft
 from triggertrade.services.research import ResearchDemoIsolation
@@ -72,6 +76,86 @@ def test_research_demo_dispatch_marks_running_and_replays_terminal_result_once()
 
     assert replay == "research_demo_replay:COMPLETED"
     assert executor.calls == [record.demo_run_id]
+
+
+def test_demo_projection_same_run_pending_execution_overrides_stale_running_store():
+    stale = _demo_run_projection(status=ResearchDemoStatus.RUNNING, started_at="2026-09-24T00:00:00Z")
+    execution = _demo_from_execution_owner(_execution_owner_record(status="PENDING", started_at=None))
+
+    projected = _merge_demo_execution_projection(stale, execution)
+
+    assert projected.status is ResearchDemoStatus.PENDING
+    assert projected.started_at is None
+    assert projected.metrics == {}
+    assert projected.blocked_reason is None
+
+
+def test_demo_projection_same_run_running_uses_factual_worker_started_at():
+    stale = _demo_run_projection(status=ResearchDemoStatus.RUNNING, started_at="2026-09-24T00:00:00Z")
+    execution = _demo_from_execution_owner(_execution_owner_record(status="RUNNING", started_at="2026-09-24T00:01:00Z"))
+
+    projected = _merge_demo_execution_projection(stale, execution)
+
+    assert projected.status is ResearchDemoStatus.RUNNING
+    assert projected.started_at == "2026-09-24T00:01:00Z"
+
+
+@pytest.mark.parametrize("status,expected", [("FAILED", ResearchDemoStatus.FAILED), ("BLOCKED", ResearchDemoStatus.BLOCKED)])
+def test_demo_projection_same_run_failed_or_blocked_uses_execution_error(status, expected):
+    stale = _demo_run_projection(status=ResearchDemoStatus.RUNNING, started_at="2026-09-24T00:00:00Z")
+    execution = _demo_from_execution_owner(
+        _execution_owner_record(
+            status=status,
+            started_at="2026-09-24T00:01:00Z",
+            completed_at="2026-09-24T00:02:00Z",
+            error="research_demo_canonical_execution_cycle_unavailable:canonical_lifecycle_invoked",
+        )
+    )
+
+    projected = _merge_demo_execution_projection(stale, execution)
+
+    assert projected.status is expected
+    assert projected.stopped_at == "2026-09-24T00:02:00Z"
+    assert projected.blocked_reason == "research_demo_canonical_execution_cycle_unavailable:canonical_lifecycle_invoked"
+
+
+def test_demo_projection_same_run_completed_exposes_execution_result_metrics():
+    stale = _demo_run_projection(status=ResearchDemoStatus.RUNNING, metrics={"old": "stale"})
+    execution = _demo_from_execution_owner(
+        _execution_owner_record(
+            status="COMPLETED",
+            started_at="2026-09-24T00:01:00Z",
+            completed_at="2026-09-24T00:02:00Z",
+            result={"result": {"source": "canonical_futures_accounting", "trades": 2, "net_pnl": "3"}},
+        )
+    )
+
+    projected = _merge_demo_execution_projection(stale, execution)
+
+    assert projected.status is ResearchDemoStatus.STOPPED
+    assert projected.stopped_at == "2026-09-24T00:02:00Z"
+    assert projected.metrics["result"]["trades"] == 2
+    assert projected.metrics["result"]["source"] == "canonical_futures_accounting"
+
+
+def test_demo_projection_execution_only_run_is_recovered():
+    recovered = _demo_from_execution_owner(_execution_owner_record(status="RUNNING", started_at="2026-09-24T00:01:00Z"))
+
+    assert recovered.run_id == "rdm-unit-1"
+    assert recovered.status is ResearchDemoStatus.RUNNING
+    assert recovered.started_at == "2026-09-24T00:01:00Z"
+
+
+def test_demo_projection_research_run_store_only_legacy_run_is_unchanged():
+    legacy = _demo_run_projection(
+        status=ResearchDemoStatus.RUNNING,
+        started_at="2026-09-24T00:00:00Z",
+        metrics={"legacy": True},
+    )
+
+    assert legacy.status is ResearchDemoStatus.RUNNING
+    assert legacy.started_at == "2026-09-24T00:00:00Z"
+    assert legacy.metrics == {"legacy": True}
 
 
 def test_research_config_registry_round_trips_exact_versions_without_sqlite(monkeypatch):
@@ -1076,6 +1160,55 @@ def _demo_record() -> ResearchDemoExecutionRecord:
         pin_payload={"pin": "research-demo"},
         pin_digest="pin-digest",
         revision=1,
+    )
+
+
+def _demo_run_projection(*, status: ResearchDemoStatus, started_at=None, stopped_at=None, metrics=None, blocked_reason=None):
+    return ResearchDemoRunRecord(
+        research_id="res-unit-1",
+        run_id="rdm-unit-1",
+        created_at="2026-09-24T00:00:00Z",
+        updated_at=stopped_at or started_at or "2026-09-24T00:00:00Z",
+        status=status,
+        started_at=started_at,
+        stopped_at=stopped_at,
+        execution_scope_id="research-demo-worker",
+        account_scope="research-demo-postgres",
+        selected_for_use=False,
+        metrics=metrics or {},
+        blocked_reason=blocked_reason,
+        pin_payload={"pin": "research-demo-web"},
+        pin_digest="web-pin-digest",
+    )
+
+
+def _execution_owner_record(*, status: str, started_at, completed_at=None, error=None, result=None):
+    payload = {
+        "demo_run_id": "rdm-unit-1",
+        "research_id": "res-unit-1",
+        "set_id": "triggertrade-futures-core",
+        "set_version": "v1",
+        "rules_version_id": "rules-v1",
+        "rules_display_version": "v1",
+        "requested_at": "2026-09-24T00:00:00Z",
+        "started_at": started_at,
+        "completed_at": completed_at,
+        "execution_owner": "trading-worker",
+        "handoff_message_id": "research-demo-start-unit-1",
+        "status": status,
+        "progress": {"factual_progress_source": "canonical_research_demo_owner_state"},
+        "result": result,
+        "error": error,
+        "pin_payload": {"pin": "research-demo-execution"},
+        "pin_digest": "execution-pin-digest",
+    }
+    return OwnerStateRecord(
+        owner="ResearchDemoExecution",
+        state_type="RESEARCH_DEMO_RUN",
+        state_id="rdm-unit-1",
+        revision=1,
+        payload=payload,
+        payload_digest=canonical_json_digest(payload),
     )
 
 

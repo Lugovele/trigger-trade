@@ -195,3 +195,39 @@ def test_backtest_command_preserves_empty_candle_fail_closed_reason(tmp_path):
 
     assert service.calls[0]["candles"] == ()
     assert service.calls[0]["historical_unavailable_reason"] is None
+
+
+def test_backtest_command_can_delegate_without_web_historical_source(tmp_path):
+    class CapturingResearchService:
+        def __init__(self):
+            self.calls = []
+
+        def run_backtest(self, **kwargs):
+            self.calls.append(kwargs)
+            return SimpleNamespace(run_id="rbt-worker", status=SimpleNamespace(value="RUNNING"))
+
+    db = _empty_db(tmp_path)
+    service = CapturingResearchService()
+    boundary = DashboardCommandBoundary(
+        read_model=DashboardReadModel(db),
+        operator_store=OperatorStateStore(db),
+        message_store=MessageStore(db),
+        trading_rules_service=object(),
+        instrument_catalog_service=object(),
+        research_service=service,
+        historical_replay_source=None,
+        backtest_instrument_provider=None,
+    )
+    plan = BacktestPlan(
+        "BTCUSDT",
+        "linear",
+        "1m",
+        datetime(2026, 9, 5, 14, 1, tzinfo=UTC),
+        datetime(2026, 9, 5, 14, 14, tzinfo=UTC),
+        warmup_candles=60,
+    )
+
+    boundary.run_backtest(_authorized_command("RESEARCH_BACKTEST_RUN"), research_id="res-1", plan=plan)
+
+    assert service.calls[0]["candles"] == ()
+    assert service.calls[0]["historical_unavailable_reason"] == "historical_provider_unavailable"

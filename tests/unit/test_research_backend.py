@@ -32,6 +32,7 @@ from triggertrade.persistence.trace_store import TraceStore
 from triggertrade.rules import TakeProfitMode, TradingRulesService
 from triggertrade.research_pins import research_pin_digest, research_pin_payload
 from triggertrade.services.research import (
+    ResearchBacktestExecutionHandoffResult,
     ResearchDemoExecutionHandoffResult,
     ResearchDemoIsolation,
     ResearchPromotionCommand,
@@ -123,6 +124,39 @@ def test_research_backtest_reuses_existing_engine_and_selects_by_reference(tmp_p
     assert set(FuturesAccountingStore(db).list_closed_trades(limit=20)[0].keys()) >= {"evidence_source"}
     assert {row["evidence_source"] for row in FuturesAccountingStore(db).list_closed_trades(limit=20)} == {BACKTEST_EVIDENCE_SOURCE}
     assert ResearchStore(db).get_backtest_run(research.research_id, run.run_id).engine_run_id == run.engine_run_id
+
+
+def test_research_backtest_without_web_candles_uses_worker_handoff(tmp_path):
+    db, rules = _research_db(tmp_path)
+    handoff = _FakeResearchBacktestExecutionHandoff(db)
+    service = _service(db, with_backtest_runtime=True, backtest_execution_handoff=handoff)
+    research = service.create_research(
+        set_id="triggertrade-futures-core",
+        set_version="v1",
+        rules_version_id=rules.get_current_rules_version().rules_version_id,
+    )
+    candles = _trade_candles()
+    plan = BacktestPlan("BTCUSDT", "linear", "1m", candles[60].close_time, candles[-2].close_time)
+
+    run = service.run_backtest(research_id=research.research_id, plan=plan, created_at=datetime(2026, 9, 8, 11, tzinfo=UTC))
+
+    assert run.status is ResearchBacktestStatus.RUNNING
+    assert run.engine_run_id is None
+    assert run.unavailable_reason is None
+    assert run.pin_payload["run_inputs"]["historical_source"] == "bybit-demo-public-linear-kline-v1"
+    assert handoff.requests == [
+        {
+            "research_id": research.research_id,
+            "set_id": "triggertrade-futures-core",
+            "set_version": "v1",
+            "rules_version_id": rules.get_current_rules_version().rules_version_id,
+            "symbol": "BTCUSDT",
+            "category": "linear",
+            "timeframe": "1m",
+            "warmup_candles": 60,
+            "created_at": "2026-09-08T11:00:00+00:00",
+        }
+    ]
 
 
 def test_research_preserves_multiple_short_runs_without_overwriting_lineage(tmp_path):
@@ -1010,6 +1044,7 @@ def _service(
     with_backtest_runtime=False,
     demo_isolation=None,
     demo_execution_handoff=None,
+    backtest_execution_handoff=None,
     backtest_runner=None,
     promotion_governance_store=None,
     legacy_sqlite_promotion_enabled=False,
@@ -1027,6 +1062,7 @@ def _service(
         instrument=_instrument() if with_backtest_runtime else None,
         demo_isolation=demo_isolation,
         demo_execution_handoff=demo_execution_handoff,
+        backtest_execution_handoff=backtest_execution_handoff,
         backtest_runner=backtest_runner,
         promotion_governance_store=promotion_governance_store,
         legacy_sqlite_promotion_enabled=legacy_sqlite_promotion_enabled,
@@ -1128,6 +1164,46 @@ class _FakeResearchDemoExecutionHandoff:
             handoff_id=f"research-demo-handoff:{research.research_id}:{started_at}",
             execution_owner="trading-worker",
             durable=True,
+        )
+
+
+class _FakeResearchBacktestExecutionHandoff:
+    canonical_worker_handoff = True
+
+    def __init__(self, db) -> None:
+        self.db = db
+        self.requests = []
+
+    def start_research_backtest(self, *, research, trigger_set, rules, plan, created_at, pin_payload):
+        self.requests.append(
+            {
+                "research_id": research.research_id,
+                "set_id": trigger_set.set_id,
+                "set_version": trigger_set.version,
+                "rules_version_id": rules.rules_version_id,
+                "symbol": plan.symbol,
+                "category": plan.category,
+                "timeframe": plan.timeframe,
+                "warmup_candles": plan.warmup_candles,
+                "created_at": created_at,
+            }
+        )
+        record = ResearchStore(self.db).add_backtest_run(
+            research_id=research.research_id,
+            period_start=plan.research_start.astimezone(UTC).isoformat(),
+            period_end=plan.research_end.astimezone(UTC).isoformat(),
+            timeframe=plan.timeframe,
+            status=ResearchBacktestStatus.RUNNING,
+            metrics={},
+            unavailable_reason=None,
+            pin_payload=pin_payload,
+            created_at=created_at,
+        )
+        return ResearchBacktestExecutionHandoffResult(
+            handoff_id=f"research-backtest-handoff:{record.run_id}",
+            execution_owner="trading-worker",
+            durable=True,
+            record=record,
         )
 
 

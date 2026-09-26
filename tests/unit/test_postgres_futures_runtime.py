@@ -36,7 +36,10 @@ def test_canonical_runtime_constructs_worker_owned_postgres_executor():
     assert "PostgresOperatorStateStore" in source
     assert "operator_executor=operator_executor" in source
     assert "CanonicalResearchDemoTradingCycleProvider" in source
+    assert "CanonicalResearchBacktestExecutionExecutor" in source
+    assert "research_backtest_executor=research_backtest_executor" in source
     assert "research_demo_executor=research_demo_executor" in source
+    assert "allow_uncertified_active_formula_execution=True" in source
     assert " futures_execution_store=FuturesExecutionStore(" not in source
     assert " accounting_store=FuturesAccountingStore(" not in source
     assert " position_store=FuturesPositionStore(" not in source

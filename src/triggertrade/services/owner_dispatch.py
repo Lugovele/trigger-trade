@@ -25,6 +25,14 @@ from triggertrade.services.operator_execution_bridge import (
     OperatorExecutionDispatcher,
     OperatorExecutionExecutor,
 )
+from triggertrade.services.research_backtest_execution import (
+    RESEARCH_BACKTEST_CONSUMER,
+    RESEARCH_BACKTEST_MESSAGE_TYPE,
+    RESEARCH_BACKTEST_MESSAGE_VERSION,
+    RESEARCH_BACKTEST_PRODUCER,
+    ResearchBacktestExecutionDispatcher,
+    ResearchBacktestExecutionExecutor,
+)
 from triggertrade.services.research_demo_execution import (
     RESEARCH_DEMO_CONSUMER,
     RESEARCH_DEMO_MESSAGE_TYPE,
@@ -54,11 +62,13 @@ class CanonicalOwnerDispatcher:
         connection,
         *,
         operator_executor: OperatorExecutionExecutor | None = None,
+        research_backtest_executor: ResearchBacktestExecutionExecutor | None = None,
         research_demo_executor: ResearchDemoExecutionExecutor | None = None,
     ) -> None:
         self._connection = connection
         self._messages = DurableMessageStore(connection)
         self._operator_executor = operator_executor
+        self._research_backtest_executor = research_backtest_executor
         self._research_demo_executor = research_demo_executor
 
     def dispatch(self, message: OutboxMessageRecord) -> OwnerDispatchResult:
@@ -95,6 +105,13 @@ class CanonicalOwnerDispatcher:
         ):
             return self._execute_operator_command(message.payload)
         if route == (
+            RESEARCH_BACKTEST_PRODUCER,
+            RESEARCH_BACKTEST_CONSUMER,
+            RESEARCH_BACKTEST_MESSAGE_TYPE,
+            RESEARCH_BACKTEST_MESSAGE_VERSION,
+        ):
+            return self._execute_research_backtest(message.payload)
+        if route == (
             RESEARCH_DEMO_PRODUCER,
             RESEARCH_DEMO_CONSUMER,
             RESEARCH_DEMO_MESSAGE_TYPE,
@@ -122,6 +139,19 @@ class CanonicalOwnerDispatcher:
                 store=ResearchDemoExecutionStore(self._connection),
                 executor=self._research_demo_executor,
             ).dispatch(demo_run_id)
+        except PostgresPersistenceError as exc:
+            raise OwnerDispatchBlocked(str(exc)) from exc
+
+    def _execute_research_backtest(self, payload: dict[str, Any]) -> str:
+        research_id = _body_text(payload, "research_backtest", "research_id")
+        run_id = _body_text(payload, "research_backtest", "run_id")
+        try:
+            from triggertrade.persistence.postgres_research_registry import PostgresResearchRunStore
+
+            return ResearchBacktestExecutionDispatcher(
+                store=PostgresResearchRunStore(self._connection),
+                executor=self._research_backtest_executor,
+            ).dispatch(research_id=research_id, run_id=run_id)
         except PostgresPersistenceError as exc:
             raise OwnerDispatchBlocked(str(exc)) from exc
 
