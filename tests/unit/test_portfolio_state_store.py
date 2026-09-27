@@ -71,6 +71,7 @@ def test_portfolio_state_store_recovers_current_state_and_replays_identical_evid
             "0020",
             "0021",
             "0022",
+            "0023",
         ]
         factory = PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)
         initial = initial_portfolio_state(portfolio_id="portfolio-main", as_of=NOW)

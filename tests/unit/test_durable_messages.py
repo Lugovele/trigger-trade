@@ -70,6 +70,7 @@ def test_outbox_append_restart_dedupe_and_conflict():
             "0020",
             "0021",
             "0022",
+            "0023",
         ]
         assert apply_postgres_migrations(dsn=settings.dsn, schema=settings.schema) == ()
         factory = PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)

@@ -170,6 +170,7 @@ from .postgres_research_registry import (
     ResearchConfigurationRegistryError,
     ResearchDemoConfiguration,
 )
+from .postgres_trigger_registry import PostgresTriggerRegistry, PostgresTriggerRegistryError
 from .submit_authorization_store import (
     SubmitAuthorizationConflict,
     SubmitAuthorizationRecord,
@@ -346,6 +347,8 @@ __all__ = [
     "PostgresResearchConfigurationRegistry",
     "PostgresResearchConfigurationRegistryClient",
     "PostgresResearchRunStore",
+    "PostgresTriggerRegistry",
+    "PostgresTriggerRegistryError",
     "ResearchConfigurationRegistryError",
     "ResearchDemoConfiguration",
     "RuntimeCheckpoint",
