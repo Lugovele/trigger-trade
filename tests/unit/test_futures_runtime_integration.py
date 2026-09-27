@@ -17,6 +17,7 @@ from triggertrade.execution.futures import FuturesTradeIntent, PositionAction, P
 from triggertrade.exchanges import BybitApiError, BybitResponse
 from triggertrade.market_data import ContractCategory, FuturesAccountState, FuturesInstrumentMetadata
 from triggertrade.market_data import FuturesMarketEvent, MarketRegimeContext, MarketRegimeLabel, RegimeCapability
+from triggertrade.market_data.regime import REGIME_LOOKBACK_CANDLES, regime_business_key
 from triggertrade.persistence import (
     DailyLossStore,
     FuturesExecutionStore,
@@ -181,7 +182,7 @@ def test_runtime_recovers_checkpoint_gap_with_historical_catchup_and_account_ref
     store.lane_checkpoint(_lane_checkpoint(checkpoint_open))
     client = LinearOnlyMarketClient(
         candles=_flat_candles(start_time=latest_open - timedelta(minutes=2), count=3),
-        historical_candles=_flat_candles(start_time=history_start, count=6),
+        historical_candles=_with_regime_lookback(_flat_candles(start_time=history_start, count=6)),
     )
     provider = RecordingAccountProvider(_instrument(), equity=Decimal("151"), available=Decimal("149"))
 
@@ -210,7 +211,103 @@ def test_runtime_recovers_checkpoint_gap_with_historical_catchup_and_account_ref
     assert provider.calls == 1
     assert snapshot["equity"] == "151"
     assert {check.name: check for check in readiness.checks}["market_data"].status == "RUNNING"
-    assert client.linear_historical_calls == 1
+    assert client.linear_historical_calls >= 1
+
+
+def test_checkpoint_recovery_reuses_existing_market_regime_fact_without_resave(tmp_path):
+    path = tmp_path / "runtime.sqlite3"
+    checkpoint_open = datetime(2026, 9, 5, 13, 6, tzinfo=UTC)
+    RuntimeStore(path).lane_checkpoint(_lane_checkpoint(checkpoint_open))
+    for open_time in (
+        datetime(2026, 9, 5, 13, 7, tzinfo=UTC),
+        datetime(2026, 9, 5, 13, 8, tzinfo=UTC),
+        datetime(2026, 9, 5, 13, 9, tzinfo=UTC),
+    ):
+        RuntimeStore(path).save_market_regime(_preexisting_regime(open_time))
+    runtime_store = RecordingRuntimeStore(path, fail_on_save=True)
+    client = LinearOnlyMarketClient(
+        candles=_flat_candles(start_minute=8, count=3),
+        historical_candles=_flat_candles(start_minute=6, count=4),
+    )
+
+    result = _runtime(
+        tmp_path,
+        path=path,
+        client=client,
+        runtime_store=runtime_store,
+        clock=lambda: datetime(2026, 9, 5, 13, 10, 30, tzinfo=UTC),
+    ).process_once()
+
+    latest_lifecycle = RuntimeStore(path).get_lane_lifecycle(
+        lane="ACTIVE",
+        symbol="BTCUSDT",
+        timeframe="1m",
+        candle_id="BTCUSDT:1m:2026-09-05T13:09:00+00:00",
+        trigger_set_id="triggertrade-futures-core",
+        trigger_set_version="v1",
+    )
+    assert result.skipped_reason == "checkpoint_recovered"
+    assert runtime_store.saved_regimes == []
+    assert latest_lifecycle is not None
+    assert latest_lifecycle.regime_context_id == _regime_context_id_for_open(datetime(2026, 9, 5, 13, 9, tzinfo=UTC))
+    assert RuntimeStore(path).get_market_regime(latest_lifecycle.regime_context_id).input_snapshot == {
+        "existing": "true",
+        "open_time": "2026-09-05T13:09:00+00:00",
+    }
+
+
+def test_checkpoint_recovery_materializes_full_regime_lookback_when_fact_missing(tmp_path):
+    path = tmp_path / "runtime.sqlite3"
+    RuntimeStore(path).lane_checkpoint(_lane_checkpoint(datetime(2026, 9, 5, 13, 6, tzinfo=UTC)))
+    runtime_store = RecordingRuntimeStore(path)
+    client = LinearOnlyMarketClient(
+        candles=_flat_candles(start_minute=8, count=3),
+        historical_candles=_with_regime_lookback(_flat_candles(start_minute=6, count=4)),
+    )
+
+    result = _runtime(
+        tmp_path,
+        path=path,
+        client=client,
+        runtime_store=runtime_store,
+        clock=lambda: datetime(2026, 9, 5, 13, 10, 30, tzinfo=UTC),
+    ).process_once()
+
+    latest_context = RuntimeStore(path).get_market_regime(_regime_context_id_for_open(datetime(2026, 9, 5, 13, 9, tzinfo=UTC)))
+    assert result.skipped_reason == "checkpoint_recovered"
+    assert len(runtime_store.saved_regimes) == 3
+    assert latest_context is not None
+    assert latest_context.input_snapshot is not None
+    assert latest_context.input_snapshot["first_candle_open_time"] == "2026-09-05T12:40:00+00:00"
+    assert latest_context.input_snapshot["last_candle_open_time"] == "2026-09-05T13:09:00+00:00"
+
+
+def test_checkpoint_recovery_fails_closed_when_regime_lookback_incomplete(tmp_path):
+    path = tmp_path / "runtime.sqlite3"
+    checkpoint_open = datetime(2026, 9, 5, 13, 6, tzinfo=UTC)
+    RuntimeStore(path).lane_checkpoint(_lane_checkpoint(checkpoint_open))
+    client = LinearOnlyMarketClient(
+        candles=_flat_candles(start_minute=8, count=3),
+        historical_candles=_flat_candles(start_minute=6, count=4),
+    )
+
+    result = _runtime(
+        tmp_path,
+        path=path,
+        client=client,
+        clock=lambda: datetime(2026, 9, 5, 13, 10, 30, tzinfo=UTC),
+    ).process_once()
+
+    checkpoint = RuntimeStore(path).get_lane_checkpoint(
+        lane="ACTIVE",
+        symbol="BTCUSDT",
+        timeframe="1m",
+        trigger_set_id="triggertrade-futures-core",
+        trigger_set_version="v1",
+    )
+    assert result.skipped_reason == "checkpoint_gap"
+    assert checkpoint.last_processed_candle_open_time == checkpoint_open.isoformat()
+    assert RuntimeStore(path).get_market_regime(_regime_context_id_for_open(datetime(2026, 9, 5, 13, 7, tzinfo=UTC))) is None
 
 
 def test_one_candle_gap_processes_normally_without_historical_recovery(tmp_path):
@@ -318,7 +415,11 @@ def test_recovery_suppresses_stale_historical_entry_orders(tmp_path):
     path = tmp_path / "runtime.sqlite3"
     RuntimeStore(path).lane_checkpoint(_lane_checkpoint(datetime(2026, 9, 5, 13, 4, tzinfo=UTC)))
     adapter = RecordingFuturesAdapter(order_status="New")
-    client = LinearOnlyMarketClient(candles=_flat_candles(start_minute=8, count=3), historical_candles=_recovery_signal_candles())
+    recovery_candles = _recovery_signal_candles()
+    client = LinearOnlyMarketClient(
+        candles=recovery_candles[-3:],
+        historical_candles=_with_regime_lookback(recovery_candles),
+    )
 
     result = _runtime(
         tmp_path,
@@ -346,7 +447,10 @@ def test_recovery_suppresses_stale_historical_entry_orders(tmp_path):
 def test_checkpoint_recovery_records_deduped_messages(tmp_path):
     path = tmp_path / "runtime.sqlite3"
     RuntimeStore(path).lane_checkpoint(_lane_checkpoint(datetime(2026, 9, 5, 13, 4, tzinfo=UTC)))
-    client = LinearOnlyMarketClient(candles=_flat_candles(start_minute=8, count=3), historical_candles=_flat_candles(count=10))
+    client = LinearOnlyMarketClient(
+        candles=_flat_candles(start_minute=8, count=3),
+        historical_candles=_with_regime_lookback(_flat_candles(count=10)),
+    )
 
     _runtime(
         tmp_path,
@@ -435,7 +539,7 @@ def test_recovery_fails_closed_on_malformed_historical_payload(tmp_path):
 def test_recovery_ignores_incomplete_historical_candle(tmp_path):
     path = tmp_path / "runtime.sqlite3"
     RuntimeStore(path).lane_checkpoint(_lane_checkpoint(datetime(2026, 9, 5, 13, 4, tzinfo=UTC)))
-    historical = _flat_candles(count=10) + _flat_candles(start_minute=10, count=1)
+    historical = _with_regime_lookback(_flat_candles(count=10)) + _flat_candles(start_minute=10, count=1)
 
     result = _runtime(
         tmp_path,
@@ -527,7 +631,7 @@ def test_checkpoint_ahead_of_exchange_fails_closed_without_rewind(tmp_path):
 def test_recovery_paginates_large_gap_and_processes_each_candle_once(tmp_path):
     path = tmp_path / "runtime.sqlite3"
     RuntimeStore(path).lane_checkpoint(_lane_checkpoint(datetime(2026, 9, 5, 13, 0, tzinfo=UTC)))
-    historical = _flat_candles(count=260)
+    historical = _with_regime_lookback(_flat_candles(count=260))
     client = LinearOnlyMarketClient(candles=historical[-3:], historical_candles=historical, page_limit=80)
 
     result = _runtime(
@@ -553,7 +657,7 @@ def test_recovery_paginates_large_gap_and_processes_each_candle_once(tmp_path):
 def test_recovery_paginates_newest_first_exchange_pages(tmp_path):
     path = tmp_path / "runtime.sqlite3"
     RuntimeStore(path).lane_checkpoint(_lane_checkpoint(datetime(2026, 9, 5, 13, 0, tzinfo=UTC)))
-    historical = _flat_candles(count=260)
+    historical = _with_regime_lookback(_flat_candles(count=260))
     client = NewestFirstHistoricalClient(candles=historical[-3:], historical_candles=historical, page_limit=80)
 
     result = _runtime(
@@ -580,7 +684,7 @@ def test_recovery_streams_24_hour_gap_without_total_gap_hard_stop(tmp_path):
     path = tmp_path / "runtime.sqlite3"
     start = datetime(2026, 9, 5, 0, 0, tzinfo=UTC)
     latest_open = start + timedelta(hours=24)
-    historical = _flat_candles(start_time=start, count=1441)
+    historical = _with_regime_lookback(_flat_candles(start_time=start, count=1441))
     RuntimeStore(path).lane_checkpoint(_lane_checkpoint(start))
     adapter = RecordingFuturesAdapter(order_status="New")
     client = LinearOnlyMarketClient(candles=historical[-3:], historical_candles=historical)
@@ -621,7 +725,7 @@ def test_recovery_streams_multi_day_gap_with_bounded_pages(tmp_path):
     path = tmp_path / "runtime.sqlite3"
     start = datetime(2026, 9, 5, 0, 0, tzinfo=UTC)
     latest_open = start + timedelta(days=3)
-    historical = _flat_candles(start_time=start, count=(3 * 24 * 60) + 1)
+    historical = _with_regime_lookback(_flat_candles(start_time=start, count=(3 * 24 * 60) + 1))
     RuntimeStore(path).lane_checkpoint(_lane_checkpoint(start))
     client = LinearOnlyMarketClient(candles=historical[-3:], historical_candles=historical, page_limit=75)
     runtime = _runtime(
@@ -655,11 +759,11 @@ def test_recovery_fails_closed_when_cross_batch_candle_is_missing(tmp_path):
     start = datetime(2026, 9, 5, 0, 0, tzinfo=UTC)
     latest_open = start + timedelta(minutes=500)
     missing_open = start + timedelta(minutes=201)
-    historical = [
+    historical = _with_regime_lookback([
         row
         for row in _flat_candles(start_time=start, count=501)
         if datetime.fromtimestamp(int(row[0]) / 1000, UTC) != missing_open
-    ]
+    ])
     RuntimeStore(path).lane_checkpoint(_lane_checkpoint(start))
 
     result = _runtime(
@@ -702,7 +806,7 @@ def test_recovery_crash_mid_long_gap_resumes_from_committed_checkpoint(tmp_path)
     path = tmp_path / "runtime.sqlite3"
     start = datetime(2026, 9, 5, 0, 0, tzinfo=UTC)
     latest_open = start + timedelta(minutes=1000)
-    historical = _flat_candles(start_time=start, count=1001)
+    historical = _with_regime_lookback(_flat_candles(start_time=start, count=1001))
     RuntimeStore(path).lane_checkpoint(_lane_checkpoint(start))
     processed: list[str] = []
     runtime = _runtime(
@@ -766,7 +870,10 @@ def test_recovery_restart_resumes_from_last_committed_checkpoint(tmp_path):
             processed_at="2026-09-05T13:06:30+00:00",
         )
     )
-    client = LinearOnlyMarketClient(candles=_flat_candles(start_minute=8, count=3), historical_candles=_flat_candles(count=10))
+    client = LinearOnlyMarketClient(
+        candles=_flat_candles(start_minute=8, count=3),
+        historical_candles=_with_regime_lookback(_flat_candles(count=10)),
+    )
 
     result = _runtime(
         tmp_path,
@@ -793,7 +900,7 @@ def test_cold_restart_preserves_persisted_state_and_rehydrates_runtime_evidence(
     latest_open = restart_now.replace(second=0, microsecond=0) - timedelta(minutes=1)
     checkpoint_open = latest_open - timedelta(minutes=5)
     recent_candles = _flat_candles(start_time=latest_open - timedelta(minutes=2), count=3)
-    historical_candles = _flat_candles(start_time=checkpoint_open, count=6)
+    historical_candles = _with_regime_lookback(_flat_candles(start_time=checkpoint_open, count=6))
     config = load_config(_env(path))
     trigger_sets = TriggerSetStore(path)
     bootstrap_current_trigger_sets(trigger_sets, created_at="2026-09-05T00:00:00+00:00")
@@ -960,7 +1067,10 @@ def test_recovery_crash_midstream_resumes_without_duplicate_committed_candles(tm
     runtime = _runtime(
         tmp_path,
         path=path,
-        client=LinearOnlyMarketClient(candles=_flat_candles(start_minute=8, count=3), historical_candles=_flat_candles(count=10)),
+        client=LinearOnlyMarketClient(
+            candles=_flat_candles(start_minute=8, count=3),
+            historical_candles=_with_regime_lookback(_flat_candles(count=10)),
+        ),
         clock=lambda: datetime(2026, 9, 5, 13, 10, 30, tzinfo=UTC),
     )
     original = runtime._process_lane
@@ -981,7 +1091,10 @@ def test_recovery_crash_midstream_resumes_without_duplicate_committed_candles(tm
     resumed = _runtime(
         tmp_path,
         path=path,
-        client=LinearOnlyMarketClient(candles=_flat_candles(start_minute=8, count=3), historical_candles=_flat_candles(count=10)),
+        client=LinearOnlyMarketClient(
+            candles=_flat_candles(start_minute=8, count=3),
+            historical_candles=_with_regime_lookback(_flat_candles(count=10)),
+        ),
         clock=lambda: datetime(2026, 9, 5, 13, 10, 30, tzinfo=UTC),
     ).process_once()
 
@@ -1811,6 +1924,7 @@ def _runtime(
     *,
     path=None,
     client=None,
+    runtime_store=None,
     active_adapter=None,
     operator_store=None,
     position_store=None,
@@ -1835,7 +1949,7 @@ def _runtime(
         futures_execution_store=FuturesExecutionStore(db_path),
         accounting_store=FuturesAccountingStore(db_path),
         trace_store=TraceStore(db_path),
-        runtime_store=RuntimeStore(db_path),
+        runtime_store=runtime_store or RuntimeStore(db_path),
         trigger_set_store=trigger_sets,
         operator_state_store=operator_store or OperatorStateStore(db_path),
         position_store=position_store,
@@ -2080,6 +2194,51 @@ def _flat_candles(*, start_minute=0, count=10, start_time=None):
             ]
         )
     return rows
+
+
+def _with_regime_lookback(rows):
+    first_open = datetime.fromtimestamp(int(rows[0][0]) / 1000, UTC)
+    prefix = _flat_candles(
+        start_time=first_open - timedelta(minutes=REGIME_LOOKBACK_CANDLES - 1),
+        count=REGIME_LOOKBACK_CANDLES - 1,
+    )
+    return prefix + rows
+
+
+def _regime_context_id_for_open(open_time: datetime) -> str:
+    return regime_business_key(
+        symbol="BTCUSDT",
+        timeframe="1m",
+        observed_at=(open_time + timedelta(minutes=1)).isoformat(),
+    )
+
+
+def _preexisting_regime(open_time: datetime) -> MarketRegimeContext:
+    return MarketRegimeContext(
+        context_id=_regime_context_id_for_open(open_time),
+        symbol="BTCUSDT",
+        timeframe="1m",
+        observed_at=(open_time + timedelta(minutes=1)).isoformat(),
+        capability=RegimeCapability.AVAILABLE,
+        label=MarketRegimeLabel.SIDEWAYS,
+        input_snapshot={"existing": "true", "open_time": open_time.isoformat()},
+        normalized_features={"existing_feature": "1"},
+        thresholds={"existing_threshold": "1"},
+        reason=None,
+    )
+
+
+class RecordingRuntimeStore(RuntimeStore):
+    def __init__(self, db_path, *, fail_on_save: bool = False):
+        super().__init__(db_path)
+        self.fail_on_save = fail_on_save
+        self.saved_regimes: list[MarketRegimeContext] = []
+
+    def save_market_regime(self, context: MarketRegimeContext) -> None:
+        if self.fail_on_save:
+            raise AssertionError("save_market_regime must not be called for an existing immutable fact")
+        self.saved_regimes.append(context)
+        super().save_market_regime(context)
 
 
 def _recovery_signal_candles():

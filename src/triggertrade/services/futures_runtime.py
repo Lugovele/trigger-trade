@@ -36,9 +36,11 @@ from triggertrade.market_data import (
     futures_event_from_completed_candle,
     parse_linear_instrument,
     parse_spot_candles,
+    regime_business_key,
     volume_window_from_futures_event,
 )
 from triggertrade.market_data.futures import ContractCategory, MarketRegimeLabel
+from triggertrade.market_data.regime import REGIME_LOOKBACK_CANDLES
 from triggertrade.persistence import (
     DailyLossStore,
     FuturesExecutionStore,
@@ -911,21 +913,11 @@ class FuturesDualLaneRuntime:
                     source="bybit_demo_linear_kline|checkpoint_recovery",
                     instrument_version=f"{instrument.contract_type}:{instrument.settlement_asset}",
                 )
-                regime_context = evaluate_market_regime(
-                    RegimeEvaluationWindow(
-                        symbol=event.symbol,
-                        timeframe=event.timeframe,
-                        observed_at=event.close_time,
-                        candles=tuple(
-                            candle
-                            for candle in sorted(recent_candles + batch_candles, key=lambda item: item.start_time_ms)
-                            if candle.start_time_ms <= completed.candle.start_time_ms
-                        ),
-                        category=event.category,
-                        current_candle_completed=True,
-                    )
+                regime_context = self._resolve_recovery_market_regime(
+                    event=event,
+                    completed=completed,
+                    available_candles=recent_candles + batch_candles,
                 )
-                self._runtime_store.save_market_regime(regime_context)
                 active_results.append(
                     self._process_lane(
                         lane=Lane.ACTIVE,
@@ -1073,6 +1065,90 @@ class FuturesDualLaneRuntime:
             )
             for open_time in expected[1:]
         )
+
+    def _resolve_recovery_market_regime(
+        self,
+        *,
+        event,
+        completed: CompletedCandle,
+        available_candles: tuple,
+    ) -> MarketRegimeContext:
+        context_id = regime_business_key(
+            symbol=event.symbol,
+            timeframe=event.timeframe,
+            observed_at=event.close_time.isoformat(),
+        )
+        existing = self._runtime_store.get_market_regime(context_id)
+        if existing is not None:
+            return existing
+
+        regime_candles = self._recovery_regime_lookback_candles(
+            event=event,
+            completed=completed,
+            available_candles=available_candles,
+        )
+        regime_context = evaluate_market_regime(
+            RegimeEvaluationWindow(
+                symbol=event.symbol,
+                timeframe=event.timeframe,
+                observed_at=event.close_time,
+                candles=regime_candles,
+                category=event.category,
+                current_candle_completed=True,
+            )
+        )
+        if regime_context.context_id != context_id:
+            raise RuntimeGapError("recovered market regime business key mismatch")
+        self._runtime_store.save_market_regime(regime_context)
+        return regime_context
+
+    def _recovery_regime_lookback_candles(
+        self,
+        *,
+        event,
+        completed: CompletedCandle,
+        available_candles: tuple,
+    ) -> tuple:
+        interval = interval_delta(event.timeframe)
+        lookback_start = completed.open_time - interval * (REGIME_LOOKBACK_CANDLES - 1)
+        lookback_end = completed.open_time
+        expected = _expected_opens(lookback_start, lookback_end, interval)
+        candles_by_open: dict[datetime, object] = {}
+        for candle in available_candles:
+            open_time = _candle_open_time(candle)
+            if lookback_start <= open_time <= lookback_end:
+                existing = candles_by_open.get(open_time)
+                if existing is not None and existing != candle:
+                    raise RuntimeGapError("historical recovery returned conflicting regime lookback candle")
+                candles_by_open[open_time] = candle
+
+        if any(open_time not in candles_by_open for open_time in expected):
+            try:
+                response = self._market_client.linear_historical_candles(
+                    event.symbol,
+                    interval=_bybit_interval(event.timeframe),
+                    start_ms=_to_ms(lookback_start),
+                    end_ms=_to_ms(lookback_end),
+                    limit=max(REGIME_LOOKBACK_CANDLES, _RECOVERY_PAGE_LIMIT),
+                )
+                page = parse_spot_candles(response.result)
+                _validate_monotonic_page(page)
+            except RuntimeGapError:
+                raise
+            except Exception as exc:
+                raise RuntimeGapError("historical recovery returned malformed regime lookback") from exc
+            for candle in page:
+                open_time = _candle_open_time(candle)
+                if lookback_start <= open_time <= lookback_end:
+                    existing = candles_by_open.get(open_time)
+                    if existing is not None and existing != candle:
+                        raise RuntimeGapError("historical recovery returned conflicting regime lookback candle")
+                    candles_by_open[open_time] = candle
+
+        missing_open = next((open_time for open_time in expected if open_time not in candles_by_open), None)
+        if missing_open is not None:
+            raise RuntimeGapError(f"historical recovery missing regime lookback candle {missing_open.isoformat()}")
+        return tuple(candles_by_open[open_time] for open_time in expected)
 
     def _resolve_runtime_instrument(self) -> FuturesInstrumentMetadata:
         self._instrument_catalog.ensure_available()

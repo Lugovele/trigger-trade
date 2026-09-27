@@ -1012,6 +1012,9 @@ class _ResearchDemoRuntimeStore:
     def save_market_regime(self, context) -> None:
         self._inner.save_market_regime(context)
 
+    def get_market_regime(self, context_id: str):
+        return self._inner.get_market_regime(context_id)
+
     def get_lane_lifecycle(self, **kwargs):
         scoped = self._scope_kwargs(kwargs)
         lifecycle = self._inner.get_lane_lifecycle(**scoped)
