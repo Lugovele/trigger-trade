@@ -66,7 +66,17 @@ from triggertrade.services.test_futures_simulator import TestFuturesSimulator
 from triggertrade.rules import DirectionMode, TakeProfitMode, TradingRulesError, TradingRulesService, TradingRulesVersion, coin_rule_for
 from triggertrade.strategies import IntegrationDirectionalFuturesStrategy
 from triggertrade.trigger_sets import Lane, TriggerSetStatus, TriggerSetVersion
-from triggertrade.triggers import PercentagePriceMoveTrigger, RobustVolumeConfirmationTrigger, Signal, SignalType, VolumeConfirmationConfig, VolumeConfirmationResult
+from triggertrade.triggers import (
+    DeclarativeTriggerContext,
+    PercentagePriceMoveTrigger,
+    RobustVolumeConfirmationTrigger,
+    Signal,
+    SignalType,
+    VolumeConfirmationConfig,
+    VolumeConfirmationResult,
+    evaluate_declarative_metric_predicate,
+    is_declarative_metric_predicate,
+)
 
 
 UNCERTIFIED_DEMO_ACTIVE_FORMULA_EXECUTION_OPT_IN = "TRIGGERTRADE_ALLOW_UNCERTIFIED_DEMO_ACTIVE_FORMULA_EXECUTION"
@@ -364,6 +374,10 @@ class FuturesDualLaneRuntime:
             self._checkpoint_lane(lane, trigger_set, completed)
             return RuntimeCycleResult(completed.candle_id, None, skipped_reason="already_processed")
 
+        declarative_signals = self._declarative_signals(lane=lane, trigger_set=trigger_set, completed=completed, event=event)
+        for declarative_signal in declarative_signals:
+            self._trace_store.save_trigger_evaluation(declarative_signal)
+
         signal = self._price_signal(lane=lane, trigger_set=trigger_set, completed=completed, event=event)
         self._trace_store.save_trigger_evaluation(signal)
         self._save_lane_lifecycle(lane, trigger_set, completed, "trigger_evaluated", signal_id=signal.signal_id, regime_context=regime_context)
@@ -380,7 +394,7 @@ class FuturesDualLaneRuntime:
             self._checkpoint_lane(lane, trigger_set, completed)
             return RuntimeCycleResult(completed.candle_id, signal.signal_type.value)
 
-        signal_ids = [signal.signal_id]
+        signal_ids = [signal.signal_id, *(item.signal_id for item in declarative_signals)]
         volume_signal = None
         if ("TRG-002", "0.2.0") in trigger_set.rule_versions:
             volume_signal = self._volume_signal(lane=lane, trigger_set=trigger_set, completed=completed, event=event, candles=candles)
@@ -816,6 +830,27 @@ class FuturesDualLaneRuntime:
             trigger_set_id=trigger_set.set_id,
             trigger_set_version=trigger_set.version,
         )
+
+    def _declarative_signals(self, *, lane: Lane, trigger_set: TriggerSetVersion, completed: CompletedCandle, event) -> tuple[Signal, ...]:
+        metric_values = _declarative_metric_values(trigger_set)
+        context = DeclarativeTriggerContext(
+            symbol=completed.symbol,
+            observed_at=event.close_time,
+            window=event.timeframe,
+            metric_values=metric_values,
+            source=f"{event.source}|{lane.value}|{trigger_set.set_id}|{trigger_set.version}",
+            lane=lane.value,
+            trigger_set_id=trigger_set.set_id,
+            trigger_set_version=trigger_set.version,
+        )
+        signals: list[Signal] = []
+        for rule_id, _version in trigger_set.rule_versions:
+            if rule_id in {"TRG-001", "TRG-002"} or not rule_id.startswith("TR-"):
+                continue
+            rule = self._trigger_set_store.resolve_trigger_version(trigger_set, rule_id)
+            if is_declarative_metric_predicate(rule):
+                signals.append(evaluate_declarative_metric_predicate(rule, context))
+        return tuple(signals)
 
     def _recover_and_monitor_active_positions_from_snapshots(self) -> None:
         if self._active_formula_execution_blocked():
@@ -1887,6 +1922,16 @@ def _is_futures_set(trigger_set: TriggerSetVersion) -> bool:
     if not mandatory.issubset(versions):
         return False
     return all(rule_version == "0.2.0" for rule_id, rule_version in versions if rule_id == "TRG-002")
+
+
+def _declarative_metric_values(trigger_set: TriggerSetVersion) -> dict[str, object]:
+    snapshot = dict(trigger_set.config_snapshot)
+    values = snapshot.get("declarative_metric_values")
+    if values is None:
+        values = snapshot.get("metric_values")
+    if isinstance(values, dict):
+        return {str(key): value for key, value in values.items()}
+    return {}
 
 
 def _optional_decimal(value) -> Decimal | None:

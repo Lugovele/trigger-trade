@@ -23,7 +23,17 @@ from triggertrade.services.futures_runtime import _intent_price, _intent_quantit
 from triggertrade.services.runtime import CompletedCandle, candle_id
 from triggertrade.strategies import IntegrationDirectionalFuturesStrategy
 from triggertrade.trigger_sets import Lane, RuleDefinition, RuleStatus, RuleType, TriggerSetVersion
-from triggertrade.triggers import PercentagePriceMoveTrigger, RobustVolumeConfirmationTrigger, Signal, SignalType, VolumeConfirmationConfig, VolumeConfirmationResult
+from triggertrade.triggers import (
+    DeclarativeTriggerContext,
+    PercentagePriceMoveTrigger,
+    RobustVolumeConfirmationTrigger,
+    Signal,
+    SignalType,
+    VolumeConfirmationConfig,
+    VolumeConfirmationResult,
+    evaluate_declarative_metric_predicate,
+    is_declarative_metric_predicate,
+)
 
 from .data import cache_hash, historical_to_bybit, validate_historical_candles
 from .models import BACKTEST_COST_MODEL_VERSION, BACKTEST_DATA_SOURCE_VERSION, BACKTEST_EVIDENCE_SOURCE, BACKTEST_SIMULATOR_VERSION, BacktestPlan, BacktestResult, BacktestRun, BacktestStatus, HistoricalCandle
@@ -103,13 +113,16 @@ class BacktestEngine:
             event = futures_event_from_completed_candle(completed=completed, source=f"{BACKTEST_EVIDENCE_SOURCE.lower()}_linear_kline", instrument_version="LinearPerpetual:USDT")
             history_to_now = tuple(historical_to_bybit(candle) for candle in candles[: index + 1])
             regime = evaluate_market_regime(RegimeEvaluationWindow(symbol=event.symbol, timeframe=event.timeframe, observed_at=event.close_time, candles=history_to_now, category=event.category, current_candle_completed=True))
+            declarative_signals = self._declarative_signals(trigger_set=trigger_set, completed=completed, event=event)
+            for declarative_signal in declarative_signals:
+                self._trace_store.save_trigger_evaluation(replace(declarative_signal, lane=BACKTEST_EVIDENCE_SOURCE))
             signal = self._price_signal(trigger_set=trigger_set, completed=completed, event=event)
             self._trace_store.save_trigger_evaluation(replace(signal, lane=BACKTEST_EVIDENCE_SOURCE))
             if signal.signal_type is SignalType.NO_SIGNAL:
                 no_action += 1
                 continue
             signals += 1
-            signal_ids = [signal.signal_id]
+            signal_ids = [signal.signal_id, *(item.signal_id for item in declarative_signals)]
             volume_signal = None
             if ("TRG-002", "0.2.0") in trigger_set.rule_versions:
                 volume_signal = self._volume_signal(trigger_set=trigger_set, completed=completed, event=event, history=history_to_now[:-1])
@@ -204,6 +217,27 @@ class BacktestEngine:
         evaluation = RobustVolumeConfirmationTrigger(VolumeConfirmationConfig(version=trigger_version, stale_after_seconds=self._config.risk_rules.stale_after_seconds), symbol=completed.symbol).evaluate(volume_window_from_futures_event(event, previous_candles=tuple(history[-60:])), now=event.close_time)
         return Signal(_backtest_signal_id(trigger_set, evaluation.evaluation_id), evaluation.rule_id, evaluation.rule_version, evaluation.symbol, evaluation.observed_at, evaluation.timeframe, {"category": "linear", "evidence_source": BACKTEST_EVIDENCE_SOURCE}, evaluation.condition_result, SignalType.CONFIRMED if evaluation.result is VolumeConfirmationResult.CONFIRMED else SignalType.NOT_CONFIRMED, evaluation.missing_data_reason or evaluation.stale_data_reason or evaluation.result.value.lower(), Lane.TEST.value, trigger_set.set_id, trigger_set.version)
 
+    def _declarative_signals(self, *, trigger_set: TriggerSetVersion, completed: CompletedCandle, event) -> tuple[Signal, ...]:
+        context = DeclarativeTriggerContext(
+            symbol=completed.symbol,
+            observed_at=event.close_time,
+            window=event.timeframe,
+            metric_values=_declarative_metric_values(trigger_set),
+            source=f"{BACKTEST_EVIDENCE_SOURCE.lower()}|{trigger_set.set_id}|{trigger_set.version}",
+            lane=Lane.TEST.value,
+            trigger_set_id=trigger_set.set_id,
+            trigger_set_version=trigger_set.version,
+        )
+        signals: list[Signal] = []
+        for rule_id, _version in trigger_set.rule_versions:
+            if rule_id in {"TRG-001", "TRG-002"} or not rule_id.startswith("TR-"):
+                continue
+            rule = self._trigger_set_store.resolve_trigger_version(trigger_set, rule_id)
+            if is_declarative_metric_predicate(rule):
+                signal = evaluate_declarative_metric_predicate(rule, context)
+                signals.append(replace(signal, signal_id=_backtest_signal_id(trigger_set, signal.signal_id)))
+        return tuple(signals)
+
 
 def _backtest_signal_id(trigger_set: TriggerSetVersion, raw_id: str) -> str:
     digest = sha256("|".join([BACKTEST_EVIDENCE_SOURCE, trigger_set.set_id, trigger_set.version, raw_id]).encode("utf-8")).hexdigest()[:16]
@@ -288,6 +322,16 @@ def _validate_warmup(plan: BacktestPlan, candles: tuple[HistoricalCandle, ...]) 
         raise BacktestEngineError("insufficient historical warmup before evaluation_start")
     if plan.research_start >= plan.research_end:
         raise BacktestEngineError("invalid backtest evaluation period")
+
+
+def _declarative_metric_values(trigger_set: TriggerSetVersion) -> dict[str, object]:
+    snapshot = dict(trigger_set.config_snapshot)
+    values = snapshot.get("declarative_metric_values")
+    if values is None:
+        values = snapshot.get("metric_values")
+    if isinstance(values, dict):
+        return {str(key): value for key, value in values.items()}
+    return {}
 
 
 def _assumptions_snapshot(*, config: AppConfig, plan: BacktestPlan, trigger_set: TriggerSetVersion, instrument: FuturesInstrumentMetadata) -> dict[str, str]:

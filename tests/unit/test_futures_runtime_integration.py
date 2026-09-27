@@ -3,6 +3,7 @@
 from datetime import UTC, datetime, timedelta
 from dataclasses import replace
 from decimal import Decimal
+import json
 from types import SimpleNamespace
 import sqlite3
 
@@ -53,8 +54,8 @@ from triggertrade.rules import DirectionMode, TakeProfitMode, TradingRulesServic
 from triggertrade.services.runtime import LEGACY_DEMO_FUTURES_RUNTIME_OPT_IN, RuntimeCycleResult, build_legacy_demo_futures_runtime_from_env
 from triggertrade.execution.position_lifecycle import PositionStatus, futures_position_id
 from triggertrade.strategies import IntegrationDirectionalFuturesStrategy
-from triggertrade.trigger_sets import Lane, TriggerSetStatus
-from triggertrade.triggers import Signal, SignalType
+from triggertrade.trigger_sets import Lane, RuleDefinition, RuleStatus, RuleType, TriggerSetStatus
+from triggertrade.triggers import DECLARATIVE_METRIC_PREDICATE_IMPLEMENTATION_KEY, DECLARATIVE_METRIC_PREDICATE_SCHEMA, Signal, SignalType
 
 
 def test_runtime_uses_one_linear_market_stream_for_active_and_test(tmp_path):
@@ -1919,6 +1920,50 @@ def test_executable_futures_set_requires_exact_mandatory_rule_membership():
     assert _is_futures_set(wrong_volume) is False
 
 
+def test_futures_runtime_dispatches_declarative_research_trigger_as_trace_evidence(tmp_path):
+    path = tmp_path / "runtime.sqlite3"
+    trigger_sets = TriggerSetStore(path)
+    bootstrap_current_trigger_sets(trigger_sets)
+    rule = _declarative_research_rule()
+    trigger_sets.save_rule(rule)
+    base = current_futures_testing_trigger_set(created_at="2026-09-27T00:00:00+00:00")
+    trigger_sets.create_set(
+        replace(
+            base,
+            set_id="research-runtime-test-set",
+            version="v1-test",
+            status=TriggerSetStatus.TESTING,
+            rule_versions=base.rule_versions + ((rule.rule_id, rule.version),),
+            config_snapshot={
+                **dict(base.config_snapshot),
+                "declarative_metric_values": {
+                    "DE": "0.75",
+                },
+            },
+            provenance="unit test declarative research trigger",
+        )
+    )
+
+    result = _runtime(tmp_path, path=path, with_test_lane=False).process_once()
+
+    assert result.test
+    with sqlite3.connect(path) as conn:
+        rows = conn.execute(
+            """
+            SELECT trigger_rule_version, input_snapshot, signal_type, lane, trigger_set_id
+            FROM trigger_evaluations
+            WHERE trigger_rule_id = ?
+            """,
+            (rule.rule_id,),
+        ).fetchall()
+    assert rows
+    assert {row[0] for row in rows} == {"1.0.0"}
+    assert {json.loads(row[1])["implementation_key"] for row in rows} == {DECLARATIVE_METRIC_PREDICATE_IMPLEMENTATION_KEY}
+    assert {row[2] for row in rows} == {"CONFIRMED"}
+    assert {row[3] for row in rows} == {Lane.TEST.value}
+    assert {row[4] for row in rows} == {"research-runtime-test-set"}
+
+
 def _runtime(
     tmp_path,
     *,
@@ -1979,6 +2024,28 @@ def _create_runtime_test_lane(
             )
         )
     return set_id, version
+
+
+def _declarative_research_rule() -> RuleDefinition:
+    return RuleDefinition(
+        rule_id="TR-R-RUNTIME",
+        version="1.0.0",
+        name="Runtime Research Predicate",
+        status=RuleStatus.TESTING,
+        asset_scope="BTCUSDT",
+        rule_type=RuleType.TRIGGER,
+        condition="DE >= 0.30",
+        definition={
+            "implementation_key": DECLARATIVE_METRIC_PREDICATE_IMPLEMENTATION_KEY,
+            "schema": DECLARATIVE_METRIC_PREDICATE_SCHEMA,
+            "metric_ref": "DE",
+            "operator": "GTE",
+            "threshold": "0.30",
+            "output_states": ["TRUE", "FALSE", "UNAVAILABLE"],
+        },
+        created_at="2026-09-27T00:00:00+00:00",
+        provenance="unit test",
+    )
 
 
 def _fast_recovery_processor(runtime, processed):

@@ -22,6 +22,8 @@ from triggertrade.execution.futures import FuturesTradeIntent, PositionAction, P
 from triggertrade.market_data import ContractCategory, FuturesInstrumentMetadata
 from triggertrade.persistence import FuturesExecutionStore, RuntimeStore, TraceStore, TriggerSetStore, bootstrap_current_trigger_sets, current_futures_active_trigger_set
 from triggertrade.persistence.futures_accounting_store import FuturesAccountingStore
+from triggertrade.trigger_sets import RuleDefinition, RuleStatus, RuleType, TriggerSetStatus
+from triggertrade.triggers import DECLARATIVE_METRIC_PREDICATE_IMPLEMENTATION_KEY, DECLARATIVE_METRIC_PREDICATE_SCHEMA
 
 
 def test_historical_candles_reject_invalid_order_duplicates_gaps_and_scope():
@@ -298,6 +300,66 @@ def test_research_backtest_can_use_injected_pinned_set_without_local_sqlite_set(
     assert result.status is BacktestStatus.COMPLETED
 
 
+def test_backtest_dispatches_declarative_research_trigger_without_changing_primary_path(tmp_path):
+    db = tmp_path / "bt-declarative.sqlite3"
+    _bootstrap(db)
+    store = TriggerSetStore(db)
+    rule = _research_rule()
+    store.save_rule(rule)
+    base = current_futures_active_trigger_set(created_at="2026-09-05T00:00:00+00:00")
+    trigger_set = replace(
+        base,
+        set_id="research-v1-backtest-set",
+        version="v1",
+        status=TriggerSetStatus.TESTING,
+        rule_versions=base.rule_versions + ((rule.rule_id, rule.version),),
+        config_snapshot={
+            **dict(base.config_snapshot),
+            "declarative_metric_values": {
+                "DE": "0.75",
+            },
+        },
+        provenance="unit test declarative research trigger",
+    )
+    store.create_set(trigger_set)
+    config = _config(db)
+    candles = _trade_candles()
+    plan = BacktestPlan("BTCUSDT", "linear", "1m", candles[60].close_time, candles[-2].close_time)
+
+    result = run_backtest(
+        config=config,
+        db_path=db,
+        trigger_set_id=trigger_set.set_id,
+        trigger_set_version=trigger_set.version,
+        plan=plan,
+        candles=candles,
+        instrument=_instrument(),
+    )
+
+    assert result.status is BacktestStatus.COMPLETED
+    with sqlite3.connect(db) as conn:
+        declarative_rows = conn.execute(
+            """
+            SELECT trigger_rule_id, trigger_rule_version, input_snapshot, signal_type
+            FROM trigger_evaluations
+            WHERE trigger_rule_id = ?
+            """,
+            (rule.rule_id,),
+        ).fetchall()
+        primary_rows = conn.execute(
+            """
+            SELECT DISTINCT trigger_rule_id, trigger_rule_version
+            FROM trigger_evaluations
+            WHERE trigger_rule_id = 'TRG-001'
+            """
+        ).fetchall()
+    assert declarative_rows
+    assert {tuple(row) for row in primary_rows} == {("TRG-001", "0.2.0")}
+    assert {row[1] for row in declarative_rows} == {"1.0.0"}
+    assert {json.loads(row[2])["implementation_key"] for row in declarative_rows} == {DECLARATIVE_METRIC_PREDICATE_IMPLEMENTATION_KEY}
+    assert {row[3] for row in declarative_rows} == {"CONFIRMED"}
+
+
 def _bootstrap(db):
     bootstrap_current_trigger_sets(TriggerSetStore(db))
     FuturesAccountingStore(db)
@@ -376,3 +438,25 @@ def _candle(index: int, *, start=None, open_price=None, close_price=None, volume
     close = close_price or Decimal("100")
     open_value = open_price or close
     return HistoricalCandle("BTCUSDT", "linear", "1m", open_time, open_time + timedelta(minutes=1), open_value, max(open_value, close), min(open_value, close), close, volume, close * volume, True)
+
+
+def _research_rule() -> RuleDefinition:
+    return RuleDefinition(
+        rule_id="TR-R-UNIT",
+        version="1.0.0",
+        name="Unit Research Predicate",
+        status=RuleStatus.TESTING,
+        asset_scope="BTCUSDT",
+        rule_type=RuleType.TRIGGER,
+        condition="DE >= 0.30",
+        definition={
+            "implementation_key": DECLARATIVE_METRIC_PREDICATE_IMPLEMENTATION_KEY,
+            "schema": DECLARATIVE_METRIC_PREDICATE_SCHEMA,
+            "metric_ref": "DE",
+            "operator": "GTE",
+            "threshold": "0.30",
+            "output_states": ["TRUE", "FALSE", "UNAVAILABLE"],
+        },
+        created_at="2026-09-27T00:00:00+00:00",
+        provenance="unit test",
+    )
