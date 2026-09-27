@@ -2,13 +2,13 @@
 
 ## Current Status
 
-Set import is implementation-ready for controlled production preflight after deployment of the PostgreSQL Research Set registry. Canonical extraction is complete, trigger references resolve in the package, and isolated PostgreSQL validation must confirm all references against `PostgresTriggerRegistry`.
+Set import is implementation-ready for controlled production preflight after deployment of the PostgreSQL Research Set registry. Canonical extraction is complete, corrected BTC direction-construction members have been rebound from `1.0.0` to `1.0.1` in the pre-import artifacts, trigger references resolve in the package, and isolated PostgreSQL validation must confirm all references against `PostgresTriggerRegistry`.
 
 ## Next Mechanical Sequence
 
 1. Review `RESEARCH_V1_SETS.json` and `RESEARCH_V1_SET_VALIDATION_REPORT.md`.
 2. Ensure migration `0024_research_set_registry` is applied in the target environment.
-3. Verify the 31 approved Research V1 trigger definitions are present in `PostgresTriggerRegistry`.
+3. Verify the 31 approved Research V1 trigger definitions are present in `PostgresTriggerRegistry`, including `TR-R-BTC-001..004@1.0.1`.
 4. Load `RESEARCH_V1_SETS_WEB_IMPORT.json`.
 5. Parse all 33 records as `ResearchSetVersion`.
 6. Preflight with `PostgresResearchSetRegistry.sync_research_sets()` in dry-run/classification mode or equivalent import script: `ABSENT / EXACT_MATCH / CONFLICT`.
@@ -18,6 +18,10 @@ Set import is implementation-ready for controlled production preflight after dep
 10. Verify exact readback for 33/33 records and 242/242 trigger memberships.
 11. Resolve the Rules dependency later by importing or explicitly linking approved Trading Rules/Position/Portfolio artifacts in their own controlled task.
 
+## BTC Rebind Decision
+
+Production Research Set versions had not yet been imported when the BTC trigger correction was applied. The Set package therefore corrects the existing pre-import artifacts in place rather than inventing new Set versions.
+
 ## Prohibited In This Step
 
-Do not import Sets into production, import Rules, activate Sets, start Demo, or mutate production state.
+Do not import Rules, activate Sets, start Demo, or mutate trigger definitions. Production Set import is permitted only through the controlled `PostgresResearchSetRegistry` sequence after conflict-free preflight.

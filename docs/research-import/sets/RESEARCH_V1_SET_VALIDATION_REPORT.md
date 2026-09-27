@@ -9,7 +9,9 @@
 
 ## Referential Integrity
 
-- All Set member trigger IDs are present in the 31-trigger package and map to backend trigger version `1.0.0`.
+- All Set member trigger IDs are present in the 31-trigger package.
+- Corrected BTC direction-construction members now reference `TR-R-BTC-001..004@1.0.1` where those members appear.
+- Non-corrected Research trigger members retain their existing backend trigger versions.
 - Hypothesis references resolve to R-001 through R-030 from the Web Research Configuration Model §9.
 - Candidate, Position, and Portfolio references are retained as source metadata only; Rules import is out of scope for this task.
 
@@ -26,6 +28,8 @@
 - `RESEARCH_V1_SETS_WEB_IMPORT.json` is present for the PostgreSQL Research Set registry contract.
 - `SETS_BACKEND_VALID`: 33.
 - `SETS_READY_FOR_IMPORT`: 33.
+- `BTC_TRIGGER_REFS_REBOUND`: 34.
+- `SUPERSEDED_BTC_1_0_0_REFERENCES_IN_AFFECTED_SETS`: 0.
 - `RULES_BINDING_REQUIRED_FOR_STORAGE`: NO.
 - `PLACEHOLDER_STRATEGY_OR_RISK_VERSIONS_USED`: NO.
 - Every Set member trigger reference must resolve through `PostgresTriggerRegistry` at import time.

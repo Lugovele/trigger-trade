@@ -419,8 +419,8 @@ Edge behavior: UNAVAILABLE is not false or zero; ZERO/NONE are preserved where d
 |---:|---|---|---|---|---|
 | 1 | `TR-R-001` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | F-001 trigger_result = TRUE |
 | 2 | `TR-R-029` | `1.0.0` | `SET_RESET_PREDICATE` | LONG and SHORT | F-001 trigger_result = FALSE |
-| 3 | `TR-R-BTC-001` | `1.0.0` | `BTC_DIRECTION_CONSTRUCTION` | LONG | RETURN(asset,5m) > 0 |
-| 4 | `TR-R-BTC-002` | `1.0.0` | `BTC_DIRECTION_CONSTRUCTION` | SHORT | RETURN(asset,5m) < 0 |
+| 3 | `TR-R-BTC-001` | `1.0.1` | `BTC_DIRECTION_CONSTRUCTION` | LONG | RETURN(asset,5m) > 0 |
+| 4 | `TR-R-BTC-002` | `1.0.1` | `BTC_DIRECTION_CONSTRUCTION` | SHORT | RETURN(asset,5m) < 0 |
 | 5 | `TR-R-BTC-005` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | DE >= 0.30 |
 | 6 | `TR-R-BTC-006` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | ATR percentile >= 15 |
 | 7 | `TR-R-BTC-007` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | ATR percentile <= 97 |
@@ -444,8 +444,8 @@ Edge behavior: UNAVAILABLE is not false or zero; ZERO/NONE are preserved where d
 |---:|---|---|---|---|---|
 | 1 | `TR-R-002` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | F-001 trigger_result = TRUE |
 | 2 | `TR-R-030` | `1.0.0` | `SET_RESET_PREDICATE` | LONG and SHORT | F-001 trigger_result = FALSE |
-| 3 | `TR-R-BTC-001` | `1.0.0` | `BTC_DIRECTION_CONSTRUCTION` | LONG | RETURN(asset,5m) > 0 |
-| 4 | `TR-R-BTC-002` | `1.0.0` | `BTC_DIRECTION_CONSTRUCTION` | SHORT | RETURN(asset,5m) < 0 |
+| 3 | `TR-R-BTC-001` | `1.0.1` | `BTC_DIRECTION_CONSTRUCTION` | LONG | RETURN(asset,5m) > 0 |
+| 4 | `TR-R-BTC-002` | `1.0.1` | `BTC_DIRECTION_CONSTRUCTION` | SHORT | RETURN(asset,5m) < 0 |
 | 5 | `TR-R-BTC-005` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | DE >= 0.30 |
 | 6 | `TR-R-BTC-006` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | ATR percentile >= 15 |
 | 7 | `TR-R-BTC-007` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | ATR percentile <= 97 |
@@ -470,8 +470,8 @@ Edge behavior: UNAVAILABLE is not false or zero; ZERO/NONE are preserved where d
 | 1 | `TR-R-001` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | F-001 trigger_result = TRUE |
 | 2 | `TR-R-003` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | F-002 trigger_result = TRUE |
 | 3 | `TR-R-029` | `1.0.0` | `SET_RESET_PREDICATE` | LONG and SHORT | F-001 trigger_result = FALSE |
-| 4 | `TR-R-BTC-001` | `1.0.0` | `BTC_DIRECTION_CONSTRUCTION` | LONG | RETURN(asset,5m) > 0 |
-| 5 | `TR-R-BTC-002` | `1.0.0` | `BTC_DIRECTION_CONSTRUCTION` | SHORT | RETURN(asset,5m) < 0 |
+| 4 | `TR-R-BTC-001` | `1.0.1` | `BTC_DIRECTION_CONSTRUCTION` | LONG | RETURN(asset,5m) > 0 |
+| 5 | `TR-R-BTC-002` | `1.0.1` | `BTC_DIRECTION_CONSTRUCTION` | SHORT | RETURN(asset,5m) < 0 |
 | 6 | `TR-R-BTC-005` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | DE >= 0.30 |
 | 7 | `TR-R-BTC-006` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | ATR percentile >= 15 |
 | 8 | `TR-R-BTC-007` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | ATR percentile <= 97 |
@@ -496,8 +496,8 @@ Edge behavior: UNAVAILABLE is not false or zero; ZERO/NONE are preserved where d
 | 1 | `TR-R-001` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | F-001 trigger_result = TRUE |
 | 2 | `TR-R-006` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | DE >= 0.50 |
 | 3 | `TR-R-029` | `1.0.0` | `SET_RESET_PREDICATE` | LONG and SHORT | F-001 trigger_result = FALSE |
-| 4 | `TR-R-BTC-001` | `1.0.0` | `BTC_DIRECTION_CONSTRUCTION` | LONG | RETURN(asset,5m) > 0 |
-| 5 | `TR-R-BTC-002` | `1.0.0` | `BTC_DIRECTION_CONSTRUCTION` | SHORT | RETURN(asset,5m) < 0 |
+| 4 | `TR-R-BTC-001` | `1.0.1` | `BTC_DIRECTION_CONSTRUCTION` | LONG | RETURN(asset,5m) > 0 |
+| 5 | `TR-R-BTC-002` | `1.0.1` | `BTC_DIRECTION_CONSTRUCTION` | SHORT | RETURN(asset,5m) < 0 |
 | 6 | `TR-R-BTC-005` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | DE >= 0.30 |
 | 7 | `TR-R-BTC-006` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | ATR percentile >= 15 |
 | 8 | `TR-R-BTC-007` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | ATR percentile <= 97 |
@@ -523,8 +523,8 @@ Edge behavior: UNAVAILABLE is not false or zero; ZERO/NONE are preserved where d
 | 2 | `TR-R-007` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | ATR percentile >= 30 |
 | 3 | `TR-R-008` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | ATR percentile <= 85 |
 | 4 | `TR-R-029` | `1.0.0` | `SET_RESET_PREDICATE` | LONG and SHORT | F-001 trigger_result = FALSE |
-| 5 | `TR-R-BTC-001` | `1.0.0` | `BTC_DIRECTION_CONSTRUCTION` | LONG | RETURN(asset,5m) > 0 |
-| 6 | `TR-R-BTC-002` | `1.0.0` | `BTC_DIRECTION_CONSTRUCTION` | SHORT | RETURN(asset,5m) < 0 |
+| 5 | `TR-R-BTC-001` | `1.0.1` | `BTC_DIRECTION_CONSTRUCTION` | LONG | RETURN(asset,5m) > 0 |
+| 6 | `TR-R-BTC-002` | `1.0.1` | `BTC_DIRECTION_CONSTRUCTION` | SHORT | RETURN(asset,5m) < 0 |
 | 7 | `TR-R-BTC-005` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | DE >= 0.30 |
 | 8 | `TR-R-BTC-006` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | ATR percentile >= 15 |
 | 9 | `TR-R-BTC-007` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | ATR percentile <= 97 |
@@ -550,8 +550,8 @@ Edge behavior: UNAVAILABLE is not false or zero; ZERO/NONE are preserved where d
 | 2 | `TR-R-009` | `1.0.0` | `CONTEXTUAL_AGREEMENT_PREDICATE` | LONG | SWING_SEQUENCE_STATE(asset,1h) = BULLISH |
 | 3 | `TR-R-010` | `1.0.0` | `CONTEXTUAL_AGREEMENT_PREDICATE` | SHORT | SWING_SEQUENCE_STATE(asset,1h) = BEARISH |
 | 4 | `TR-R-029` | `1.0.0` | `SET_RESET_PREDICATE` | LONG and SHORT | F-001 trigger_result = FALSE |
-| 5 | `TR-R-BTC-001` | `1.0.0` | `BTC_DIRECTION_CONSTRUCTION` | LONG | RETURN(asset,5m) > 0 |
-| 6 | `TR-R-BTC-002` | `1.0.0` | `BTC_DIRECTION_CONSTRUCTION` | SHORT | RETURN(asset,5m) < 0 |
+| 5 | `TR-R-BTC-001` | `1.0.1` | `BTC_DIRECTION_CONSTRUCTION` | LONG | RETURN(asset,5m) > 0 |
+| 6 | `TR-R-BTC-002` | `1.0.1` | `BTC_DIRECTION_CONSTRUCTION` | SHORT | RETURN(asset,5m) < 0 |
 | 7 | `TR-R-BTC-005` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | DE >= 0.30 |
 | 8 | `TR-R-BTC-006` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | ATR percentile >= 15 |
 | 9 | `TR-R-BTC-007` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | ATR percentile <= 97 |
@@ -577,8 +577,8 @@ Edge behavior: UNAVAILABLE is not false or zero; ZERO/NONE are preserved where d
 | 2 | `TR-R-013` | `1.0.0` | `CONTEXTUAL_AGREEMENT_PREDICATE` | LONG | AGGRESSIVE_VOLUME_DELTA_PCT >= 0 |
 | 3 | `TR-R-014` | `1.0.0` | `CONTEXTUAL_AGREEMENT_PREDICATE` | SHORT | AGGRESSIVE_VOLUME_DELTA_PCT <= 0 |
 | 4 | `TR-R-029` | `1.0.0` | `SET_RESET_PREDICATE` | LONG and SHORT | F-001 trigger_result = FALSE |
-| 5 | `TR-R-BTC-001` | `1.0.0` | `BTC_DIRECTION_CONSTRUCTION` | LONG | RETURN(asset,5m) > 0 |
-| 6 | `TR-R-BTC-002` | `1.0.0` | `BTC_DIRECTION_CONSTRUCTION` | SHORT | RETURN(asset,5m) < 0 |
+| 5 | `TR-R-BTC-001` | `1.0.1` | `BTC_DIRECTION_CONSTRUCTION` | LONG | RETURN(asset,5m) > 0 |
+| 6 | `TR-R-BTC-002` | `1.0.1` | `BTC_DIRECTION_CONSTRUCTION` | SHORT | RETURN(asset,5m) < 0 |
 | 7 | `TR-R-BTC-005` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | DE >= 0.30 |
 | 8 | `TR-R-BTC-006` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | ATR percentile >= 15 |
 | 9 | `TR-R-BTC-007` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | ATR percentile <= 97 |
@@ -604,8 +604,8 @@ Edge behavior: UNAVAILABLE is not false or zero; ZERO/NONE are preserved where d
 | 2 | `TR-R-018` | `1.0.0` | `CONTEXTUAL_AGREEMENT_PREDICATE` | LONG | BTC_CONTEXT_SCORE >= 0 |
 | 3 | `TR-R-019` | `1.0.0` | `CONTEXTUAL_AGREEMENT_PREDICATE` | SHORT | BTC_CONTEXT_SCORE <= 0 |
 | 4 | `TR-R-029` | `1.0.0` | `SET_RESET_PREDICATE` | LONG and SHORT | F-001 trigger_result = FALSE |
-| 5 | `TR-R-BTC-001` | `1.0.0` | `BTC_DIRECTION_CONSTRUCTION` | LONG | RETURN(asset,5m) > 0 |
-| 6 | `TR-R-BTC-002` | `1.0.0` | `BTC_DIRECTION_CONSTRUCTION` | SHORT | RETURN(asset,5m) < 0 |
+| 5 | `TR-R-BTC-001` | `1.0.1` | `BTC_DIRECTION_CONSTRUCTION` | LONG | RETURN(asset,5m) > 0 |
+| 6 | `TR-R-BTC-002` | `1.0.1` | `BTC_DIRECTION_CONSTRUCTION` | SHORT | RETURN(asset,5m) < 0 |
 | 7 | `TR-R-BTC-005` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | DE >= 0.30 |
 | 8 | `TR-R-BTC-006` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | ATR percentile >= 15 |
 | 9 | `TR-R-BTC-007` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | ATR percentile <= 97 |
@@ -631,8 +631,8 @@ Edge behavior: UNAVAILABLE is not false or zero; ZERO/NONE are preserved where d
 | 2 | `TR-R-022` | `1.0.0` | `CONTEXTUAL_AGREEMENT_PREDICATE` | LONG | VNM_5m_z >= 0 |
 | 3 | `TR-R-023` | `1.0.0` | `CONTEXTUAL_AGREEMENT_PREDICATE` | SHORT | VNM_5m_z <= 0 |
 | 4 | `TR-R-029` | `1.0.0` | `SET_RESET_PREDICATE` | LONG and SHORT | F-001 trigger_result = FALSE |
-| 5 | `TR-R-BTC-001` | `1.0.0` | `BTC_DIRECTION_CONSTRUCTION` | LONG | RETURN(asset,5m) > 0 |
-| 6 | `TR-R-BTC-002` | `1.0.0` | `BTC_DIRECTION_CONSTRUCTION` | SHORT | RETURN(asset,5m) < 0 |
+| 5 | `TR-R-BTC-001` | `1.0.1` | `BTC_DIRECTION_CONSTRUCTION` | LONG | RETURN(asset,5m) > 0 |
+| 6 | `TR-R-BTC-002` | `1.0.1` | `BTC_DIRECTION_CONSTRUCTION` | SHORT | RETURN(asset,5m) < 0 |
 | 7 | `TR-R-BTC-005` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | DE >= 0.30 |
 | 8 | `TR-R-BTC-006` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | ATR percentile >= 15 |
 | 9 | `TR-R-BTC-007` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | ATR percentile <= 97 |
@@ -656,10 +656,10 @@ Edge behavior: UNAVAILABLE is not false or zero; ZERO/NONE are preserved where d
 |---:|---|---|---|---|---|
 | 1 | `TR-R-001` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | F-001 trigger_result = TRUE |
 | 2 | `TR-R-029` | `1.0.0` | `SET_RESET_PREDICATE` | LONG and SHORT | F-001 trigger_result = FALSE |
-| 3 | `TR-R-BTC-001` | `1.0.0` | `BTC_DIRECTION_CONSTRUCTION` | LONG | RETURN(asset,5m) > 0 |
-| 4 | `TR-R-BTC-002` | `1.0.0` | `BTC_DIRECTION_CONSTRUCTION` | SHORT | RETURN(asset,5m) < 0 |
-| 5 | `TR-R-BTC-003` | `1.0.0` | `BTC_DIRECTION_CONSTRUCTION` | LONG | RETURN(asset,5m) > 0 |
-| 6 | `TR-R-BTC-004` | `1.0.0` | `BTC_DIRECTION_CONSTRUCTION` | SHORT | RETURN(asset,5m) < 0 |
+| 3 | `TR-R-BTC-001` | `1.0.1` | `BTC_DIRECTION_CONSTRUCTION` | LONG | RETURN(asset,5m) > 0 |
+| 4 | `TR-R-BTC-002` | `1.0.1` | `BTC_DIRECTION_CONSTRUCTION` | SHORT | RETURN(asset,5m) < 0 |
+| 5 | `TR-R-BTC-003` | `1.0.1` | `BTC_DIRECTION_CONSTRUCTION` | LONG | RETURN(asset,5m) > 0 |
+| 6 | `TR-R-BTC-004` | `1.0.1` | `BTC_DIRECTION_CONSTRUCTION` | SHORT | RETURN(asset,5m) < 0 |
 | 7 | `TR-R-BTC-005` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | DE >= 0.30 |
 | 8 | `TR-R-BTC-006` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | ATR percentile >= 15 |
 | 9 | `TR-R-BTC-007` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | ATR percentile <= 97 |
@@ -684,8 +684,8 @@ Edge behavior: UNAVAILABLE is not false or zero; ZERO/NONE are preserved where d
 | 1 | `TR-R-001` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | F-001 trigger_result = TRUE |
 | 2 | `TR-R-003` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | F-002 trigger_result = TRUE |
 | 3 | `TR-R-029` | `1.0.0` | `SET_RESET_PREDICATE` | LONG and SHORT | F-001 trigger_result = FALSE |
-| 4 | `TR-R-BTC-001` | `1.0.0` | `BTC_DIRECTION_CONSTRUCTION` | LONG | RETURN(asset,5m) > 0 |
-| 5 | `TR-R-BTC-002` | `1.0.0` | `BTC_DIRECTION_CONSTRUCTION` | SHORT | RETURN(asset,5m) < 0 |
+| 4 | `TR-R-BTC-001` | `1.0.1` | `BTC_DIRECTION_CONSTRUCTION` | LONG | RETURN(asset,5m) > 0 |
+| 5 | `TR-R-BTC-002` | `1.0.1` | `BTC_DIRECTION_CONSTRUCTION` | SHORT | RETURN(asset,5m) < 0 |
 | 6 | `TR-R-BTC-005` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | DE >= 0.30 |
 | 7 | `TR-R-BTC-006` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | ATR percentile >= 15 |
 | 8 | `TR-R-BTC-007` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | ATR percentile <= 97 |
@@ -710,8 +710,8 @@ Edge behavior: UNAVAILABLE is not false or zero; ZERO/NONE are preserved where d
 | 1 | `TR-R-001` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | F-001 trigger_result = TRUE |
 | 2 | `TR-R-003` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | F-002 trigger_result = TRUE |
 | 3 | `TR-R-029` | `1.0.0` | `SET_RESET_PREDICATE` | LONG and SHORT | F-001 trigger_result = FALSE |
-| 4 | `TR-R-BTC-001` | `1.0.0` | `BTC_DIRECTION_CONSTRUCTION` | LONG | RETURN(asset,5m) > 0 |
-| 5 | `TR-R-BTC-002` | `1.0.0` | `BTC_DIRECTION_CONSTRUCTION` | SHORT | RETURN(asset,5m) < 0 |
+| 4 | `TR-R-BTC-001` | `1.0.1` | `BTC_DIRECTION_CONSTRUCTION` | LONG | RETURN(asset,5m) > 0 |
+| 5 | `TR-R-BTC-002` | `1.0.1` | `BTC_DIRECTION_CONSTRUCTION` | SHORT | RETURN(asset,5m) < 0 |
 | 6 | `TR-R-BTC-005` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | DE >= 0.30 |
 | 7 | `TR-R-BTC-006` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | ATR percentile >= 15 |
 | 8 | `TR-R-BTC-007` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | ATR percentile <= 97 |
@@ -736,8 +736,8 @@ Edge behavior: UNAVAILABLE is not false or zero; ZERO/NONE are preserved where d
 | 1 | `TR-R-001` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | F-001 trigger_result = TRUE |
 | 2 | `TR-R-003` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | F-002 trigger_result = TRUE |
 | 3 | `TR-R-029` | `1.0.0` | `SET_RESET_PREDICATE` | LONG and SHORT | F-001 trigger_result = FALSE |
-| 4 | `TR-R-BTC-001` | `1.0.0` | `BTC_DIRECTION_CONSTRUCTION` | LONG | RETURN(asset,5m) > 0 |
-| 5 | `TR-R-BTC-002` | `1.0.0` | `BTC_DIRECTION_CONSTRUCTION` | SHORT | RETURN(asset,5m) < 0 |
+| 4 | `TR-R-BTC-001` | `1.0.1` | `BTC_DIRECTION_CONSTRUCTION` | LONG | RETURN(asset,5m) > 0 |
+| 5 | `TR-R-BTC-002` | `1.0.1` | `BTC_DIRECTION_CONSTRUCTION` | SHORT | RETURN(asset,5m) < 0 |
 | 6 | `TR-R-BTC-005` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | DE >= 0.30 |
 | 7 | `TR-R-BTC-006` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | ATR percentile >= 15 |
 | 8 | `TR-R-BTC-007` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | ATR percentile <= 97 |
@@ -762,8 +762,8 @@ Edge behavior: UNAVAILABLE is not false or zero; ZERO/NONE are preserved where d
 | 1 | `TR-R-001` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | F-001 trigger_result = TRUE |
 | 2 | `TR-R-003` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | F-002 trigger_result = TRUE |
 | 3 | `TR-R-029` | `1.0.0` | `SET_RESET_PREDICATE` | LONG and SHORT | F-001 trigger_result = FALSE |
-| 4 | `TR-R-BTC-001` | `1.0.0` | `BTC_DIRECTION_CONSTRUCTION` | LONG | RETURN(asset,5m) > 0 |
-| 5 | `TR-R-BTC-002` | `1.0.0` | `BTC_DIRECTION_CONSTRUCTION` | SHORT | RETURN(asset,5m) < 0 |
+| 4 | `TR-R-BTC-001` | `1.0.1` | `BTC_DIRECTION_CONSTRUCTION` | LONG | RETURN(asset,5m) > 0 |
+| 5 | `TR-R-BTC-002` | `1.0.1` | `BTC_DIRECTION_CONSTRUCTION` | SHORT | RETURN(asset,5m) < 0 |
 | 6 | `TR-R-BTC-005` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | DE >= 0.30 |
 | 7 | `TR-R-BTC-006` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | ATR percentile >= 15 |
 | 8 | `TR-R-BTC-007` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | ATR percentile <= 97 |
@@ -789,8 +789,8 @@ Edge behavior: UNAVAILABLE is not false or zero; ZERO/NONE are preserved where d
 | 2 | `TR-R-003` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | F-002 trigger_result = TRUE |
 | 3 | `TR-R-017` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | TOD_REL_TURNOVER >= 1.00 |
 | 4 | `TR-R-029` | `1.0.0` | `SET_RESET_PREDICATE` | LONG and SHORT | F-001 trigger_result = FALSE |
-| 5 | `TR-R-BTC-001` | `1.0.0` | `BTC_DIRECTION_CONSTRUCTION` | LONG | RETURN(asset,5m) > 0 |
-| 6 | `TR-R-BTC-002` | `1.0.0` | `BTC_DIRECTION_CONSTRUCTION` | SHORT | RETURN(asset,5m) < 0 |
+| 5 | `TR-R-BTC-001` | `1.0.1` | `BTC_DIRECTION_CONSTRUCTION` | LONG | RETURN(asset,5m) > 0 |
+| 6 | `TR-R-BTC-002` | `1.0.1` | `BTC_DIRECTION_CONSTRUCTION` | SHORT | RETURN(asset,5m) < 0 |
 | 7 | `TR-R-BTC-005` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | DE >= 0.30 |
 | 8 | `TR-R-BTC-006` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | ATR percentile >= 15 |
 | 9 | `TR-R-BTC-007` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | ATR percentile <= 97 |
@@ -816,8 +816,8 @@ Edge behavior: UNAVAILABLE is not false or zero; ZERO/NONE are preserved where d
 | 2 | `TR-R-003` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | F-002 trigger_result = TRUE |
 | 3 | `TR-R-017` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | TOD_REL_TURNOVER >= 1.00 |
 | 4 | `TR-R-029` | `1.0.0` | `SET_RESET_PREDICATE` | LONG and SHORT | F-001 trigger_result = FALSE |
-| 5 | `TR-R-BTC-001` | `1.0.0` | `BTC_DIRECTION_CONSTRUCTION` | LONG | RETURN(asset,5m) > 0 |
-| 6 | `TR-R-BTC-002` | `1.0.0` | `BTC_DIRECTION_CONSTRUCTION` | SHORT | RETURN(asset,5m) < 0 |
+| 5 | `TR-R-BTC-001` | `1.0.1` | `BTC_DIRECTION_CONSTRUCTION` | LONG | RETURN(asset,5m) > 0 |
+| 6 | `TR-R-BTC-002` | `1.0.1` | `BTC_DIRECTION_CONSTRUCTION` | SHORT | RETURN(asset,5m) < 0 |
 | 7 | `TR-R-BTC-005` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | DE >= 0.30 |
 | 8 | `TR-R-BTC-006` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | ATR percentile >= 15 |
 | 9 | `TR-R-BTC-007` | `1.0.0` | `SET_FORMATION_PREDICATE` | LONG and SHORT | ATR percentile <= 97 |

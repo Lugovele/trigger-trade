@@ -19,7 +19,37 @@
     "postgres_set_import_path": "POSTGRES_RESEARCH_SET_REGISTRY",
     "sets_backend_valid": 33,
     "sets_ready_for_import": 33,
-    "set_semantic_loss_if_forced_into_current_backend": false
+    "set_semantic_loss_if_forced_into_current_backend": false,
+    "btc_trigger_version_rebind": {
+      "decision": "CORRECT_EXISTING_PREIMPORT_ARTIFACTS",
+      "affected_set_versions": [
+        "SET-R-BTC-001-V1",
+        "SET-R-BTC-001-V2",
+        "SET-R-BTC-003-V2",
+        "SET-R-BTC-007-V2",
+        "SET-R-BTC-008-V2",
+        "SET-R-BTC-009-V2",
+        "SET-R-BTC-011-V2",
+        "SET-R-BTC-012-V2",
+        "SET-R-BTC-015-V2",
+        "SET-R-BTC-016-V2",
+        "SET-R-BTC-019-V1",
+        "SET-R-BTC-019-V2",
+        "SET-R-BTC-020-V1",
+        "SET-R-BTC-020-V2",
+        "SET-R-BTC-021-V1",
+        "SET-R-BTC-021-V2"
+      ],
+      "rebound_trigger_ids": [
+        "TR-R-BTC-001",
+        "TR-R-BTC-002",
+        "TR-R-BTC-003",
+        "TR-R-BTC-004"
+      ],
+      "old_version": "1.0.0",
+      "new_version": "1.0.1",
+      "rebound_references": 34
+    }
   },
   "sets": [
     {
@@ -3705,7 +3735,7 @@
         {
           "position": 3,
           "trigger_id": "TR-R-BTC-001",
-          "trigger_version": "1.0.0",
+          "trigger_version": "1.0.1",
           "role": "BTC_DIRECTION_CONSTRUCTION",
           "direction_applicability": "LONG",
           "condition": "RETURN(asset,5m) > 0",
@@ -3727,7 +3757,7 @@
         {
           "position": 4,
           "trigger_id": "TR-R-BTC-002",
-          "trigger_version": "1.0.0",
+          "trigger_version": "1.0.1",
           "role": "BTC_DIRECTION_CONSTRUCTION",
           "direction_applicability": "SHORT",
           "condition": "RETURN(asset,5m) < 0",
@@ -3872,7 +3902,7 @@
         "blocking_reason": null
       },
       "created_at": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
-      "semantic_hash": "639c7c65b5bf075eae06bd577824696b5c81e2aa60b8df43d736cb1f765a9c66"
+      "semantic_hash": "250b671da2916523704fac98a5d4d0aadefcadb675a673122a117039c51218d0"
     },
     {
       "set_version_id": "SET-R-BTC-001-V2",
@@ -3959,7 +3989,7 @@
         {
           "position": 3,
           "trigger_id": "TR-R-BTC-001",
-          "trigger_version": "1.0.0",
+          "trigger_version": "1.0.1",
           "role": "BTC_DIRECTION_CONSTRUCTION",
           "direction_applicability": "LONG",
           "condition": "RETURN(asset,5m) > 0",
@@ -3981,7 +4011,7 @@
         {
           "position": 4,
           "trigger_id": "TR-R-BTC-002",
-          "trigger_version": "1.0.0",
+          "trigger_version": "1.0.1",
           "role": "BTC_DIRECTION_CONSTRUCTION",
           "direction_applicability": "SHORT",
           "condition": "RETURN(asset,5m) < 0",
@@ -4126,7 +4156,7 @@
         "blocking_reason": null
       },
       "created_at": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
-      "semantic_hash": "20c9adf07c02981a4505cd45b7cec606f554cce0239ffa3802480275cdd81bc8"
+      "semantic_hash": "f13b3149aac51279c208b2f3c1d55cf07f126c964af2e0f0388104c52716e583"
     },
     {
       "set_version_id": "SET-R-BTC-003-V2",
@@ -4236,7 +4266,7 @@
         {
           "position": 4,
           "trigger_id": "TR-R-BTC-001",
-          "trigger_version": "1.0.0",
+          "trigger_version": "1.0.1",
           "role": "BTC_DIRECTION_CONSTRUCTION",
           "direction_applicability": "LONG",
           "condition": "RETURN(asset,5m) > 0",
@@ -4258,7 +4288,7 @@
         {
           "position": 5,
           "trigger_id": "TR-R-BTC-002",
-          "trigger_version": "1.0.0",
+          "trigger_version": "1.0.1",
           "role": "BTC_DIRECTION_CONSTRUCTION",
           "direction_applicability": "SHORT",
           "condition": "RETURN(asset,5m) < 0",
@@ -4403,7 +4433,7 @@
         "blocking_reason": null
       },
       "created_at": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
-      "semantic_hash": "da06aab0ac51709e1e0a1f1acdef1d6004b2f25dbfaba375e2428a5d333e4771"
+      "semantic_hash": "8901f936fe670559685cb719dc19a6db9ee2ec7649e810788fb87f2f4c6c9dd8"
     },
     {
       "set_version_id": "SET-R-BTC-007-V2",
@@ -4510,7 +4540,7 @@
         {
           "position": 4,
           "trigger_id": "TR-R-BTC-001",
-          "trigger_version": "1.0.0",
+          "trigger_version": "1.0.1",
           "role": "BTC_DIRECTION_CONSTRUCTION",
           "direction_applicability": "LONG",
           "condition": "RETURN(asset,5m) > 0",
@@ -4532,7 +4562,7 @@
         {
           "position": 5,
           "trigger_id": "TR-R-BTC-002",
-          "trigger_version": "1.0.0",
+          "trigger_version": "1.0.1",
           "role": "BTC_DIRECTION_CONSTRUCTION",
           "direction_applicability": "SHORT",
           "condition": "RETURN(asset,5m) < 0",
@@ -4677,7 +4707,7 @@
         "blocking_reason": null
       },
       "created_at": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
-      "semantic_hash": "061d7b487f127ea0562559d008ec9e28d97193f18107704e0fc531a666c603b5"
+      "semantic_hash": "e2edd4b03aadad76ba002f8271607f60cc265e199ed7baed01dc01b18286b643"
     },
     {
       "set_version_id": "SET-R-BTC-008-V2",
@@ -4809,7 +4839,7 @@
         {
           "position": 5,
           "trigger_id": "TR-R-BTC-001",
-          "trigger_version": "1.0.0",
+          "trigger_version": "1.0.1",
           "role": "BTC_DIRECTION_CONSTRUCTION",
           "direction_applicability": "LONG",
           "condition": "RETURN(asset,5m) > 0",
@@ -4831,7 +4861,7 @@
         {
           "position": 6,
           "trigger_id": "TR-R-BTC-002",
-          "trigger_version": "1.0.0",
+          "trigger_version": "1.0.1",
           "role": "BTC_DIRECTION_CONSTRUCTION",
           "direction_applicability": "SHORT",
           "condition": "RETURN(asset,5m) < 0",
@@ -4976,7 +5006,7 @@
         "blocking_reason": null
       },
       "created_at": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
-      "semantic_hash": "b4ebdce4e7b526c04dc561849475b1853154b7015e746709ccf809da3f714b89"
+      "semantic_hash": "bd76b26a70b17a68d942381bef8978b0caa704e7c89f031335bf1aaca8e266f9"
     },
     {
       "set_version_id": "SET-R-BTC-009-V2",
@@ -5106,7 +5136,7 @@
         {
           "position": 5,
           "trigger_id": "TR-R-BTC-001",
-          "trigger_version": "1.0.0",
+          "trigger_version": "1.0.1",
           "role": "BTC_DIRECTION_CONSTRUCTION",
           "direction_applicability": "LONG",
           "condition": "RETURN(asset,5m) > 0",
@@ -5128,7 +5158,7 @@
         {
           "position": 6,
           "trigger_id": "TR-R-BTC-002",
-          "trigger_version": "1.0.0",
+          "trigger_version": "1.0.1",
           "role": "BTC_DIRECTION_CONSTRUCTION",
           "direction_applicability": "SHORT",
           "condition": "RETURN(asset,5m) < 0",
@@ -5273,7 +5303,7 @@
         "blocking_reason": null
       },
       "created_at": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
-      "semantic_hash": "bdd0624033d3b230bc64690f40ebb9aee2cdf1a70ce6d916f441f6eb4bfadea0"
+      "semantic_hash": "6fbc2c3069cb294fefb13432ec3a631f495634229ef1e7880250512ef5320e16"
     },
     {
       "set_version_id": "SET-R-BTC-011-V2",
@@ -5403,7 +5433,7 @@
         {
           "position": 5,
           "trigger_id": "TR-R-BTC-001",
-          "trigger_version": "1.0.0",
+          "trigger_version": "1.0.1",
           "role": "BTC_DIRECTION_CONSTRUCTION",
           "direction_applicability": "LONG",
           "condition": "RETURN(asset,5m) > 0",
@@ -5425,7 +5455,7 @@
         {
           "position": 6,
           "trigger_id": "TR-R-BTC-002",
-          "trigger_version": "1.0.0",
+          "trigger_version": "1.0.1",
           "role": "BTC_DIRECTION_CONSTRUCTION",
           "direction_applicability": "SHORT",
           "condition": "RETURN(asset,5m) < 0",
@@ -5570,7 +5600,7 @@
         "blocking_reason": null
       },
       "created_at": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
-      "semantic_hash": "879a92a6794a0dc27a402605df1bdce8588fe5c08fbe83b8e885599051310995"
+      "semantic_hash": "303d9bb6fea62808fd5e6675aa66616bb0a4d2cd3b631fcb8e930fd0cff1c650"
     },
     {
       "set_version_id": "SET-R-BTC-012-V2",
@@ -5700,7 +5730,7 @@
         {
           "position": 5,
           "trigger_id": "TR-R-BTC-001",
-          "trigger_version": "1.0.0",
+          "trigger_version": "1.0.1",
           "role": "BTC_DIRECTION_CONSTRUCTION",
           "direction_applicability": "LONG",
           "condition": "RETURN(asset,5m) > 0",
@@ -5722,7 +5752,7 @@
         {
           "position": 6,
           "trigger_id": "TR-R-BTC-002",
-          "trigger_version": "1.0.0",
+          "trigger_version": "1.0.1",
           "role": "BTC_DIRECTION_CONSTRUCTION",
           "direction_applicability": "SHORT",
           "condition": "RETURN(asset,5m) < 0",
@@ -5867,7 +5897,7 @@
         "blocking_reason": null
       },
       "created_at": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
-      "semantic_hash": "89369b0c21faa4637871ceacc9bdb534f53a7f9fbbd34ee6097e2979f2c78072"
+      "semantic_hash": "a811349032625d4949cc7ed5ef8eef57d78acb27fa345066c6b50ac46bdc5a6a"
     },
     {
       "set_version_id": "SET-R-BTC-015-V2",
@@ -5997,7 +6027,7 @@
         {
           "position": 5,
           "trigger_id": "TR-R-BTC-001",
-          "trigger_version": "1.0.0",
+          "trigger_version": "1.0.1",
           "role": "BTC_DIRECTION_CONSTRUCTION",
           "direction_applicability": "LONG",
           "condition": "RETURN(asset,5m) > 0",
@@ -6019,7 +6049,7 @@
         {
           "position": 6,
           "trigger_id": "TR-R-BTC-002",
-          "trigger_version": "1.0.0",
+          "trigger_version": "1.0.1",
           "role": "BTC_DIRECTION_CONSTRUCTION",
           "direction_applicability": "SHORT",
           "condition": "RETURN(asset,5m) < 0",
@@ -6164,7 +6194,7 @@
         "blocking_reason": null
       },
       "created_at": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
-      "semantic_hash": "e96073fb2ac9bb40fab7844136fc85ff67c67147775c562c3ddf97e4807f7528"
+      "semantic_hash": "7291f70076183f2d8c3585c725a554bf14537ecb2e2659dd9dec12ad01c14924"
     },
     {
       "set_version_id": "SET-R-BTC-016-V2",
@@ -6248,7 +6278,7 @@
         {
           "position": 3,
           "trigger_id": "TR-R-BTC-001",
-          "trigger_version": "1.0.0",
+          "trigger_version": "1.0.1",
           "role": "BTC_DIRECTION_CONSTRUCTION",
           "direction_applicability": "LONG",
           "condition": "RETURN(asset,5m) > 0",
@@ -6270,7 +6300,7 @@
         {
           "position": 4,
           "trigger_id": "TR-R-BTC-002",
-          "trigger_version": "1.0.0",
+          "trigger_version": "1.0.1",
           "role": "BTC_DIRECTION_CONSTRUCTION",
           "direction_applicability": "SHORT",
           "condition": "RETURN(asset,5m) < 0",
@@ -6292,7 +6322,7 @@
         {
           "position": 5,
           "trigger_id": "TR-R-BTC-003",
-          "trigger_version": "1.0.0",
+          "trigger_version": "1.0.1",
           "role": "BTC_DIRECTION_CONSTRUCTION",
           "direction_applicability": "LONG",
           "condition": "RETURN(asset,5m) > 0",
@@ -6314,7 +6344,7 @@
         {
           "position": 6,
           "trigger_id": "TR-R-BTC-004",
-          "trigger_version": "1.0.0",
+          "trigger_version": "1.0.1",
           "role": "BTC_DIRECTION_CONSTRUCTION",
           "direction_applicability": "SHORT",
           "condition": "RETURN(asset,5m) < 0",
@@ -6459,7 +6489,7 @@
         "blocking_reason": null
       },
       "created_at": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
-      "semantic_hash": "14e4765179856ef2c4289c4b081a5cbbfc5dac651b91697886c2ac80cbd1b792"
+      "semantic_hash": "29020e2c0f40c8311bb834df8be0bf37e48aab51910730e66ea5bed7e619f8bf"
     },
     {
       "set_version_id": "SET-R-BTC-019-V1",
@@ -6566,7 +6596,7 @@
         {
           "position": 4,
           "trigger_id": "TR-R-BTC-001",
-          "trigger_version": "1.0.0",
+          "trigger_version": "1.0.1",
           "role": "BTC_DIRECTION_CONSTRUCTION",
           "direction_applicability": "LONG",
           "condition": "RETURN(asset,5m) > 0",
@@ -6588,7 +6618,7 @@
         {
           "position": 5,
           "trigger_id": "TR-R-BTC-002",
-          "trigger_version": "1.0.0",
+          "trigger_version": "1.0.1",
           "role": "BTC_DIRECTION_CONSTRUCTION",
           "direction_applicability": "SHORT",
           "condition": "RETURN(asset,5m) < 0",
@@ -6733,7 +6763,7 @@
         "blocking_reason": null
       },
       "created_at": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
-      "semantic_hash": "0392139a593639b9000f6c1f1f436187cbf10e1898fb3497119ef0ba3a3c4621"
+      "semantic_hash": "d669ecaf33f0d6b85f8f571ac22ff8a568b2fb8473bc7ab80db471d078636716"
     },
     {
       "set_version_id": "SET-R-BTC-019-V2",
@@ -6840,7 +6870,7 @@
         {
           "position": 4,
           "trigger_id": "TR-R-BTC-001",
-          "trigger_version": "1.0.0",
+          "trigger_version": "1.0.1",
           "role": "BTC_DIRECTION_CONSTRUCTION",
           "direction_applicability": "LONG",
           "condition": "RETURN(asset,5m) > 0",
@@ -6862,7 +6892,7 @@
         {
           "position": 5,
           "trigger_id": "TR-R-BTC-002",
-          "trigger_version": "1.0.0",
+          "trigger_version": "1.0.1",
           "role": "BTC_DIRECTION_CONSTRUCTION",
           "direction_applicability": "SHORT",
           "condition": "RETURN(asset,5m) < 0",
@@ -7007,7 +7037,7 @@
         "blocking_reason": null
       },
       "created_at": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
-      "semantic_hash": "8aedbc7b1a45ff337572ce1ddf15e718a0d392c94e67ec6189cae6ffe024d9c1"
+      "semantic_hash": "459663f0f5be771bd64dbcfc063749bb7fb79f3b46ae2df41bf0e22ffd7f3fd1"
     },
     {
       "set_version_id": "SET-R-BTC-020-V1",
@@ -7114,7 +7144,7 @@
         {
           "position": 4,
           "trigger_id": "TR-R-BTC-001",
-          "trigger_version": "1.0.0",
+          "trigger_version": "1.0.1",
           "role": "BTC_DIRECTION_CONSTRUCTION",
           "direction_applicability": "LONG",
           "condition": "RETURN(asset,5m) > 0",
@@ -7136,7 +7166,7 @@
         {
           "position": 5,
           "trigger_id": "TR-R-BTC-002",
-          "trigger_version": "1.0.0",
+          "trigger_version": "1.0.1",
           "role": "BTC_DIRECTION_CONSTRUCTION",
           "direction_applicability": "SHORT",
           "condition": "RETURN(asset,5m) < 0",
@@ -7281,7 +7311,7 @@
         "blocking_reason": null
       },
       "created_at": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
-      "semantic_hash": "5323617e81bbd168ec9a255273b0a2c17d1cda9aefa4e5e3e0b8735abe51e38f"
+      "semantic_hash": "6d66e6e81e8ac8bdc057ed7e36df5973cc3f857da900531b0720d6dfabf56c56"
     },
     {
       "set_version_id": "SET-R-BTC-020-V2",
@@ -7388,7 +7418,7 @@
         {
           "position": 4,
           "trigger_id": "TR-R-BTC-001",
-          "trigger_version": "1.0.0",
+          "trigger_version": "1.0.1",
           "role": "BTC_DIRECTION_CONSTRUCTION",
           "direction_applicability": "LONG",
           "condition": "RETURN(asset,5m) > 0",
@@ -7410,7 +7440,7 @@
         {
           "position": 5,
           "trigger_id": "TR-R-BTC-002",
-          "trigger_version": "1.0.0",
+          "trigger_version": "1.0.1",
           "role": "BTC_DIRECTION_CONSTRUCTION",
           "direction_applicability": "SHORT",
           "condition": "RETURN(asset,5m) < 0",
@@ -7555,7 +7585,7 @@
         "blocking_reason": null
       },
       "created_at": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
-      "semantic_hash": "c841679a6f367c43965520acc853037a1b3f19ef6b6f9c9131d8295652c68383"
+      "semantic_hash": "354d847e0004c5ad13ca1a5542547963ba8e23d5a40ba14304f6309d8e2084bf"
     },
     {
       "set_version_id": "SET-R-BTC-021-V1",
@@ -7685,7 +7715,7 @@
         {
           "position": 5,
           "trigger_id": "TR-R-BTC-001",
-          "trigger_version": "1.0.0",
+          "trigger_version": "1.0.1",
           "role": "BTC_DIRECTION_CONSTRUCTION",
           "direction_applicability": "LONG",
           "condition": "RETURN(asset,5m) > 0",
@@ -7707,7 +7737,7 @@
         {
           "position": 6,
           "trigger_id": "TR-R-BTC-002",
-          "trigger_version": "1.0.0",
+          "trigger_version": "1.0.1",
           "role": "BTC_DIRECTION_CONSTRUCTION",
           "direction_applicability": "SHORT",
           "condition": "RETURN(asset,5m) < 0",
@@ -7852,7 +7882,7 @@
         "blocking_reason": null
       },
       "created_at": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
-      "semantic_hash": "56c53953aed3ef63847991812ba3f6d41f7a4282a8594955de18999259a26b36"
+      "semantic_hash": "c817fe1038d2e6d3ff2ef8fc370928595b7388147c285af1d7195473d0394dbb"
     },
     {
       "set_version_id": "SET-R-BTC-021-V2",
@@ -7982,7 +8012,7 @@
         {
           "position": 5,
           "trigger_id": "TR-R-BTC-001",
-          "trigger_version": "1.0.0",
+          "trigger_version": "1.0.1",
           "role": "BTC_DIRECTION_CONSTRUCTION",
           "direction_applicability": "LONG",
           "condition": "RETURN(asset,5m) > 0",
@@ -8004,7 +8034,7 @@
         {
           "position": 6,
           "trigger_id": "TR-R-BTC-002",
-          "trigger_version": "1.0.0",
+          "trigger_version": "1.0.1",
           "role": "BTC_DIRECTION_CONSTRUCTION",
           "direction_applicability": "SHORT",
           "condition": "RETURN(asset,5m) < 0",
@@ -8149,7 +8179,7 @@
         "blocking_reason": null
       },
       "created_at": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
-      "semantic_hash": "647a47565db115f54e026ad95de51c863ec959248d50f97d274cc0593da2a252"
+      "semantic_hash": "700b5a93ea19d6d39bb0a04ce04af4d8b359954f0e3a5202075eb8b05e971ae0"
     }
   ],
   "validation": {
@@ -8160,6 +8190,8 @@
     "unresolved_trigger_references": [],
     "source_conflicts": [],
     "web_import_blockers": [],
-    "postgres_research_set_registry_ready": true
+    "postgres_research_set_registry_ready": true,
+    "btc_trigger_refs_rebound": 34,
+    "superseded_btc_1_0_0_refs_in_affected_sets": 0
   }
 }
