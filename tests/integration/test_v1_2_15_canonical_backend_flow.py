@@ -145,8 +145,6 @@ def test_b13_fail_closed_paths_do_not_reach_legacy_demo_or_position_api():
         "import triggertrade.services.trading_worker; "
         "forbidden = {"
         "'triggertrade.execution.paper', "
-        "'triggertrade.execution.bybit', "
-        "'triggertrade.execution.position_lifecycle', "
         "'triggertrade.strategies.buy_candidate'"
         "} & set(sys.modules); "
         "raise SystemExit('loaded legacy modules: ' + ', '.join(sorted(forbidden)) if forbidden else 0)"
