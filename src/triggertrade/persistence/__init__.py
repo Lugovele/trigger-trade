@@ -170,6 +170,16 @@ from .postgres_research_registry import (
     ResearchConfigurationRegistryError,
     ResearchDemoConfiguration,
 )
+from .postgres_research_set_registry import (
+    PostgresResearchSetRegistry,
+    PostgresResearchSetRegistryError,
+    ResearchSetTriggerMember,
+    ResearchSetVersion,
+    research_set_digest,
+    research_set_from_package_record,
+    research_set_from_payload,
+    research_set_payload,
+)
 from .postgres_trigger_registry import PostgresTriggerRegistry, PostgresTriggerRegistryError
 from .submit_authorization_store import (
     SubmitAuthorizationConflict,
@@ -347,10 +357,14 @@ __all__ = [
     "PostgresResearchConfigurationRegistry",
     "PostgresResearchConfigurationRegistryClient",
     "PostgresResearchRunStore",
+    "PostgresResearchSetRegistry",
+    "PostgresResearchSetRegistryError",
     "PostgresTriggerRegistry",
     "PostgresTriggerRegistryError",
     "ResearchConfigurationRegistryError",
     "ResearchDemoConfiguration",
+    "ResearchSetTriggerMember",
+    "ResearchSetVersion",
     "RuntimeCheckpoint",
     "RuntimeStore",
     "RuntimeStoreError",
@@ -373,6 +387,10 @@ __all__ = [
     "current_testing_trigger_set",
     "current_volume_recommendation",
     "definition_hash",
+    "research_set_digest",
+    "research_set_from_package_record",
+    "research_set_from_payload",
+    "research_set_payload",
     "is_legacy_execution_evidence_store",
     "require_target_lifecycle_truth_store",
 ]

@@ -112,6 +112,7 @@ def test_close_authority_store_acquires_joins_and_recovers_active_intent():
             "0021",
             "0022",
             "0023",
+            "0024",
         ]
         factory = PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)
 

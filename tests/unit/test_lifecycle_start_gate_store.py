@@ -62,6 +62,7 @@ def test_lifecycle_start_gate_store_persists_and_replays_ready_gate():
             "0021",
             "0022",
             "0023",
+            "0024",
         ]
         factory = PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)
         spec, authorization = valid_gate_inputs()

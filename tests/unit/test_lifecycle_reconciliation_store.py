@@ -105,6 +105,7 @@ def test_store_records_resolution_first_and_replays_later_observation():
             "0021",
             "0022",
             "0023",
+            "0024",
         ]
         factory = PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)
 

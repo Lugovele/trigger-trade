@@ -38,7 +38,7 @@ def test_portfolio_accounting_day_store_restores_base_metrics_latch_and_result_a
     settings = _settings()
     try:
         applied = apply_postgres_migrations(dsn=settings.dsn, schema=settings.schema)
-        assert applied[-1].version == "0023"
+        assert applied[-1].version == "0024"
         factory = PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)
         day = establish_day_from_boundary_snapshot(
             portfolio_id="portfolio-main",
