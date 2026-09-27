@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 
@@ -178,6 +179,234 @@ def test_competing_consumers_claim_disjoint_outbox_messages():
 
         assert set(worker_a).isdisjoint(worker_b)
         assert len(set(worker_a) | set(worker_b)) == 4
+    finally:
+        _drop_schema(settings)
+
+
+def test_outbox_lock_renewal_prevents_reclaim_without_incrementing_attempts():
+    settings = _settings()
+    try:
+        apply_postgres_migrations(dsn=settings.dsn, schema=settings.schema)
+        factory = PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)
+        with PostgresUnitOfWork(factory) as uow:
+            store = DurableMessageStore(uow.connection)
+            store.append_outbox(
+                message_id="research-backtest-start-unit",
+                producer="Research",
+                consumer="ResearchBacktestExecution",
+                message_type="RESEARCH_BACKTEST_START",
+                message_version="1",
+                payload={"research_backtest": {"backtest_run_id": "rbt-unit"}},
+            )
+            claimed = store.claim_outbox(
+                consumer="ResearchBacktestExecution",
+                worker_id="worker-a",
+                limit=1,
+                lock_seconds=5,
+            )
+            assert len(claimed) == 1
+            assert claimed[0].attempt_count == 1
+
+        time.sleep(0.5)
+        with PostgresUnitOfWork(factory) as uow:
+            store = DurableMessageStore(uow.connection)
+            renewed = store.renew_outbox_lock(
+                message_id="research-backtest-start-unit",
+                worker_id="worker-a",
+                lock_seconds=5,
+            )
+            assert renewed is not None
+            assert renewed.locked_by == "worker-a"
+            assert renewed.attempt_count == 1
+
+        time.sleep(0.5)
+        with PostgresUnitOfWork(factory) as uow:
+            store = DurableMessageStore(uow.connection)
+            reclaimed = store.claim_outbox(
+                consumer="ResearchBacktestExecution",
+                worker_id="worker-b",
+                limit=1,
+                lock_seconds=5,
+            )
+            current = store.get_outbox(message_id="research-backtest-start-unit")
+            assert reclaimed == ()
+            assert current is not None
+            assert current.locked_by == "worker-a"
+            assert current.attempt_count == 1
+    finally:
+        _drop_schema(settings)
+
+
+def test_outbox_wrong_owner_cannot_renew_lock():
+    settings = _settings()
+    try:
+        apply_postgres_migrations(dsn=settings.dsn, schema=settings.schema)
+        factory = PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)
+        with PostgresUnitOfWork(factory) as uow:
+            store = DurableMessageStore(uow.connection)
+            store.append_outbox(
+                message_id="research-backtest-wrong-owner",
+                producer="Research",
+                consumer="ResearchBacktestExecution",
+                message_type="RESEARCH_BACKTEST_START",
+                message_version="1",
+                payload={"research_backtest": {"backtest_run_id": "rbt-wrong-owner"}},
+            )
+            claimed = store.claim_outbox(
+                consumer="ResearchBacktestExecution",
+                worker_id="worker-a",
+                limit=1,
+                lock_seconds=30,
+            )
+            assert len(claimed) == 1
+
+            renewed = store.renew_outbox_lock(
+                message_id="research-backtest-wrong-owner",
+                worker_id="worker-b",
+                lock_seconds=30,
+            )
+            current = store.get_outbox(message_id="research-backtest-wrong-owner")
+
+            assert renewed is None
+            assert current is not None
+            assert current.locked_by == "worker-a"
+            assert current.attempt_count == 1
+    finally:
+        _drop_schema(settings)
+
+
+def test_outbox_expired_owner_cannot_resurrect_lock():
+    settings = _settings()
+    try:
+        apply_postgres_migrations(dsn=settings.dsn, schema=settings.schema)
+        factory = PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)
+        with PostgresUnitOfWork(factory) as uow:
+            store = DurableMessageStore(uow.connection)
+            store.append_outbox(
+                message_id="research-demo-expired-renewal",
+                producer="Research",
+                consumer="ResearchDemoExecution",
+                message_type="RESEARCH_DEMO_START",
+                message_version="1",
+                payload={"research_demo": {"demo_run_id": "rdm-expired-renewal"}},
+            )
+            claimed = store.claim_outbox(
+                consumer="ResearchDemoExecution",
+                worker_id="worker-a",
+                limit=1,
+                lock_seconds=1,
+            )
+            assert len(claimed) == 1
+
+        time.sleep(1.2)
+        with PostgresUnitOfWork(factory) as uow:
+            store = DurableMessageStore(uow.connection)
+            renewed = store.renew_outbox_lock(
+                message_id="research-demo-expired-renewal",
+                worker_id="worker-a",
+                lock_seconds=30,
+            )
+            current = store.get_outbox(message_id="research-demo-expired-renewal")
+
+            assert renewed is None
+            assert current is not None
+            assert current.locked_by == "worker-a"
+            assert current.attempt_count == 1
+            assert current.lock_expires_at == claimed[0].lock_expires_at
+    finally:
+        _drop_schema(settings)
+
+
+def test_outbox_dead_worker_recovery_after_renewal_stops():
+    settings = _settings()
+    try:
+        apply_postgres_migrations(dsn=settings.dsn, schema=settings.schema)
+        factory = PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)
+        with PostgresUnitOfWork(factory) as uow:
+            store = DurableMessageStore(uow.connection)
+            store.append_outbox(
+                message_id="research-demo-recheck-unit",
+                producer="Research",
+                consumer="ResearchDemoExecution",
+                message_type="RESEARCH_DEMO_START",
+                message_version="1",
+                payload={"research_demo": {"demo_run_id": "rdm-unit"}},
+            )
+            first_claim = store.claim_outbox(
+                consumer="ResearchDemoExecution",
+                worker_id="worker-a",
+                limit=1,
+                lock_seconds=1,
+            )
+            assert len(first_claim) == 1
+            renewed = store.renew_outbox_lock(
+                message_id="research-demo-recheck-unit",
+                worker_id="worker-a",
+                lock_seconds=1,
+            )
+            assert renewed is not None
+
+        time.sleep(1.2)
+        with PostgresUnitOfWork(factory) as uow:
+            store = DurableMessageStore(uow.connection)
+            reclaimed = store.claim_outbox(
+                consumer="ResearchDemoExecution",
+                worker_id="worker-b",
+                limit=1,
+                lock_seconds=1,
+            )
+            assert len(reclaimed) == 1
+            assert reclaimed[0].locked_by == "worker-b"
+            assert reclaimed[0].attempt_count == 2
+    finally:
+        _drop_schema(settings)
+
+
+def test_stale_worker_cannot_consume_after_reclaim():
+    settings = _settings()
+    try:
+        apply_postgres_migrations(dsn=settings.dsn, schema=settings.schema)
+        factory = PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)
+        with PostgresUnitOfWork(factory) as uow:
+            store = DurableMessageStore(uow.connection)
+            store.append_outbox(
+                message_id="research-backtest-stale-consume",
+                producer="Research",
+                consumer="ResearchBacktestExecution",
+                message_type="RESEARCH_BACKTEST_START",
+                message_version="1",
+                payload={"research_backtest": {"backtest_run_id": "rbt-stale-consume"}},
+            )
+            first = store.claim_outbox(
+                consumer="ResearchBacktestExecution",
+                worker_id="worker-a",
+                limit=1,
+                lock_seconds=1,
+            )
+            assert len(first) == 1
+
+        time.sleep(1.2)
+        with PostgresUnitOfWork(factory) as uow:
+            store = DurableMessageStore(uow.connection)
+            second = store.claim_outbox(
+                consumer="ResearchBacktestExecution",
+                worker_id="worker-b",
+                limit=1,
+                lock_seconds=30,
+            )
+            assert len(second) == 1
+            stale_consume = store.mark_outbox_consumed_by_owner(
+                message_id="research-backtest-stale-consume",
+                worker_id="worker-a",
+            )
+            current = store.get_outbox(message_id="research-backtest-stale-consume")
+
+            assert stale_consume is None
+            assert current is not None
+            assert current.status == "IN_FLIGHT"
+            assert current.locked_by == "worker-b"
+            assert current.consumed_at is None
+            assert current.attempt_count == 2
     finally:
         _drop_schema(settings)
 

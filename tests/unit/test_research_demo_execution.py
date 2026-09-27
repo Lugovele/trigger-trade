@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -1678,12 +1678,18 @@ def test_research_demo_postgres_executor_persists_progress_completion_and_reconn
             pin_payload={"pin": "research-demo", "research_id": research.research_id},
             demo_run_id="rdm-postgres-executor",
         )
+        with PostgresUnitOfWork(factory) as uow:
+            running = ResearchDemoExecutionStore(uow.connection).mark_running("rdm-postgres-executor")
+        assert running.started_at is not None
+        factual_started_at = datetime.fromisoformat(running.started_at.replace("Z", "+00:00"))
+        terminal_at = factual_started_at + timedelta(days=7, seconds=1)
+        terminal_at_text = terminal_at.isoformat().replace("+00:00", "Z")
         executor = CanonicalResearchDemoExecutionExecutor(
             config=load_config(_demo_runtime_env()),
             factory=factory,
-            trading_cycle=_FakeTradingCycle(candle_id="BTCUSDT:1m:2026-10-02T00:00:01Z"),
+            trading_cycle=_CycleWithRuntime(candle_id=f"BTCUSDT:1m:{terminal_at_text}"),
             accounting_store=_FakeAccountingStore(()),
-            clock=lambda: datetime.fromisoformat("2026-10-02T00:00:01+00:00"),
+            clock=lambda: terminal_at,
         )
         with PostgresUnitOfWork(factory) as uow:
             detail = ResearchDemoExecutionDispatcher(

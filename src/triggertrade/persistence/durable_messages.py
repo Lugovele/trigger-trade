@@ -246,6 +246,64 @@ class DurableMessageStore:
             rows = cursor.fetchall()
         return tuple(_outbox_from_row(row) for row in rows)
 
+    def renew_outbox_lock(
+        self,
+        *,
+        message_id: str,
+        worker_id: str,
+        lock_seconds: int = 60,
+    ) -> OutboxMessageRecord | None:
+        message_id = _stable_text(message_id, field="message_id")
+        worker_id = _stable_text(worker_id, field="worker_id")
+        if lock_seconds < 1 or lock_seconds > 3600:
+            raise PostgresPersistenceError("lock_seconds must be between 1 and 3600")
+        with self._connection.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE triggertrade_outbox_messages
+                SET lock_expires_at = now() + (%s * interval '1 second')
+                WHERE message_id = %s
+                  AND status = 'IN_FLIGHT'
+                  AND locked_by = %s
+                  AND lock_expires_at > now()
+                  AND consumed_at IS NULL
+                RETURNING
+                    message_id, producer, consumer, message_type, message_version,
+                    aggregate_id, causation_id, correlation_id, dedupe_key,
+                    payload_json::text, payload_digest, status, attempt_count,
+                    available_at, created_at, locked_by, locked_at, lock_expires_at, consumed_at
+                """,
+                (lock_seconds, message_id, worker_id),
+            )
+            row = cursor.fetchone()
+        return None if row is None else _outbox_from_row(row)
+
+    def mark_outbox_consumed_by_owner(self, *, message_id: str, worker_id: str) -> OutboxMessageRecord | None:
+        message_id = _stable_text(message_id, field="message_id")
+        worker_id = _stable_text(worker_id, field="worker_id")
+        with self._connection.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE triggertrade_outbox_messages
+                SET status = 'CONSUMED',
+                    consumed_at = COALESCE(consumed_at, now()),
+                    lock_expires_at = NULL
+                WHERE message_id = %s
+                  AND status = 'IN_FLIGHT'
+                  AND locked_by = %s
+                  AND lock_expires_at > now()
+                  AND consumed_at IS NULL
+                RETURNING
+                    message_id, producer, consumer, message_type, message_version,
+                    aggregate_id, causation_id, correlation_id, dedupe_key,
+                    payload_json::text, payload_digest, status, attempt_count,
+                    available_at, created_at, locked_by, locked_at, lock_expires_at, consumed_at
+                """,
+                (message_id, worker_id),
+            )
+            row = cursor.fetchone()
+        return None if row is None else _outbox_from_row(row)
+
     def mark_outbox_consumed(self, *, message_id: str) -> OutboxMessageRecord:
         message_id = _stable_text(message_id, field="message_id")
         with self._connection.cursor() as cursor:

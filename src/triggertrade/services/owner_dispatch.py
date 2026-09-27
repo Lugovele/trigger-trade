@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
-from typing import Any
+from typing import Any, Protocol
 
 from triggertrade.persistence import (
     DurableMessageStore,
@@ -54,6 +54,10 @@ class OwnerDispatchResult:
     detail: str
 
 
+class DispatchLeaseGuard(Protocol):
+    def assert_active(self) -> None: ...
+
+
 class CanonicalOwnerDispatcher:
     """Dispatch only routes whose downstream owner effect is source-complete."""
 
@@ -71,7 +75,13 @@ class CanonicalOwnerDispatcher:
         self._research_backtest_executor = research_backtest_executor
         self._research_demo_executor = research_demo_executor
 
-    def dispatch(self, message: OutboxMessageRecord) -> OwnerDispatchResult:
+    def dispatch(
+        self,
+        message: OutboxMessageRecord,
+        *,
+        ack_worker_id: str | None = None,
+        lease_guard: DispatchLeaseGuard | None = None,
+    ) -> OwnerDispatchResult:
         inbox, _ = self._messages.record_inbox(
             consumer=message.consumer,
             message_id=message.message_id,
@@ -81,13 +91,34 @@ class CanonicalOwnerDispatcher:
             payload=message.payload,
         )
         if inbox.status == "PROCESSED":
-            self._messages.mark_outbox_consumed(message_id=message.message_id)
+            self._mark_outbox_consumed(message, ack_worker_id=ack_worker_id, lease_guard=lease_guard)
             return OwnerDispatchResult(processed=False, detail="inbox_replay_already_processed")
 
         detail = self._dispatch_payload_complete_route(message)
+        if lease_guard is not None:
+            lease_guard.assert_active()
         self._messages.mark_inbox_processed(consumer=message.consumer, message_id=message.message_id)
-        self._messages.mark_outbox_consumed(message_id=message.message_id)
+        self._mark_outbox_consumed(message, ack_worker_id=ack_worker_id, lease_guard=lease_guard)
         return OwnerDispatchResult(processed=True, detail=detail)
+
+    def _mark_outbox_consumed(
+        self,
+        message: OutboxMessageRecord,
+        *,
+        ack_worker_id: str | None,
+        lease_guard: DispatchLeaseGuard | None,
+    ) -> None:
+        if lease_guard is not None:
+            lease_guard.assert_active()
+        if ack_worker_id is None:
+            self._messages.mark_outbox_consumed(message_id=message.message_id)
+            return
+        consumed = self._messages.mark_outbox_consumed_by_owner(
+            message_id=message.message_id,
+            worker_id=ack_worker_id,
+        )
+        if consumed is None:
+            raise OwnerDispatchBlocked("outbox_lease_ownership_lost")
 
     def _dispatch_payload_complete_route(self, message: OutboxMessageRecord) -> str:
         route = (message.producer, message.consumer, message.message_type, message.message_version)
