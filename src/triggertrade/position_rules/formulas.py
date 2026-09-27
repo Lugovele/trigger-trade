@@ -24,7 +24,7 @@ from triggertrade.numeric_policy import (
     parse_decimal_text,
     quantize,
 )
-from triggertrade.rules.trading import TakeProfitMode, TradingRulesVersion
+from triggertrade.rules.trading import StopLossMode, TakeProfitMode, TradingRulesVersion
 
 
 ENTRY_MIN_ATR_DISTANCE = Fraction(1, 10)
@@ -182,7 +182,7 @@ def evaluate_initial_position_opportunity(
         "price_geometry": price_geometry,
         "minimum_rr": minimum_rr,
     }
-    decision = "APPROVE" if all(value == "PASS" for value in checks.values()) else "REJECT"
+    decision = "APPROVE" if all(_check_passes(key, value) for key, value in checks.items()) else "REJECT"
     reason = "APPROVED" if decision == "APPROVE" else _first_reject_reason(checks, entry=entry, stop=stop, take_profit=take_profit)
     return PositionOpportunityEvaluation(
         position_decision_id=_text(position_decision_id, field="position_decision_id"),
@@ -211,6 +211,8 @@ def evaluate_initial_position_opportunity(
                 "configuration_id": rules_version.rules_version_id,
                 "configuration_version": rules_version.version,
                 "take_profit_mode": rules_version.draft.take_profit_mode.value,
+                "stop_loss_mode": _stop_loss_mode(rules_version).value,
+                "minimum_risk_reward_enabled": rules_version.draft.minimum_risk_reward_enabled,
                 "minimum_risk_reward": str(rules_version.draft.minimum_risk_reward),
             },
             "available_level_ids": [level.level_id for level in levels],
@@ -299,10 +301,10 @@ def _stop_result(
 ) -> PositionPriceResult:
     if not entry.usable:
         return PositionPriceResult("F-009", PositionResultStatus.UNAVAILABLE, "ENTRY_UNAVAILABLE")
-    stop_mode = str((rules_version.draft.metadata or {}).get("stop_loss_mode", "FIXED")).upper()
-    if stop_mode == "DYNAMIC":
+    stop_mode = _stop_loss_mode(rules_version)
+    if stop_mode is StopLossMode.DYNAMIC:
         return _dynamic_stop(direction=direction, entry=entry, atr=atr, tick=tick, levels=levels)
-    if stop_mode == "FIXED":
+    if stop_mode is StopLossMode.FIXED:
         return _fixed_stop(direction=direction, entry=entry, tick=tick, rules_version=rules_version)
     return PositionPriceResult("F-009", PositionResultStatus.FAIL, "INVALID_STOP_MODE")
 
@@ -393,6 +395,8 @@ def _fixed_stop(
     rules_version: TradingRulesVersion,
 ) -> PositionPriceResult:
     assert entry.price is not None
+    if rules_version.draft.stop_loss_pct is None or rules_version.draft.stop_loss_pct <= 0:
+        return PositionPriceResult("F-009", PositionResultStatus.FAIL, "CONFIG_INVALID")
     pct = Fraction(rules_version.draft.stop_loss_pct)
     if direction == "LONG":
         raw = entry.price * (1 - pct)
@@ -555,8 +559,21 @@ def _gross_risk_reward(
 def _minimum_rr_status(gross_rr: Fraction | None, *, rules_version: TradingRulesVersion) -> str:
     if gross_rr is None:
         return "UNAVAILABLE"
+    if not rules_version.draft.minimum_risk_reward_enabled:
+        return "NOT_APPLICABLE"
     threshold = Fraction(rules_version.draft.minimum_risk_reward)
     return "PASS" if gross_rr >= threshold else "FAIL"
+
+
+def _check_passes(key: str, value: str) -> bool:
+    return value == "PASS" or (key == "minimum_rr" and value == "NOT_APPLICABLE")
+
+
+def _stop_loss_mode(rules_version: TradingRulesVersion) -> StopLossMode:
+    metadata = rules_version.draft.metadata or {}
+    if rules_version.draft.stop_loss_mode is StopLossMode.FIXED and metadata.get("stop_loss_mode"):
+        return StopLossMode(str(metadata["stop_loss_mode"]).upper())
+    return rules_version.draft.stop_loss_mode
 
 
 def _available_levels(levels: Any, *, matched_at: str) -> tuple[ReferenceLevel, ...]:

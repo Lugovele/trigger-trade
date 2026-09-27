@@ -1599,7 +1599,9 @@ def _rules_changes_from_payload(payload: dict) -> dict[str, object]:
         "take_profit_mode": str(position.get("take_profit_mode") or "").upper(),
         "fixed_take_profit_pct": _optional_pct_to_fraction(position.get("fixed_take_profit_pct")),
         "minimum_take_profit_pct": _optional_pct_to_fraction(position.get("minimum_take_profit_pct")),
-        "stop_loss_pct": _pct_to_fraction(position.get("stop_loss_pct")),
+        "stop_loss_mode": str(position.get("stop_loss_mode") or "FIXED").upper(),
+        "stop_loss_pct": _optional_pct_to_fraction(position.get("stop_loss_pct")),
+        "minimum_risk_reward_enabled": _bool_value(position.get("minimum_risk_reward_enabled", True)),
         "minimum_risk_reward": _decimal_value(position.get("minimum_risk_reward")),
         "minimum_net_edge_enabled": _bool_value(position.get("minimum_net_edge_enabled")),
         "minimum_net_edge_pct": _optional_pct_to_fraction(position.get("minimum_net_edge_pct")),
@@ -1612,6 +1614,8 @@ def _rules_changes_from_payload(payload: dict) -> dict[str, object]:
         "direction_mode": str(portfolio.get("direction_mode") or "").upper(),
         "daily_loss_limit_enabled": _bool_value(portfolio.get("daily_loss_limit_enabled")),
         "daily_loss_limit_pct": _optional_pct_to_fraction(portfolio.get("daily_loss_limit_pct")),
+        "minimum_tranche_capital": None if portfolio.get("minimum_tranche_capital") in (None, "") else _decimal_value(portfolio.get("minimum_tranche_capital")),
+        "cooldown_minutes": _optional_int(portfolio.get("cooldown_minutes")),
         "coins": tuple(_coin_rule_from_payload(item) for item in coins),
     }
 

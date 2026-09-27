@@ -26,6 +26,11 @@ class TakeProfitMode(StrEnum):
     DYNAMIC = "DYNAMIC"
 
 
+class StopLossMode(StrEnum):
+    FIXED = "FIXED"
+    DYNAMIC = "DYNAMIC"
+
+
 class DirectionMode(StrEnum):
     LONG_SHORT = "LONG_SHORT"
     LONG_ONLY = "LONG_ONLY"
@@ -45,7 +50,7 @@ class TradingRulesVersionDraft:
     take_profit_mode: TakeProfitMode
     fixed_take_profit_pct: Decimal | None
     minimum_take_profit_pct: Decimal | None
-    stop_loss_pct: Decimal
+    stop_loss_pct: Decimal | None
     minimum_risk_reward: Decimal
     minimum_net_edge_enabled: bool
     minimum_net_edge_pct: Decimal | None
@@ -65,6 +70,10 @@ class TradingRulesVersionDraft:
     funding_cost: Decimal
     coins: tuple[CoinRule, ...]
     metadata: Mapping[str, str] | None = None
+    stop_loss_mode: StopLossMode = StopLossMode.FIXED
+    minimum_risk_reward_enabled: bool = True
+    minimum_tranche_capital: Decimal | None = None
+    cooldown_minutes: int | None = None
 
 
 @dataclass(frozen=True)
@@ -187,7 +196,9 @@ def build_initial_trading_rules(config: AppConfig) -> TradingRulesVersionDraft:
         take_profit_mode=TakeProfitMode.FIXED,
         fixed_take_profit_pct=runtime.take_profit_pct,
         minimum_take_profit_pct=runtime.take_profit_pct,
+        stop_loss_mode=StopLossMode.FIXED,
         stop_loss_pct=runtime.stop_loss_pct,
+        minimum_risk_reward_enabled=True,
         minimum_risk_reward=runtime.minimum_risk_reward,
         minimum_net_edge_enabled=True,
         minimum_net_edge_pct=runtime.minimum_net_edge,
@@ -200,6 +211,8 @@ def build_initial_trading_rules(config: AppConfig) -> TradingRulesVersionDraft:
         direction_mode=DirectionMode.LONG_SHORT,
         daily_loss_limit_enabled=False,
         daily_loss_limit_pct=None,
+        minimum_tranche_capital=None,
+        cooldown_minutes=None,
         maker_fee_rate=runtime.maker_fee_rate,
         taker_fee_rate=runtime.taker_fee_rate,
         spread_cost=runtime.spread_cost,
@@ -225,17 +238,30 @@ def validate_rules_draft(draft: TradingRulesVersionDraft, *, symbol_validator: C
     if draft.take_profit_mode is TakeProfitMode.FIXED:
         if draft.fixed_take_profit_pct is None or draft.fixed_take_profit_pct <= 0:
             raise TradingRulesError("fixed take-profit mode requires positive fixed_take_profit_pct")
+        if draft.minimum_take_profit_pct is not None and draft.minimum_take_profit_pct <= 0:
+            raise TradingRulesError("minimum_take_profit_pct must be positive when configured")
         if draft.minimum_take_profit_pct is not None and draft.fixed_take_profit_pct < draft.minimum_take_profit_pct:
             raise TradingRulesError("fixed_take_profit_pct must meet the minimum take-profit floor")
     elif draft.take_profit_mode is TakeProfitMode.DYNAMIC:
-        if draft.minimum_take_profit_pct is None or draft.minimum_take_profit_pct <= 0:
-            raise TradingRulesError("dynamic take-profit mode requires a positive minimum_take_profit_pct")
+        if draft.fixed_take_profit_pct is not None:
+            raise TradingRulesError("dynamic take-profit mode must not configure fixed_take_profit_pct")
+        if draft.minimum_take_profit_pct is not None and draft.minimum_take_profit_pct <= 0:
+            raise TradingRulesError("minimum_take_profit_pct must be positive when configured")
     else:
         raise TradingRulesError("unsupported take-profit mode")
-    if draft.stop_loss_pct <= 0:
-        raise TradingRulesError("stop_loss_pct must be positive")
-    if draft.minimum_risk_reward <= 0:
-        raise TradingRulesError("minimum_risk_reward must be positive")
+    stop_loss_mode = _stop_loss_mode(draft)
+    if stop_loss_mode is StopLossMode.FIXED:
+        if draft.stop_loss_pct is None or draft.stop_loss_pct <= 0:
+            raise TradingRulesError("fixed stop-loss mode requires positive stop_loss_pct")
+    elif stop_loss_mode is StopLossMode.DYNAMIC:
+        if draft.stop_loss_pct is not None and draft.stop_loss_pct <= 0:
+            raise TradingRulesError("stop_loss_pct must be positive when configured")
+    else:
+        raise TradingRulesError("unsupported stop-loss mode")
+    if draft.minimum_risk_reward_enabled and draft.minimum_risk_reward <= 0:
+        raise TradingRulesError("enabled minimum_risk_reward requires a positive threshold")
+    if not draft.minimum_risk_reward_enabled and draft.minimum_risk_reward < 0:
+        raise TradingRulesError("disabled minimum_risk_reward retained value must be non-negative")
     if draft.minimum_net_edge_enabled and (draft.minimum_net_edge_pct is None or draft.minimum_net_edge_pct < 0):
         raise TradingRulesError("enabled minimum net edge requires a non-negative threshold")
     if draft.leverage <= 0:
@@ -247,10 +273,14 @@ def validate_rules_draft(draft: TradingRulesVersionDraft, *, symbol_validator: C
     if draft.max_positions_per_coin_enabled:
         if draft.max_positions_per_coin is None or draft.max_positions_per_coin <= 0:
             raise TradingRulesError("enabled max positions per coin requires a positive threshold")
-        if draft.max_positions_per_coin != 1:
-            raise TradingRulesError("max_positions_per_coin must be 1 until pyramiding is approved")
+        if draft.max_open_positions_enabled and draft.max_open_positions is not None and draft.max_positions_per_coin > draft.max_open_positions:
+            raise TradingRulesError("max_positions_per_coin must not exceed max_open_positions")
     if draft.daily_loss_limit_enabled and (draft.daily_loss_limit_pct is None or draft.daily_loss_limit_pct <= 0):
         raise TradingRulesError("enabled daily loss limit requires a positive threshold")
+    if draft.minimum_tranche_capital is not None and draft.minimum_tranche_capital < 0:
+        raise TradingRulesError("minimum_tranche_capital must be non-negative when configured")
+    if draft.cooldown_minutes is not None and draft.cooldown_minutes < 0:
+        raise TradingRulesError("cooldown_minutes must be non-negative when configured")
     if not draft.coins:
         raise TradingRulesError("trading rules require at least one coin rule")
     seen: set[str] = set()
@@ -296,7 +326,12 @@ def change_summary(previous: TradingRulesVersionDraft, new: TradingRulesVersionD
         "stop_loss_pct": "Stop Loss",
         "fixed_take_profit_pct": "Fixed Take Profit",
         "minimum_take_profit_pct": "Minimum Take Profit",
+        "stop_loss_mode": "SL mode",
         "take_profit_mode": "TP mode",
+        "minimum_risk_reward_enabled": "Minimum R:R enabled",
+        "minimum_risk_reward": "Minimum R:R",
+        "minimum_tranche_capital": "Minimum tranche capital",
+        "cooldown_minutes": "Cooldown minutes",
         "position_size_pct": "Position size",
         "leverage": "Leverage",
         "direction_mode": "Direction",
@@ -334,7 +369,9 @@ def draft_from_json(raw: str) -> TradingRulesVersionDraft:
         take_profit_mode=TakeProfitMode(payload["take_profit_mode"]),
         fixed_take_profit_pct=None if payload["fixed_take_profit_pct"] is None else Decimal(payload["fixed_take_profit_pct"]),
         minimum_take_profit_pct=None if payload["minimum_take_profit_pct"] is None else Decimal(payload["minimum_take_profit_pct"]),
-        stop_loss_pct=Decimal(payload["stop_loss_pct"]),
+        stop_loss_mode=_stop_loss_mode_from_payload(payload),
+        stop_loss_pct=None if payload.get("stop_loss_pct") is None else Decimal(payload["stop_loss_pct"]),
+        minimum_risk_reward_enabled=bool(payload.get("minimum_risk_reward_enabled", True)),
         minimum_risk_reward=Decimal(payload["minimum_risk_reward"]),
         minimum_net_edge_enabled=bool(payload["minimum_net_edge_enabled"]),
         minimum_net_edge_pct=None if payload["minimum_net_edge_pct"] is None else Decimal(payload["minimum_net_edge_pct"]),
@@ -347,6 +384,8 @@ def draft_from_json(raw: str) -> TradingRulesVersionDraft:
         direction_mode=DirectionMode(payload["direction_mode"]),
         daily_loss_limit_enabled=bool(payload["daily_loss_limit_enabled"]),
         daily_loss_limit_pct=None if payload["daily_loss_limit_pct"] is None else Decimal(payload["daily_loss_limit_pct"]),
+        minimum_tranche_capital=None if payload.get("minimum_tranche_capital") is None else Decimal(payload["minimum_tranche_capital"]),
+        cooldown_minutes=None if payload.get("cooldown_minutes") is None else int(payload["cooldown_minutes"]),
         maker_fee_rate=Decimal(payload["maker_fee_rate"]),
         taker_fee_rate=Decimal(payload["taker_fee_rate"]),
         spread_cost=Decimal(payload["spread_cost"]),
@@ -366,6 +405,11 @@ def _convert_change(key: str, value: object) -> object:
             return value if isinstance(value, TakeProfitMode) else TakeProfitMode(str(value).upper())
         except ValueError as exc:
             raise TradingRulesError("unsupported take-profit mode") from exc
+    if key == "stop_loss_mode":
+        try:
+            return value if isinstance(value, StopLossMode) else StopLossMode(str(value).upper())
+        except ValueError as exc:
+            raise TradingRulesError("unsupported stop-loss mode") from exc
     if key == "direction_mode":
         try:
             return value if isinstance(value, DirectionMode) else DirectionMode(str(value).upper())
@@ -375,11 +419,11 @@ def _convert_change(key: str, value: object) -> object:
         return tuple(value)  # type: ignore[arg-type]
     if key.endswith("_enabled"):
         return _bool_value(value)
-    if key in {"max_open_positions", "max_positions_per_coin"}:
+    if key in {"max_open_positions", "max_positions_per_coin", "cooldown_minutes"}:
         return None if value is None else int(value)  # type: ignore[arg-type]
     if key == "metadata":
         return value
-    if key.endswith("_pct") or key in {"leverage", "maker_fee_rate", "taker_fee_rate", "spread_cost", "slippage_cost", "funding_cost"}:
+    if key.endswith("_pct") or key in {"leverage", "minimum_risk_reward", "minimum_tranche_capital", "maker_fee_rate", "taker_fee_rate", "spread_cost", "slippage_cost", "funding_cost"}:
         return None if value is None else Decimal(str(value))
     return value
 
@@ -402,7 +446,9 @@ def _draft_payload(draft: TradingRulesVersionDraft) -> dict[str, object]:
         "take_profit_mode": draft.take_profit_mode.value,
         "fixed_take_profit_pct": None if draft.fixed_take_profit_pct is None else str(draft.fixed_take_profit_pct),
         "minimum_take_profit_pct": None if draft.minimum_take_profit_pct is None else str(draft.minimum_take_profit_pct),
-        "stop_loss_pct": str(draft.stop_loss_pct),
+        "stop_loss_mode": _stop_loss_mode(draft).value,
+        "stop_loss_pct": None if draft.stop_loss_pct is None else str(draft.stop_loss_pct),
+        "minimum_risk_reward_enabled": draft.minimum_risk_reward_enabled,
         "minimum_risk_reward": str(draft.minimum_risk_reward),
         "minimum_net_edge_enabled": draft.minimum_net_edge_enabled,
         "minimum_net_edge_pct": None if draft.minimum_net_edge_pct is None else str(draft.minimum_net_edge_pct),
@@ -415,6 +461,8 @@ def _draft_payload(draft: TradingRulesVersionDraft) -> dict[str, object]:
         "direction_mode": draft.direction_mode.value,
         "daily_loss_limit_enabled": draft.daily_loss_limit_enabled,
         "daily_loss_limit_pct": None if draft.daily_loss_limit_pct is None else str(draft.daily_loss_limit_pct),
+        "minimum_tranche_capital": None if draft.minimum_tranche_capital is None else str(draft.minimum_tranche_capital),
+        "cooldown_minutes": draft.cooldown_minutes,
         "maker_fee_rate": str(draft.maker_fee_rate),
         "taker_fee_rate": str(draft.taker_fee_rate),
         "spread_cost": str(draft.spread_cost),
@@ -430,3 +478,25 @@ def _draft_payload(draft: TradingRulesVersionDraft) -> dict[str, object]:
         ],
         "metadata": dict(draft.metadata or {}),
     }
+
+
+def _stop_loss_mode_from_payload(payload: Mapping[str, object]) -> StopLossMode:
+    raw = payload.get("stop_loss_mode")
+    if raw is None:
+        metadata = payload.get("metadata")
+        if isinstance(metadata, Mapping):
+            raw = metadata.get("stop_loss_mode")
+    try:
+        return StopLossMode(str(raw or StopLossMode.FIXED.value).upper())
+    except ValueError as exc:
+        raise TradingRulesError("unsupported stop-loss mode") from exc
+
+
+def _stop_loss_mode(draft: TradingRulesVersionDraft) -> StopLossMode:
+    metadata = draft.metadata or {}
+    if draft.stop_loss_mode is StopLossMode.FIXED and metadata.get("stop_loss_mode"):
+        try:
+            return StopLossMode(str(metadata["stop_loss_mode"]).upper())
+        except ValueError as exc:
+            raise TradingRulesError("unsupported stop-loss mode") from exc
+    return draft.stop_loss_mode

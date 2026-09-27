@@ -1684,10 +1684,12 @@ def _backtest_block_reason(rules: TradingRulesVersion, config: AppConfig, plan: 
         return "research_backtest_symbol_not_enabled_by_pinned_rules"
     if any(coin.max_allocation_pct is not None for coin in enabled):
         return "research_backtest_coin_allocation_rules_unimplemented"
-    if not draft.max_positions_per_coin_enabled or draft.max_positions_per_coin != 1:
+    if not draft.max_positions_per_coin_enabled or draft.max_positions_per_coin is None or draft.max_positions_per_coin < 1:
         return "research_backtest_position_per_coin_rules_unimplemented"
     if not draft.max_open_positions_enabled or draft.max_open_positions is None or draft.max_open_positions < 1:
         return "research_backtest_max_open_positions_rules_unimplemented"
+    if draft.max_positions_per_coin > draft.max_open_positions:
+        return "research_backtest_position_per_coin_rules_unimplemented"
     configured_cap = config.futures_runtime.max_total_position_notional / Decimal("100")
     if draft.max_capital_in_positions_pct != configured_cap:
         return "research_backtest_aggregate_capital_rules_unimplemented"

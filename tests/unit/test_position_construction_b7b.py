@@ -109,6 +109,13 @@ def test_b7b_exact_threshold_equality_passes_and_just_over_rejects():
     assert rr_just_over.status is ConstructionStatus.REJECT
     assert rr_just_over.primary_reason == "RR_BELOW_MINIMUM"
 
+    disabled_state = _copy(rr_equal_command.position_opportunity_state)
+    disabled_draft = disabled_state["position_opportunity_state"]["source_configuration"]["rules_version"]["draft"]
+    disabled_draft["minimum_risk_reward_enabled"] = False
+    disabled_draft["minimum_risk_reward"] = "999"
+    disabled = evaluate_position_construction(_replace_state(rr_equal_command, disabled_state))
+    assert disabled.status is ConstructionStatus.CONSTRUCTED
+
 
 def test_b7b_rejects_leverage_above_venue_maximum():
     evaluation = evaluate_position_construction(command(rules=rules_with(leverage=Decimal("100"))))

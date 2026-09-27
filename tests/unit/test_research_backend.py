@@ -38,6 +38,7 @@ from triggertrade.services.research import (
     ResearchPromotionCommand,
     ResearchService,
     ResearchServiceError,
+    _backtest_block_reason,
 )
 from triggertrade.trigger_sets import TriggerSetStatus
 from tests.unit.test_backtest_replay import _config, _instrument, _trade_candles
@@ -347,6 +348,26 @@ def test_dynamic_tp_and_daily_loss_rules_block_research_demo_start(tmp_path):
     assert dynamic_backtest.unavailable_reason == "dynamic_take_profit_requires_unimplemented_research_backtest_runtime"
     assert dynamic_backtest.engine_run_id is None
     assert daily_demo.blocked_reason == "research_daily_loss_accounting_isolation_unavailable"
+
+
+def test_research_backtest_accepts_methodology_per_coin_tranche_slots(tmp_path):
+    db, rules = _research_db(tmp_path)
+    plan = BacktestPlan("BTCUSDT", "linear", "1m", datetime(2026, 9, 8, 11, tzinfo=UTC), datetime(2026, 9, 8, 12, tzinfo=UTC))
+
+    for slots in (2, 3):
+        version = rules.create_rules_version_from_current(
+            changes={"max_open_positions": 3, "max_positions_per_coin": slots},
+            created_source=f"unit-slots-{slots}",
+        ).rules
+
+        assert _backtest_block_reason(version, _config(db), plan) is None
+
+    disabled = rules.create_rules_version_from_current(
+        changes={"max_positions_per_coin_enabled": False, "max_positions_per_coin": None},
+        created_source="unit-slots-disabled",
+    ).rules
+
+    assert _backtest_block_reason(disabled, _config(db), plan) == "research_backtest_position_per_coin_rules_unimplemented"
 
 
 def test_research_demo_rejects_unattributed_or_live_like_isolation_scopes(tmp_path):

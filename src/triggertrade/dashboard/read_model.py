@@ -2976,7 +2976,9 @@ def _rules_version_payload(version, used_in: tuple[dict[str, str | None], ...]) 
             "take_profit_mode": draft.take_profit_mode.value,
             "fixed_take_profit_pct": _optional_percent_value(draft.fixed_take_profit_pct),
             "minimum_take_profit_pct": _optional_percent_value(draft.minimum_take_profit_pct),
-            "stop_loss_pct": _percent_value(draft.stop_loss_pct),
+            "stop_loss_mode": draft.stop_loss_mode.value,
+            "stop_loss_pct": _optional_percent_value(draft.stop_loss_pct),
+            "minimum_risk_reward_enabled": draft.minimum_risk_reward_enabled,
             "minimum_risk_reward": str(draft.minimum_risk_reward),
             "minimum_net_edge_enabled": draft.minimum_net_edge_enabled,
             "minimum_net_edge_pct": _optional_percent_value(draft.minimum_net_edge_pct),
@@ -2991,6 +2993,8 @@ def _rules_version_payload(version, used_in: tuple[dict[str, str | None], ...]) 
             "direction_mode": draft.direction_mode.value,
             "daily_loss_limit_enabled": draft.daily_loss_limit_enabled,
             "daily_loss_limit_pct": _optional_percent_value(draft.daily_loss_limit_pct),
+            "minimum_tranche_capital": None if draft.minimum_tranche_capital is None else str(draft.minimum_tranche_capital),
+            "cooldown_minutes": draft.cooldown_minutes,
         },
         "coins": tuple(
             {

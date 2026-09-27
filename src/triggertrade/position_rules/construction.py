@@ -335,9 +335,11 @@ def _evaluate_economics(
     tp_exit_fee = tp_exit_notional * taker
     net_profit_tp = gross_profit_tp - entry_fee - tp_exit_fee
     net_edge_pct = exact_divide(100 * net_profit_tp, N)
-    rr_threshold = _decimal(draft.get("minimum_risk_reward"), field="minimum_risk_reward")
-    if dw < rr_threshold * dr:
-        failures.append("RR_BELOW_MINIMUM")
+    rr_enabled = _bool(draft.get("minimum_risk_reward_enabled", True), field="minimum_risk_reward_enabled")
+    if rr_enabled:
+        rr_threshold = _decimal(draft.get("minimum_risk_reward"), field="minimum_risk_reward")
+        if dw < rr_threshold * dr:
+            failures.append("RR_BELOW_MINIMUM")
     enabled = _bool(draft.get("minimum_net_edge_enabled"), field="minimum_net_edge_enabled")
     configured = _optional_text(draft.get("minimum_net_edge_pct"))
     status = "NOT_APPLICABLE"

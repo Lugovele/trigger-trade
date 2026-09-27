@@ -10,7 +10,8 @@ from triggertrade.execution.futures import FundingEstimate, FuturesRiskManager, 
 from triggertrade.execution.position_lifecycle import build_fixed_protective_exit_plan
 from triggertrade.market_data import ContractCategory, FuturesAccountState, FuturesInstrumentMetadata
 from triggertrade.persistence import FuturesExecutionStore, TradingRulesStore
-from triggertrade.rules import CoinRule, DirectionMode, TakeProfitMode, TradingRulesError, TradingRulesService, build_initial_trading_rules
+from triggertrade.rules import CoinRule, DirectionMode, StopLossMode, TakeProfitMode, TradingRulesError, TradingRulesService, build_initial_trading_rules
+from triggertrade.rules.trading import draft_from_json, draft_to_json, validate_rules_draft
 
 
 def test_bootstrap_empty_db_creates_single_current_v1_and_is_idempotent(tmp_path):
@@ -79,15 +80,84 @@ def test_same_semantic_change_noops_and_immutable_v1_conflict_fails_closed(tmp_p
 
 
 
-def test_per_coin_position_count_must_match_one_net_position_invariant(tmp_path):
+def test_per_coin_position_count_accepts_methodology_tranche_slots(tmp_path):
     service = TradingRulesService(TradingRulesStore(tmp_path / "rules.sqlite3"))
     service.ensure_initial_version(_config(tmp_path / "rules.sqlite3"))
 
-    with pytest.raises(TradingRulesError, match="must be 1"):
-        service.create_rules_version_from_current(
-            changes={"max_positions_per_coin_enabled": True, "max_positions_per_coin": 2},
-            created_source="unit",
+    for slots in (1, 2, 3):
+        draft = build_initial_trading_rules(_config(tmp_path / f"rules-{slots}.sqlite3"))
+        validate_rules_draft(draft.__class__(**{**draft.__dict__, "max_open_positions": 3, "max_positions_per_coin": slots}))
+
+    change = service.create_rules_version_from_current(
+        changes={"max_positions_per_coin_enabled": True, "max_positions_per_coin": 2},
+        created_source="unit",
+    )
+
+    assert change.changed is True
+    assert change.rules.draft.max_positions_per_coin == 2
+
+
+def test_per_coin_position_count_rejects_invalid_bounds():
+    draft = build_initial_trading_rules(_config("rules.sqlite3"))
+    with pytest.raises(TradingRulesError, match="positive"):
+        validate_rules_draft(draft.__class__(**{**draft.__dict__, "max_positions_per_coin": 0}))
+    with pytest.raises(TradingRulesError, match="must not exceed max_open_positions"):
+        validate_rules_draft(draft.__class__(**{**draft.__dict__, "max_open_positions": 3, "max_positions_per_coin": 4}))
+
+
+def test_methodology_rules_fields_validate_and_round_trip():
+    draft = build_initial_trading_rules(_config("rules.sqlite3"))
+    research_like = draft.__class__(
+        **{
+            **draft.__dict__,
+            "take_profit_mode": TakeProfitMode.DYNAMIC,
+            "fixed_take_profit_pct": None,
+            "minimum_take_profit_pct": None,
+            "stop_loss_mode": StopLossMode.DYNAMIC,
+            "minimum_risk_reward_enabled": False,
+            "minimum_risk_reward": Decimal("2"),
+            "minimum_tranche_capital": Decimal("25"),
+            "cooldown_minutes": 5,
+            "max_open_positions": 6,
+            "max_positions_per_coin": 3,
+        }
+    )
+
+    validate_rules_draft(research_like)
+    restored = draft_from_json(draft_to_json(research_like))
+
+    assert restored.take_profit_mode is TakeProfitMode.DYNAMIC
+    assert restored.fixed_take_profit_pct is None
+    assert restored.minimum_take_profit_pct is None
+    assert restored.stop_loss_mode is StopLossMode.DYNAMIC
+    assert restored.minimum_risk_reward_enabled is False
+    assert restored.minimum_risk_reward == Decimal("2")
+    assert restored.minimum_tranche_capital == Decimal("25")
+    assert restored.cooldown_minutes == 5
+
+
+def test_methodology_rules_fields_fail_closed_when_invalid():
+    draft = build_initial_trading_rules(_config("rules.sqlite3"))
+
+    with pytest.raises(TradingRulesError, match="fixed stop-loss mode requires positive stop_loss_pct"):
+        validate_rules_draft(draft.__class__(**{**draft.__dict__, "stop_loss_mode": StopLossMode.FIXED, "stop_loss_pct": None}))
+    with pytest.raises(TradingRulesError, match="dynamic take-profit mode must not configure fixed_take_profit_pct"):
+        validate_rules_draft(
+            draft.__class__(
+                **{
+                    **draft.__dict__,
+                    "take_profit_mode": TakeProfitMode.DYNAMIC,
+                    "fixed_take_profit_pct": Decimal("0.01"),
+                    "minimum_take_profit_pct": None,
+                }
+            )
         )
+    with pytest.raises(TradingRulesError, match="enabled minimum_risk_reward requires a positive threshold"):
+        validate_rules_draft(draft.__class__(**{**draft.__dict__, "minimum_risk_reward_enabled": True, "minimum_risk_reward": Decimal("0")}))
+    with pytest.raises(TradingRulesError, match="minimum_tranche_capital must be non-negative"):
+        validate_rules_draft(draft.__class__(**{**draft.__dict__, "minimum_tranche_capital": Decimal("-1")}))
+    with pytest.raises(TradingRulesError, match="cooldown_minutes must be non-negative"):
+        validate_rules_draft(draft.__class__(**{**draft.__dict__, "cooldown_minutes": -1}))
 
 
 def test_bootstrap_checks_immutable_v1_conflict_even_when_current_pointer_exists(tmp_path):

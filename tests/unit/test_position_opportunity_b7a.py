@@ -108,6 +108,31 @@ def test_b7a_initial_approve_requires_exact_gross_risk_reward_boundary():
     assert rejected["opportunity_checks"]["minimum_rr"] == "FAIL"
 
 
+def test_b7a_disabled_minimum_risk_reward_does_not_reject_retained_value():
+    command = command_for(
+        handoff=handoff(
+            reference_price="102",
+            atr="10",
+            tick="0.1",
+            levels=[
+                level("low-1", "SWING_LOW_15M", "100", "BELOW_REFERENCE"),
+                level("high-1", "SWING_HIGH_15M", "110", "ABOVE_REFERENCE"),
+            ],
+        ),
+        rules=rules_version(
+            take_profit_mode=TakeProfitMode.DYNAMIC,
+            stop_loss_pct=Decimal("0.05"),
+            minimum_risk_reward=Decimal("999"),
+            minimum_risk_reward_enabled=False,
+        ),
+    )
+
+    decision = PositionOpportunityHandler().evaluate(command).decision.to_payload()["position_decision"]
+
+    assert decision["decision"] == "APPROVE"
+    assert decision["opportunity_checks"]["minimum_rr"] == "NOT_APPLICABLE"
+
+
 def test_b7a_entry_is_gated_after_directional_rounding():
     result = PositionOpportunityHandler().evaluate(
         command_for(
@@ -588,6 +613,7 @@ def rules_version(
     take_profit_mode: TakeProfitMode = TakeProfitMode.DYNAMIC,
     stop_loss_pct: Decimal = Decimal("0.01"),
     minimum_risk_reward: Decimal = Decimal("2"),
+    minimum_risk_reward_enabled: bool = True,
     metadata: dict[str, str] | None = None,
 ) -> TradingRulesVersion:
     draft = TradingRulesVersionDraft(
@@ -596,6 +622,7 @@ def rules_version(
         fixed_take_profit_pct=Decimal("0.03"),
         minimum_take_profit_pct=Decimal("0.03"),
         stop_loss_pct=stop_loss_pct,
+        minimum_risk_reward_enabled=minimum_risk_reward_enabled,
         minimum_risk_reward=minimum_risk_reward,
         minimum_net_edge_enabled=True,
         minimum_net_edge_pct=Decimal("0.01"),

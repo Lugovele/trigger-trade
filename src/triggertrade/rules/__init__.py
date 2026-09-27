@@ -3,6 +3,7 @@
 from .trading import (
     CoinRule,
     DirectionMode,
+    StopLossMode,
     TakeProfitMode,
     TradingRulesChange,
     TradingRulesError,
@@ -18,6 +19,7 @@ from .trading import (
 __all__ = [
     "CoinRule",
     "DirectionMode",
+    "StopLossMode",
     "TakeProfitMode",
     "TradingRulesChange",
     "TradingRulesError",

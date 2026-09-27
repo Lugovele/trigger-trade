@@ -1,0 +1,1529 @@
+{
+  "backend_contract": "TradingRulesVersion",
+  "methodology_revision": "v1.2.15",
+  "schema_version": "research-v1-trading-rules-web-import@1",
+  "source_package": "docs/research-import/rules/RESEARCH_V1_RULES.json",
+  "status": "IMPORT_READY_PENDING_REVIEW",
+  "trading_rules_versions": [
+    {
+      "change_summary": "Research V1 combined TradingRulesVersion",
+      "config_hash": "697442fb07122a461a6901f8ba940df5f8b8af1fb6724c30f4eba2553996b0c0",
+      "created_at": "2026-09-27T00:00:00+00:00",
+      "created_from_version_id": null,
+      "created_source": "research_v1_rules_package",
+      "draft": {
+        "coins": [
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "BTCUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "ETHUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "SOLUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "XRPUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "DOGEUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "SUIUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "PEPEUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "AVAXUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "LINKUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "BNBUSDT"
+          }
+        ],
+        "cooldown_minutes": 5,
+        "daily_loss_limit_enabled": false,
+        "daily_loss_limit_pct": null,
+        "direction_mode": "LONG_SHORT",
+        "fixed_take_profit_pct": null,
+        "funding_cost": "0",
+        "leverage": "1",
+        "maker_fee_rate": "0.0002",
+        "max_capital_in_positions_pct": "0.6",
+        "max_open_positions": 6,
+        "max_open_positions_enabled": true,
+        "max_positions_per_coin": 2,
+        "max_positions_per_coin_enabled": true,
+        "metadata": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-001",
+          "source": "research-v1"
+        },
+        "minimum_net_edge_enabled": false,
+        "minimum_net_edge_pct": null,
+        "minimum_risk_reward": "2",
+        "minimum_risk_reward_enabled": false,
+        "minimum_take_profit_pct": null,
+        "minimum_tranche_capital": "25",
+        "position_size_pct": "0.10",
+        "slippage_cost": "0",
+        "spread_cost": "0",
+        "stop_loss_mode": "DYNAMIC",
+        "stop_loss_pct": "0.01",
+        "take_profit_mode": "DYNAMIC",
+        "taker_fee_rate": "0.00055"
+      },
+      "rules_version_id": "TRV-R-POS-001-PR-201",
+      "schema_version": "trading-rules-v1",
+      "version": "research-v1-rules-pos-001-pr-201"
+    },
+    {
+      "change_summary": "Research V1 combined TradingRulesVersion",
+      "config_hash": "11bf58d60347867649a5c84dc6e0158d16bd4e8248dd11ca99565e7ff526a0d3",
+      "created_at": "2026-09-27T00:00:00+00:00",
+      "created_from_version_id": null,
+      "created_source": "research_v1_rules_package",
+      "draft": {
+        "coins": [
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "BTCUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "ETHUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "SOLUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "XRPUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "DOGEUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "SUIUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "PEPEUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "AVAXUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "LINKUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "BNBUSDT"
+          }
+        ],
+        "cooldown_minutes": 5,
+        "daily_loss_limit_enabled": false,
+        "daily_loss_limit_pct": null,
+        "direction_mode": "LONG_SHORT",
+        "fixed_take_profit_pct": null,
+        "funding_cost": "0",
+        "leverage": "1",
+        "maker_fee_rate": "0.0002",
+        "max_capital_in_positions_pct": "0.6",
+        "max_open_positions": 3,
+        "max_open_positions_enabled": true,
+        "max_positions_per_coin": 2,
+        "max_positions_per_coin_enabled": true,
+        "metadata": {
+          "portfolio_component_id": "PR-R-204",
+          "position_component_id": "POS-R-001",
+          "source": "research-v1"
+        },
+        "minimum_net_edge_enabled": false,
+        "minimum_net_edge_pct": null,
+        "minimum_risk_reward": "2",
+        "minimum_risk_reward_enabled": false,
+        "minimum_take_profit_pct": null,
+        "minimum_tranche_capital": "25",
+        "position_size_pct": "0.10",
+        "slippage_cost": "0",
+        "spread_cost": "0",
+        "stop_loss_mode": "DYNAMIC",
+        "stop_loss_pct": "0.01",
+        "take_profit_mode": "DYNAMIC",
+        "taker_fee_rate": "0.00055"
+      },
+      "rules_version_id": "TRV-R-POS-001-PR-204",
+      "schema_version": "trading-rules-v1",
+      "version": "research-v1-rules-pos-001-pr-204"
+    },
+    {
+      "change_summary": "Research V1 combined TradingRulesVersion",
+      "config_hash": "60a7c2c2554026784fa8b66a74d2b8041d85e9b4b3ca54954daf70988dea0d81",
+      "created_at": "2026-09-27T00:00:00+00:00",
+      "created_from_version_id": null,
+      "created_source": "research_v1_rules_package",
+      "draft": {
+        "coins": [
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "BTCUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "ETHUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "SOLUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "XRPUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "DOGEUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "SUIUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "PEPEUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "AVAXUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "LINKUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "BNBUSDT"
+          }
+        ],
+        "cooldown_minutes": 5,
+        "daily_loss_limit_enabled": false,
+        "daily_loss_limit_pct": null,
+        "direction_mode": "LONG_SHORT",
+        "fixed_take_profit_pct": null,
+        "funding_cost": "0",
+        "leverage": "1",
+        "maker_fee_rate": "0.0002",
+        "max_capital_in_positions_pct": "0.6",
+        "max_open_positions": 6,
+        "max_open_positions_enabled": true,
+        "max_positions_per_coin": 3,
+        "max_positions_per_coin_enabled": true,
+        "metadata": {
+          "portfolio_component_id": "PR-R-205",
+          "position_component_id": "POS-R-001",
+          "source": "research-v1"
+        },
+        "minimum_net_edge_enabled": false,
+        "minimum_net_edge_pct": null,
+        "minimum_risk_reward": "2",
+        "minimum_risk_reward_enabled": false,
+        "minimum_take_profit_pct": null,
+        "minimum_tranche_capital": "25",
+        "position_size_pct": "0.10",
+        "slippage_cost": "0",
+        "spread_cost": "0",
+        "stop_loss_mode": "DYNAMIC",
+        "stop_loss_pct": "0.01",
+        "take_profit_mode": "DYNAMIC",
+        "taker_fee_rate": "0.00055"
+      },
+      "rules_version_id": "TRV-R-POS-001-PR-205",
+      "schema_version": "trading-rules-v1",
+      "version": "research-v1-rules-pos-001-pr-205"
+    },
+    {
+      "change_summary": "Research V1 combined TradingRulesVersion",
+      "config_hash": "eda0cacdf46905fec6088748e4578de8622d008783f008f2d87c43ca4af6082d",
+      "created_at": "2026-09-27T00:00:00+00:00",
+      "created_from_version_id": null,
+      "created_source": "research_v1_rules_package",
+      "draft": {
+        "coins": [
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "BTCUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "ETHUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "SOLUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "XRPUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "DOGEUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "SUIUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "PEPEUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "AVAXUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "LINKUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "BNBUSDT"
+          }
+        ],
+        "cooldown_minutes": 15,
+        "daily_loss_limit_enabled": false,
+        "daily_loss_limit_pct": null,
+        "direction_mode": "LONG_SHORT",
+        "fixed_take_profit_pct": null,
+        "funding_cost": "0",
+        "leverage": "1",
+        "maker_fee_rate": "0.0002",
+        "max_capital_in_positions_pct": "0.6",
+        "max_open_positions": 6,
+        "max_open_positions_enabled": true,
+        "max_positions_per_coin": 2,
+        "max_positions_per_coin_enabled": true,
+        "metadata": {
+          "portfolio_component_id": "PR-R-207",
+          "position_component_id": "POS-R-001",
+          "source": "research-v1"
+        },
+        "minimum_net_edge_enabled": false,
+        "minimum_net_edge_pct": null,
+        "minimum_risk_reward": "2",
+        "minimum_risk_reward_enabled": false,
+        "minimum_take_profit_pct": null,
+        "minimum_tranche_capital": "25",
+        "position_size_pct": "0.10",
+        "slippage_cost": "0",
+        "spread_cost": "0",
+        "stop_loss_mode": "DYNAMIC",
+        "stop_loss_pct": "0.01",
+        "take_profit_mode": "DYNAMIC",
+        "taker_fee_rate": "0.00055"
+      },
+      "rules_version_id": "TRV-R-POS-001-PR-207",
+      "schema_version": "trading-rules-v1",
+      "version": "research-v1-rules-pos-001-pr-207"
+    },
+    {
+      "change_summary": "Research V1 combined TradingRulesVersion",
+      "config_hash": "7369a2531d9da3c511a997b205b1cc445fa15aadfdce5086b31e1810cf4c3e66",
+      "created_at": "2026-09-27T00:00:00+00:00",
+      "created_from_version_id": null,
+      "created_source": "research_v1_rules_package",
+      "draft": {
+        "coins": [
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "BTCUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "ETHUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "SOLUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "XRPUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "DOGEUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "SUIUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "PEPEUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "AVAXUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "LINKUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "BNBUSDT"
+          }
+        ],
+        "cooldown_minutes": 5,
+        "daily_loss_limit_enabled": true,
+        "daily_loss_limit_pct": "0.05",
+        "direction_mode": "LONG_SHORT",
+        "fixed_take_profit_pct": null,
+        "funding_cost": "0",
+        "leverage": "1",
+        "maker_fee_rate": "0.0002",
+        "max_capital_in_positions_pct": "0.6",
+        "max_open_positions": 6,
+        "max_open_positions_enabled": true,
+        "max_positions_per_coin": 2,
+        "max_positions_per_coin_enabled": true,
+        "metadata": {
+          "portfolio_component_id": "PR-R-208",
+          "position_component_id": "POS-R-001",
+          "source": "research-v1"
+        },
+        "minimum_net_edge_enabled": false,
+        "minimum_net_edge_pct": null,
+        "minimum_risk_reward": "2",
+        "minimum_risk_reward_enabled": false,
+        "minimum_take_profit_pct": null,
+        "minimum_tranche_capital": "25",
+        "position_size_pct": "0.10",
+        "slippage_cost": "0",
+        "spread_cost": "0",
+        "stop_loss_mode": "DYNAMIC",
+        "stop_loss_pct": "0.01",
+        "take_profit_mode": "DYNAMIC",
+        "taker_fee_rate": "0.00055"
+      },
+      "rules_version_id": "TRV-R-POS-001-PR-208",
+      "schema_version": "trading-rules-v1",
+      "version": "research-v1-rules-pos-001-pr-208"
+    },
+    {
+      "change_summary": "Research V1 combined TradingRulesVersion",
+      "config_hash": "5bfa272dc746ccfb6c7a971a4cfdb87ab67a94e6d56ab67fc8469840ccef29bf",
+      "created_at": "2026-09-27T00:00:00+00:00",
+      "created_from_version_id": null,
+      "created_source": "research_v1_rules_package",
+      "draft": {
+        "coins": [
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "BTCUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "ETHUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "SOLUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "XRPUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "DOGEUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "SUIUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "PEPEUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "AVAXUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "LINKUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "BNBUSDT"
+          }
+        ],
+        "cooldown_minutes": 5,
+        "daily_loss_limit_enabled": false,
+        "daily_loss_limit_pct": null,
+        "direction_mode": "LONG_SHORT",
+        "fixed_take_profit_pct": null,
+        "funding_cost": "0",
+        "leverage": "1",
+        "maker_fee_rate": "0.0002",
+        "max_capital_in_positions_pct": "0.6",
+        "max_open_positions": 6,
+        "max_open_positions_enabled": true,
+        "max_positions_per_coin": 2,
+        "max_positions_per_coin_enabled": true,
+        "metadata": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-002",
+          "source": "research-v1"
+        },
+        "minimum_net_edge_enabled": false,
+        "minimum_net_edge_pct": null,
+        "minimum_risk_reward": "2",
+        "minimum_risk_reward_enabled": false,
+        "minimum_take_profit_pct": null,
+        "minimum_tranche_capital": "25",
+        "position_size_pct": "0.10",
+        "slippage_cost": "0",
+        "spread_cost": "0",
+        "stop_loss_mode": "DYNAMIC",
+        "stop_loss_pct": "0.01",
+        "take_profit_mode": "DYNAMIC",
+        "taker_fee_rate": "0.00055"
+      },
+      "rules_version_id": "TRV-R-POS-002-PR-201",
+      "schema_version": "trading-rules-v1",
+      "version": "research-v1-rules-pos-002-pr-201"
+    },
+    {
+      "change_summary": "Research V1 combined TradingRulesVersion",
+      "config_hash": "d06d4e00f2652600951c283c2304956e48101f7b2b23b7ab052c44dcdcdd6e72",
+      "created_at": "2026-09-27T00:00:00+00:00",
+      "created_from_version_id": null,
+      "created_source": "research_v1_rules_package",
+      "draft": {
+        "coins": [
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "BTCUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "ETHUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "SOLUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "XRPUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "DOGEUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "SUIUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "PEPEUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "AVAXUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "LINKUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "BNBUSDT"
+          }
+        ],
+        "cooldown_minutes": 5,
+        "daily_loss_limit_enabled": false,
+        "daily_loss_limit_pct": null,
+        "direction_mode": "LONG_SHORT",
+        "fixed_take_profit_pct": null,
+        "funding_cost": "0",
+        "leverage": "1",
+        "maker_fee_rate": "0.0002",
+        "max_capital_in_positions_pct": "0.6",
+        "max_open_positions": 6,
+        "max_open_positions_enabled": true,
+        "max_positions_per_coin": 2,
+        "max_positions_per_coin_enabled": true,
+        "metadata": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-003",
+          "source": "research-v1"
+        },
+        "minimum_net_edge_enabled": false,
+        "minimum_net_edge_pct": null,
+        "minimum_risk_reward": "2",
+        "minimum_risk_reward_enabled": false,
+        "minimum_take_profit_pct": null,
+        "minimum_tranche_capital": "25",
+        "position_size_pct": "0.10",
+        "slippage_cost": "0",
+        "spread_cost": "0",
+        "stop_loss_mode": "DYNAMIC",
+        "stop_loss_pct": "0.01",
+        "take_profit_mode": "DYNAMIC",
+        "taker_fee_rate": "0.00055"
+      },
+      "rules_version_id": "TRV-R-POS-003-PR-201",
+      "schema_version": "trading-rules-v1",
+      "version": "research-v1-rules-pos-003-pr-201"
+    },
+    {
+      "change_summary": "Research V1 combined TradingRulesVersion",
+      "config_hash": "e009d61530038140ea6580e0658a4316d922a19334e690dc41bb1c22470be82a",
+      "created_at": "2026-09-27T00:00:00+00:00",
+      "created_from_version_id": null,
+      "created_source": "research_v1_rules_package",
+      "draft": {
+        "coins": [
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "BTCUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "ETHUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "SOLUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "XRPUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "DOGEUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "SUIUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "PEPEUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "AVAXUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "LINKUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "BNBUSDT"
+          }
+        ],
+        "cooldown_minutes": 5,
+        "daily_loss_limit_enabled": false,
+        "daily_loss_limit_pct": null,
+        "direction_mode": "LONG_SHORT",
+        "fixed_take_profit_pct": null,
+        "funding_cost": "0",
+        "leverage": "1",
+        "maker_fee_rate": "0.0002",
+        "max_capital_in_positions_pct": "0.6",
+        "max_open_positions": 6,
+        "max_open_positions_enabled": true,
+        "max_positions_per_coin": 2,
+        "max_positions_per_coin_enabled": true,
+        "metadata": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-005",
+          "source": "research-v1"
+        },
+        "minimum_net_edge_enabled": false,
+        "minimum_net_edge_pct": null,
+        "minimum_risk_reward": "2",
+        "minimum_risk_reward_enabled": false,
+        "minimum_take_profit_pct": null,
+        "minimum_tranche_capital": "25",
+        "position_size_pct": "0.10",
+        "slippage_cost": "0",
+        "spread_cost": "0",
+        "stop_loss_mode": "FIXED",
+        "stop_loss_pct": "0.01",
+        "take_profit_mode": "DYNAMIC",
+        "taker_fee_rate": "0.00055"
+      },
+      "rules_version_id": "TRV-R-POS-005-PR-201",
+      "schema_version": "trading-rules-v1",
+      "version": "research-v1-rules-pos-005-pr-201"
+    },
+    {
+      "change_summary": "Research V1 combined TradingRulesVersion",
+      "config_hash": "d408aee5bd422fb9a2fe1e3cb4542e928e3682775e879094cd21e85aa0ede970",
+      "created_at": "2026-09-27T00:00:00+00:00",
+      "created_from_version_id": null,
+      "created_source": "research_v1_rules_package",
+      "draft": {
+        "coins": [
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "BTCUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "ETHUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "SOLUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "XRPUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "DOGEUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "SUIUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "PEPEUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "AVAXUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "LINKUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "BNBUSDT"
+          }
+        ],
+        "cooldown_minutes": 5,
+        "daily_loss_limit_enabled": false,
+        "daily_loss_limit_pct": null,
+        "direction_mode": "LONG_SHORT",
+        "fixed_take_profit_pct": null,
+        "funding_cost": "0",
+        "leverage": "1",
+        "maker_fee_rate": "0.0002",
+        "max_capital_in_positions_pct": "0.6",
+        "max_open_positions": 6,
+        "max_open_positions_enabled": true,
+        "max_positions_per_coin": 2,
+        "max_positions_per_coin_enabled": true,
+        "metadata": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-006",
+          "source": "research-v1"
+        },
+        "minimum_net_edge_enabled": false,
+        "minimum_net_edge_pct": null,
+        "minimum_risk_reward": "2",
+        "minimum_risk_reward_enabled": false,
+        "minimum_take_profit_pct": null,
+        "minimum_tranche_capital": "25",
+        "position_size_pct": "0.10",
+        "slippage_cost": "0",
+        "spread_cost": "0",
+        "stop_loss_mode": "DYNAMIC",
+        "stop_loss_pct": "0.01",
+        "take_profit_mode": "DYNAMIC",
+        "taker_fee_rate": "0.00055"
+      },
+      "rules_version_id": "TRV-R-POS-006-PR-201",
+      "schema_version": "trading-rules-v1",
+      "version": "research-v1-rules-pos-006-pr-201"
+    },
+    {
+      "change_summary": "Research V1 combined TradingRulesVersion",
+      "config_hash": "79af451372b7f26c7c360f30c484d0e642ccf1540152060fe965d611cfe194f2",
+      "created_at": "2026-09-27T00:00:00+00:00",
+      "created_from_version_id": null,
+      "created_source": "research_v1_rules_package",
+      "draft": {
+        "coins": [
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "BTCUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "ETHUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "SOLUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "XRPUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "DOGEUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "SUIUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "PEPEUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "AVAXUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "LINKUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "BNBUSDT"
+          }
+        ],
+        "cooldown_minutes": 5,
+        "daily_loss_limit_enabled": false,
+        "daily_loss_limit_pct": null,
+        "direction_mode": "LONG_SHORT",
+        "fixed_take_profit_pct": null,
+        "funding_cost": "0",
+        "leverage": "1",
+        "maker_fee_rate": "0.0002",
+        "max_capital_in_positions_pct": "0.6",
+        "max_open_positions": 6,
+        "max_open_positions_enabled": true,
+        "max_positions_per_coin": 2,
+        "max_positions_per_coin_enabled": true,
+        "metadata": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-007",
+          "source": "research-v1"
+        },
+        "minimum_net_edge_enabled": false,
+        "minimum_net_edge_pct": null,
+        "minimum_risk_reward": "2",
+        "minimum_risk_reward_enabled": false,
+        "minimum_take_profit_pct": null,
+        "minimum_tranche_capital": "25",
+        "position_size_pct": "0.10",
+        "slippage_cost": "0",
+        "spread_cost": "0",
+        "stop_loss_mode": "DYNAMIC",
+        "stop_loss_pct": "0.01",
+        "take_profit_mode": "DYNAMIC",
+        "taker_fee_rate": "0.00055"
+      },
+      "rules_version_id": "TRV-R-POS-007-PR-201",
+      "schema_version": "trading-rules-v1",
+      "version": "research-v1-rules-pos-007-pr-201"
+    },
+    {
+      "change_summary": "Research V1 combined TradingRulesVersion",
+      "config_hash": "55b060cea8d8b4cb2fed81d48d1d9cb03a5574807cfb10a47009018b8975544c",
+      "created_at": "2026-09-27T00:00:00+00:00",
+      "created_from_version_id": null,
+      "created_source": "research_v1_rules_package",
+      "draft": {
+        "coins": [
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "BTCUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "ETHUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "SOLUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "XRPUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "DOGEUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "SUIUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "PEPEUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "AVAXUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "LINKUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "BNBUSDT"
+          }
+        ],
+        "cooldown_minutes": 5,
+        "daily_loss_limit_enabled": false,
+        "daily_loss_limit_pct": null,
+        "direction_mode": "LONG_SHORT",
+        "fixed_take_profit_pct": null,
+        "funding_cost": "0",
+        "leverage": "1",
+        "maker_fee_rate": "0.0002",
+        "max_capital_in_positions_pct": "0.6",
+        "max_open_positions": 6,
+        "max_open_positions_enabled": true,
+        "max_positions_per_coin": 2,
+        "max_positions_per_coin_enabled": true,
+        "metadata": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-008",
+          "source": "research-v1"
+        },
+        "minimum_net_edge_enabled": false,
+        "minimum_net_edge_pct": null,
+        "minimum_risk_reward": "2",
+        "minimum_risk_reward_enabled": false,
+        "minimum_take_profit_pct": null,
+        "minimum_tranche_capital": "25",
+        "position_size_pct": "0.10",
+        "slippage_cost": "0",
+        "spread_cost": "0",
+        "stop_loss_mode": "DYNAMIC",
+        "stop_loss_pct": "0.01",
+        "take_profit_mode": "DYNAMIC",
+        "taker_fee_rate": "0.00055"
+      },
+      "rules_version_id": "TRV-R-POS-008-PR-201",
+      "schema_version": "trading-rules-v1",
+      "version": "research-v1-rules-pos-008-pr-201"
+    },
+    {
+      "change_summary": "Research V1 combined TradingRulesVersion",
+      "config_hash": "24146c7402843c2e23e7988ff980478af5487cfbc94f06d797320a29400d37e1",
+      "created_at": "2026-09-27T00:00:00+00:00",
+      "created_from_version_id": null,
+      "created_source": "research_v1_rules_package",
+      "draft": {
+        "coins": [
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "BTCUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "ETHUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "SOLUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "XRPUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "DOGEUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "SUIUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "PEPEUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "AVAXUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "LINKUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "BNBUSDT"
+          }
+        ],
+        "cooldown_minutes": 5,
+        "daily_loss_limit_enabled": false,
+        "daily_loss_limit_pct": null,
+        "direction_mode": "LONG_SHORT",
+        "fixed_take_profit_pct": null,
+        "funding_cost": "0",
+        "leverage": "1",
+        "maker_fee_rate": "0.0002",
+        "max_capital_in_positions_pct": "0.6",
+        "max_open_positions": 6,
+        "max_open_positions_enabled": true,
+        "max_positions_per_coin": 2,
+        "max_positions_per_coin_enabled": true,
+        "metadata": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-010",
+          "source": "research-v1"
+        },
+        "minimum_net_edge_enabled": false,
+        "minimum_net_edge_pct": null,
+        "minimum_risk_reward": "2",
+        "minimum_risk_reward_enabled": false,
+        "minimum_take_profit_pct": null,
+        "minimum_tranche_capital": "25",
+        "position_size_pct": "0.10",
+        "slippage_cost": "0",
+        "spread_cost": "0",
+        "stop_loss_mode": "DYNAMIC",
+        "stop_loss_pct": "0.01",
+        "take_profit_mode": "DYNAMIC",
+        "taker_fee_rate": "0.00055"
+      },
+      "rules_version_id": "TRV-R-POS-010-PR-201",
+      "schema_version": "trading-rules-v1",
+      "version": "research-v1-rules-pos-010-pr-201"
+    },
+    {
+      "change_summary": "Research V1 combined TradingRulesVersion",
+      "config_hash": "edc47806ca54d753f9516741e3f094ba6b5f7dfd8027b8703229565506125c60",
+      "created_at": "2026-09-27T00:00:00+00:00",
+      "created_from_version_id": null,
+      "created_source": "research_v1_rules_package",
+      "draft": {
+        "coins": [
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "BTCUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "ETHUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "SOLUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "XRPUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "DOGEUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "SUIUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "PEPEUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "AVAXUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "LINKUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "BNBUSDT"
+          }
+        ],
+        "cooldown_minutes": 5,
+        "daily_loss_limit_enabled": false,
+        "daily_loss_limit_pct": null,
+        "direction_mode": "LONG_SHORT",
+        "fixed_take_profit_pct": null,
+        "funding_cost": "0",
+        "leverage": "1",
+        "maker_fee_rate": "0.0002",
+        "max_capital_in_positions_pct": "0.6",
+        "max_open_positions": 6,
+        "max_open_positions_enabled": true,
+        "max_positions_per_coin": 2,
+        "max_positions_per_coin_enabled": true,
+        "metadata": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-011",
+          "source": "research-v1"
+        },
+        "minimum_net_edge_enabled": false,
+        "minimum_net_edge_pct": null,
+        "minimum_risk_reward": "2",
+        "minimum_risk_reward_enabled": false,
+        "minimum_take_profit_pct": null,
+        "minimum_tranche_capital": "25",
+        "position_size_pct": "0.10",
+        "slippage_cost": "0",
+        "spread_cost": "0",
+        "stop_loss_mode": "DYNAMIC",
+        "stop_loss_pct": "0.01",
+        "take_profit_mode": "DYNAMIC",
+        "taker_fee_rate": "0.00055"
+      },
+      "rules_version_id": "TRV-R-POS-011-PR-201",
+      "schema_version": "trading-rules-v1",
+      "version": "research-v1-rules-pos-011-pr-201"
+    },
+    {
+      "change_summary": "Research V1 combined TradingRulesVersion",
+      "config_hash": "580ac075b387dc80d9577f7093890cc68cfb2fb709ea383e37c18cf552b77f1c",
+      "created_at": "2026-09-27T00:00:00+00:00",
+      "created_from_version_id": null,
+      "created_source": "research_v1_rules_package",
+      "draft": {
+        "coins": [
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "BTCUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "ETHUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "SOLUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "XRPUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "DOGEUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "SUIUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "PEPEUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "AVAXUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "LINKUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "BNBUSDT"
+          }
+        ],
+        "cooldown_minutes": 5,
+        "daily_loss_limit_enabled": false,
+        "daily_loss_limit_pct": null,
+        "direction_mode": "LONG_SHORT",
+        "fixed_take_profit_pct": null,
+        "funding_cost": "0",
+        "leverage": "1",
+        "maker_fee_rate": "0.0002",
+        "max_capital_in_positions_pct": "0.6",
+        "max_open_positions": 6,
+        "max_open_positions_enabled": true,
+        "max_positions_per_coin": 2,
+        "max_positions_per_coin_enabled": true,
+        "metadata": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-012",
+          "source": "research-v1"
+        },
+        "minimum_net_edge_enabled": false,
+        "minimum_net_edge_pct": null,
+        "minimum_risk_reward": "2",
+        "minimum_risk_reward_enabled": true,
+        "minimum_take_profit_pct": null,
+        "minimum_tranche_capital": "25",
+        "position_size_pct": "0.10",
+        "slippage_cost": "0",
+        "spread_cost": "0",
+        "stop_loss_mode": "DYNAMIC",
+        "stop_loss_pct": "0.01",
+        "take_profit_mode": "DYNAMIC",
+        "taker_fee_rate": "0.00055"
+      },
+      "rules_version_id": "TRV-R-POS-012-PR-201",
+      "schema_version": "trading-rules-v1",
+      "version": "research-v1-rules-pos-012-pr-201"
+    },
+    {
+      "change_summary": "Research V1 combined TradingRulesVersion",
+      "config_hash": "9c89ab58795f62c1f9774b32180ae4d44f48e3e76c1d8e391edf5322cb362a37",
+      "created_at": "2026-09-27T00:00:00+00:00",
+      "created_from_version_id": null,
+      "created_source": "research_v1_rules_package",
+      "draft": {
+        "coins": [
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "BTCUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "ETHUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "SOLUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "XRPUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "DOGEUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "SUIUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "PEPEUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "AVAXUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "LINKUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "BNBUSDT"
+          }
+        ],
+        "cooldown_minutes": 5,
+        "daily_loss_limit_enabled": false,
+        "daily_loss_limit_pct": null,
+        "direction_mode": "LONG_SHORT",
+        "fixed_take_profit_pct": null,
+        "funding_cost": "0",
+        "leverage": "1",
+        "maker_fee_rate": "0.0002",
+        "max_capital_in_positions_pct": "0.6",
+        "max_open_positions": 6,
+        "max_open_positions_enabled": true,
+        "max_positions_per_coin": 2,
+        "max_positions_per_coin_enabled": true,
+        "metadata": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-013",
+          "source": "research-v1"
+        },
+        "minimum_net_edge_enabled": true,
+        "minimum_net_edge_pct": "0.01",
+        "minimum_risk_reward": "2",
+        "minimum_risk_reward_enabled": false,
+        "minimum_take_profit_pct": null,
+        "minimum_tranche_capital": "25",
+        "position_size_pct": "0.10",
+        "slippage_cost": "0",
+        "spread_cost": "0",
+        "stop_loss_mode": "DYNAMIC",
+        "stop_loss_pct": "0.01",
+        "take_profit_mode": "DYNAMIC",
+        "taker_fee_rate": "0.00055"
+      },
+      "rules_version_id": "TRV-R-POS-013-PR-201",
+      "schema_version": "trading-rules-v1",
+      "version": "research-v1-rules-pos-013-pr-201"
+    },
+    {
+      "change_summary": "Research V1 combined TradingRulesVersion",
+      "config_hash": "2296090df7c45c0bff9f43c9ea695b057fe20717c50b338cd8e29ebdd56fc462",
+      "created_at": "2026-09-27T00:00:00+00:00",
+      "created_from_version_id": null,
+      "created_source": "research_v1_rules_package",
+      "draft": {
+        "coins": [
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "BTCUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "ETHUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "SOLUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "XRPUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "DOGEUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "SUIUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "PEPEUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "AVAXUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "LINKUSDT"
+          },
+          {
+            "enabled": true,
+            "max_allocation_pct": "0.1",
+            "symbol": "BNBUSDT"
+          }
+        ],
+        "cooldown_minutes": 5,
+        "daily_loss_limit_enabled": false,
+        "daily_loss_limit_pct": null,
+        "direction_mode": "LONG_SHORT",
+        "fixed_take_profit_pct": null,
+        "funding_cost": "0",
+        "leverage": "2",
+        "maker_fee_rate": "0.0002",
+        "max_capital_in_positions_pct": "0.6",
+        "max_open_positions": 6,
+        "max_open_positions_enabled": true,
+        "max_positions_per_coin": 2,
+        "max_positions_per_coin_enabled": true,
+        "metadata": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-014",
+          "source": "research-v1"
+        },
+        "minimum_net_edge_enabled": false,
+        "minimum_net_edge_pct": null,
+        "minimum_risk_reward": "2",
+        "minimum_risk_reward_enabled": false,
+        "minimum_take_profit_pct": null,
+        "minimum_tranche_capital": "25",
+        "position_size_pct": "0.10",
+        "slippage_cost": "0",
+        "spread_cost": "0",
+        "stop_loss_mode": "DYNAMIC",
+        "stop_loss_pct": "0.01",
+        "take_profit_mode": "DYNAMIC",
+        "taker_fee_rate": "0.00055"
+      },
+      "rules_version_id": "TRV-R-POS-014-PR-201",
+      "schema_version": "trading-rules-v1",
+      "version": "research-v1-rules-pos-014-pr-201"
+    }
+  ]
+}
