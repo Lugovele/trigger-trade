@@ -43,7 +43,7 @@ def _drop_schema(settings: PostgresSettings) -> None:
 
 def _migrate(settings: PostgresSettings) -> PostgresConnectionFactory:
     applied = apply_postgres_migrations(dsn=settings.dsn, schema=settings.schema)
-    assert applied[-1].version == "0023"
+    assert applied[-1].version == "0024"
     assert apply_postgres_migrations(dsn=settings.dsn, schema=settings.schema) == ()
     return PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)
 

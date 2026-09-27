@@ -26,6 +26,7 @@ from triggertrade.dashboard.read_model import (
 from triggertrade.dashboard.readiness import evaluate_dashboard_readiness
 from triggertrade.dashboard.commands import DashboardCommandBoundary, DashboardCommandError
 from triggertrade.dashboard.metrics_library import get_metric, metrics_payload
+from triggertrade.dashboard.research_triggers import research_trigger_detail_payload, research_trigger_payload
 from triggertrade.exchanges import BybitDemoClient
 from triggertrade.backtest import BacktestPlan
 from triggertrade.persistence import (
@@ -41,6 +42,7 @@ from triggertrade.persistence import (
     ResearchStoreError,
     TradingRulesStore,
     TriggerSetStore,
+    PostgresTriggerRegistry,
     apply_postgres_migrations,
 )
 from triggertrade.rules import CoinRule, TradingRulesError, TradingRulesService
@@ -92,6 +94,7 @@ class DashboardServer(ThreadingHTTPServer):
         postgres_registry_probe=None,
         research_config_registry=None,
         research_run_store=None,
+        trigger_registry=None,
     ) -> None:
         super().__init__(server_address, handler_class)
         self.read_model = read_model
@@ -114,6 +117,7 @@ class DashboardServer(ThreadingHTTPServer):
         self.postgres_registry_probe = postgres_registry_probe
         self.research_config_registry = research_config_registry
         self.research_run_store = research_run_store
+        self.trigger_registry = trigger_registry
 
 
 class DashboardHandler(BaseHTTPRequestHandler):
@@ -189,6 +193,36 @@ class DashboardHandler(BaseHTTPRequestHandler):
             except DashboardRegistryUnavailable as exc:
                 self._send_json({"error": str(exc)}, HTTPStatus.SERVICE_UNAVAILABLE)
             return
+        if parsed.path == "/api/research/triggers":
+            try:
+                self._send_json(_research_triggers_payload(self.server))
+            except DashboardRegistryUnavailable as exc:
+                self._send_json({"error": str(exc)}, HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+        if parsed.path.startswith("/api/research/triggers/"):
+            parts = [unquote(part) for part in parsed.path.strip("/").split("/")]
+            if len(parts) == 4 and parts[:3] == ["api", "research", "triggers"]:
+                try:
+                    payload = _research_trigger_detail(self.server, parts[3], None)
+                except DashboardRegistryUnavailable as exc:
+                    self._send_json({"error": str(exc)}, HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                if payload is None:
+                    self._send_json({"error": "research trigger not found"}, HTTPStatus.NOT_FOUND)
+                else:
+                    self._send_json({"trigger": payload})
+                return
+            if len(parts) == 5 and parts[:3] == ["api", "research", "triggers"]:
+                try:
+                    payload = _research_trigger_detail(self.server, parts[3], parts[4])
+                except DashboardRegistryUnavailable as exc:
+                    self._send_json({"error": str(exc)}, HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                if payload is None:
+                    self._send_json({"error": "research trigger not found"}, HTTPStatus.NOT_FOUND)
+                else:
+                    self._send_json({"trigger": payload})
+                return
         if parsed.path.startswith("/api/research/"):
             parts = [unquote(part) for part in parsed.path.strip("/").split("/")]
             if len(parts) == 3 and parts[0] == "api" and parts[1] == "research":
@@ -235,6 +269,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             "/sets": "config",
             "/trigger-catalog": "config",
             "/trigger-detail": "config",
+            "/research/triggers": "trigger-catalog",
             "/rules": "config",
             "/rules-version": "config",
             "/research": "research",
@@ -248,6 +283,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     self.server.read_model,
                     initial_page=product_pages[parsed.path],
                     research_config_registry=self.server.research_config_registry,
+                    trigger_registry=self.server.trigger_registry,
                 )
             )
             return
@@ -264,6 +300,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     selected_set=f"{set_id}|{version}",
                     initial_page="sets",
                     research_config_registry=self.server.research_config_registry,
+                    trigger_registry=self.server.trigger_registry,
                 )
             )
             return
@@ -281,6 +318,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     selected_trigger_id=trigger_id,
                     selected_trigger_version=version,
                     research_config_registry=self.server.research_config_registry,
+                    trigger_registry=self.server.trigger_registry,
                 )
             )
             return
@@ -290,6 +328,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     self.server.read_model,
                     initial_page="rules-version",
                     research_config_registry=self.server.research_config_registry,
+                    trigger_registry=self.server.trigger_registry,
                 )
             )
             return
@@ -299,6 +338,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     self.server.read_model,
                     initial_page="research-detail",
                     research_config_registry=self.server.research_config_registry,
+                    trigger_registry=self.server.trigger_registry,
                 )
             )
             return
@@ -712,6 +752,7 @@ def render_dashboard(
     selected_trigger_id: str | None = None,
     selected_trigger_version: str | None = None,
     research_config_registry=None,
+    trigger_registry=None,
 ) -> str:
     from triggertrade.dashboard.product_ui import render_product_dashboard
 
@@ -739,14 +780,24 @@ def render_dashboard(
     except DashboardRegistryUnavailable as exc:
         registry_error = str(exc)
         registry_set_summaries = ()
+    try:
+        registry_trigger_catalog = _research_trigger_catalog(trigger_registry, read_model)
+        registry_selected_trigger = _research_trigger_detail_from_inputs(
+            trigger_registry,
+            read_model,
+            selected_trigger_id,
+            selected_trigger_version,
+        )
+    except DashboardRegistryUnavailable as exc:
+        registry_error = registry_error or str(exc)
+        registry_trigger_catalog = ()
+        registry_selected_trigger = None
     selected_set_view = _selected_set_summary(read_model, selected_set)
     registry = {
         "sets": registry_set_summaries if research_config_registry is not None else read_model.list_set_summaries(),
         "selected_set": selected_set_view,
-        "triggers": read_model.list_trigger_catalog(),
-        "selected_trigger": read_model.get_trigger_detail(selected_trigger_id, selected_trigger_version)
-        if selected_trigger_id
-        else None,
+        "triggers": registry_trigger_catalog,
+        "selected_trigger": registry_selected_trigger,
         "integrity_errors": (*read_model.get_registry_integrity_errors(), *((registry_error,) if registry_error else ())),
     }
     try:
@@ -828,6 +879,50 @@ def _registry_set_summaries(registry, *, selectable_only: bool = True) -> tuple[
             )
         )
     return tuple(summaries)
+
+
+def _research_trigger_catalog(trigger_registry, read_model: DashboardReadModel) -> tuple[dict[str, object], ...] | tuple:
+    if trigger_registry is None:
+        return read_model.list_trigger_catalog()
+    try:
+        return tuple(research_trigger_payload(trigger_registry.list_trigger_versions())["triggers"])
+    except Exception as exc:
+        raise DashboardRegistryUnavailable("PostgreSQL trigger registry unavailable") from exc
+
+
+def _research_trigger_detail_from_inputs(
+    trigger_registry,
+    read_model: DashboardReadModel,
+    trigger_id: str | None,
+    version: str | None,
+):
+    if not trigger_id:
+        return None
+    if trigger_registry is None:
+        return read_model.get_trigger_detail(trigger_id, version)
+    try:
+        return research_trigger_detail_payload(trigger_registry.get_rule(trigger_id, version))
+    except Exception as exc:
+        raise DashboardRegistryUnavailable("PostgreSQL trigger registry unavailable") from exc
+
+
+def _research_triggers_payload(server: DashboardServer) -> dict[str, object]:
+    if server.trigger_registry is None:
+        return {"triggers": server.read_model.list_trigger_catalog(), "count": len(server.read_model.list_trigger_catalog())}
+    try:
+        return research_trigger_payload(server.trigger_registry.list_trigger_versions())
+    except Exception as exc:
+        raise DashboardRegistryUnavailable("PostgreSQL trigger registry unavailable") from exc
+
+
+def _research_trigger_detail(server: DashboardServer, trigger_id: str, version: str | None):
+    if server.trigger_registry is None:
+        detail = server.read_model.get_trigger_detail(trigger_id, version)
+        return None if detail is None else detail
+    try:
+        return research_trigger_detail_payload(server.trigger_registry.get_rule(trigger_id, version))
+    except Exception as exc:
+        raise DashboardRegistryUnavailable("PostgreSQL trigger registry unavailable") from exc
 
 
 def _selected_set_summary(read_model: DashboardReadModel, selected_set: str) -> SetSummaryView | None:
@@ -1042,6 +1137,7 @@ def create_server(
     research_backtest_config=None,
     backtest_instrument_provider=None,
     research_backtest_handoff=None,
+    trigger_registry=None,
 ) -> DashboardServer:
     if host not in ALLOWED_HOSTS:
         raise ValueError("dashboard host must be one of: 127.0.0.1, 0.0.0.0")
@@ -1098,6 +1194,7 @@ def create_server(
         postgres_registry_probe=postgres_registry_probe,
         research_config_registry=research_config_registry,
         research_run_store=shared_research_run_store,
+        trigger_registry=trigger_registry,
     )
     read_model.operator_control_token = server.operator_control_token
     read_model.operator_command_submit_enabled = authorizer.browser_commands_supported and (
@@ -1287,6 +1384,7 @@ def create_server_from_env(
     env = merged_runtime_env(os.environ if process_env is None else process_env, env_file=env_file)
     _require_explicit_dashboard_persistence(env)
     research_config_registry = _research_config_registry_from_env(env)
+    trigger_registry = _trigger_registry_from_env(env)
     config, bootstrap = ensure_runtime_registry_for_env(env, version_registry=research_config_registry)
     host = env.get("TRIGGERTRADE_DASHBOARD_HOST", DEFAULT_HOST)
     port = int(env.get("TRIGGERTRADE_DASHBOARD_PORT", str(DEFAULT_PORT)))
@@ -1316,6 +1414,7 @@ def create_server_from_env(
         research_config_registry=research_config_registry,
         research_backtest_config=config,
         research_backtest_handoff=research_backtest_handoff,
+        trigger_registry=trigger_registry,
     )
     _require_production_postgres_configuration_path(
         env,
@@ -1405,6 +1504,26 @@ def _research_config_registry_from_env(env: dict[str, str]):
     return PostgresResearchConfigurationRegistryClient(
         PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema)
     )
+
+
+def _trigger_registry_from_env(env: dict[str, str]):
+    if not env.get("TRIGGERTRADE_POSTGRES_DSN"):
+        return None
+    settings = PostgresSettings.from_env(env)
+    return _PostgresTriggerRegistryClient(PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema))
+
+
+class _PostgresTriggerRegistryClient:
+    def __init__(self, factory: PostgresConnectionFactory) -> None:
+        self._factory = factory
+
+    def list_trigger_versions(self):
+        with self._factory.connect() as connection:
+            return PostgresTriggerRegistry(connection).list_trigger_versions()
+
+    def get_rule(self, rule_id: str, version: str | None = None):
+        with self._factory.connect() as connection:
+            return PostgresTriggerRegistry(connection).get_rule(rule_id, version)
 
 
 def _research_demo_handoff_from_env(env: dict[str, str]):

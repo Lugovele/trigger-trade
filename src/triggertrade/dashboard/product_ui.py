@@ -1747,7 +1747,7 @@ def render_product_dashboard(
 <section class="page" id="config">
   <nav class="config-nav"><div class="config-group"><div class="group-label">Signal Logic</div><div class="config-tabs"><button class="config-tab active" data-config="metrics">Metrics</button><button class="config-tab" data-config="triggers">Triggers</button><button class="config-tab" data-config="sets">Sets</button></div></div><div class="config-group"><div class="group-label">Trading</div><div class="config-tabs"><button class="config-tab" data-config="trading-rules">Trading Rules</button></div></div></nav>
   <div class="config-view active" id="config-metrics"><div class="layout"><section class="panel"><div class="panel-header"><div class="toolbar"><input class="search" id="metricSearch" placeholder="Search by ID or name"><div class="segment" id="metricFamilyFilters"><button type="button" class="metric-family-filter active" data-family="ALL">ALL</button><button type="button" class="metric-family-filter" data-family="F">F</button><button type="button" class="metric-family-filter" data-family="A">A</button><button type="button" class="metric-family-filter" data-family="M">M</button><button type="button" class="metric-family-filter" data-family="N">N</button><button type="button" class="metric-family-filter" data-family="S">S</button></div></div></div><div class="table-wrap"><table><thead><tr><th>ID</th><th>Name</th><th>Family</th><th>Type</th><th>Status</th></tr></thead><tbody id="metricsBody"></tbody></table></div></section><section class="panel" id="metricDetail"></section></div></div>
-  <div class="config-view" id="config-triggers"><div class="layout"><section class="panel"><div class="panel-header"><div class="panel-title">Triggers</div></div><div class="table-wrap"><table><thead><tr><th>Trigger</th><th>Version</th><th>Metric</th><th>Condition</th><th>Used in Sets</th><th>Status</th></tr></thead><tbody id="triggersBody"></tbody></table></div></section><section class="panel" id="triggerDetail"></section></div></div>
+  <div class="config-view" id="config-triggers"><div class="layout"><section class="panel"><div class="panel-header"><div class="panel-title">Triggers</div></div><div class="table-wrap"><table><thead><tr><th>Trigger</th><th>Version</th><th>Metric(s)</th><th>Condition</th><th>Output</th><th>Applicability / Scope</th><th>Status</th></tr></thead><tbody id="triggersBody"></tbody></table></div></section><section class="panel" id="triggerDetail"></section></div></div>
   <div class="config-view" id="config-sets"><div class="layout"><section class="panel"><div class="panel-header"><div class="panel-title">Sets</div></div><div class="table-wrap"><table><thead><tr><th>Set</th><th>Version</th><th>Direction</th><th>Triggers</th><th>Status</th></tr></thead><tbody id="setsBody"></tbody></table></div></section><section class="panel" id="setDetail"></section></div></div>
   <div class="config-view" id="config-trading-rules"><div class="rules-stack" id="rulesBody"></div></div>
 </section>
@@ -2420,7 +2420,7 @@ def _reference_backend_script(payload: str) -> str:
     const rows = state.registry.triggers || [];
     const sets = state.registry.sets || [];
     const body = q("#triggers-body", desktop) || q("#triggersBody", desktop) || q("#config-triggers tbody", desktop);
-    if(body) body.innerHTML = rows.length ? rows.map(t => `<tr class="catalog-row" data-trigger-id="${h(t.trigger_id)}" data-trigger-version="${h(t.version)}"><td>${h(t.display_name || t.trigger_id)}</td><td>${h(t.version)}</td><td>—</td><td>${h(t.what_it_checks || "—")}</td><td>${h(sets.filter(s => (s.trigger_versions||[]).some(v => v.trigger_id === t.trigger_id && v.version === t.version)).map(s => s.set_id + " " + s.version).join(", ") || "—")}</td><td>${badge(t.immutable ? "ACTIVE" : "RESEARCH")}</td></tr>`).join("") : '<tr><td colspan="6" class="empty">No Trigger versions available.</td></tr>';
+    if(body) body.innerHTML = rows.length ? rows.map(t => `<tr class="catalog-row" data-trigger-id="${h(t.trigger_id)}" data-trigger-version="${h(t.version)}"><td>${h(t.display_name || t.trigger_id)}</td><td>${h(t.version)}</td><td>${h(t.metric || (t.metric_refs||[]).join(", ") || "—")}</td><td>${h(t.condition || t.what_it_checks || "—")}</td><td>${h(t.output || "—")}</td><td>${h(t.applicability || t.scope || "—")}</td><td>${badge(t.status || (t.immutable ? "ACTIVE" : "RESEARCH"))}</td></tr>`).join("") : '<tr><td colspan="7" class="empty">No Trigger versions available.</td></tr>';
     qa("[data-trigger-id]", desktop).forEach(row => row.onclick = () => window.showTrigger(row.dataset.triggerId, row.dataset.triggerVersion));
     if(rows[0]) window.showTrigger(rows[0].trigger_id, rows[0].version);
   }
@@ -2433,7 +2433,8 @@ def _reference_backend_script(payload: str) -> str:
           .filter(s => (s.trigger_versions || []).some(v => v.trigger_id === id && v.version === version))
           .map(s => ({set_id:s.set_id, set_version:s.version, set_status:s.status}));
     const versions = t?.version_history || [];
-    if(detail) detail.innerHTML = `<div class="details-header"><div class="details-id">Trigger ${h(id)} · Version ${h(version || t?.version || "—")} · ${h(triggerStatusLabel(t))}</div><div class="details-title">${h(t?.display_name || id || "Trigger")}</div><div class="details-meta"><span class="meta-pill">Status: ${h(triggerStatusLabel(t))}</span><span class="meta-pill">${t?.immutable ? "CURRENT" : "HISTORICAL / RESEARCH"}</span></div></div><div class="details-section"><div class="section-title">Metric</div><div class="reference-links"><button class="reference-link" onclick="openConfig('metrics')">${h(t?.metric || "Metric unavailable")}</button></div></div><div class="details-section"><div class="section-title">Condition</div><div class="formula" style="white-space:pre-line">${h(t?.formula_text || t?.what_it_checks || "Unavailable")}</div></div><div class="details-section"><div class="section-title">What this Trigger means</div><div class="body-text">${h(t?.how_it_works || "Backend trigger detail unavailable.")}</div></div><div class="details-section"><div class="section-title">How it works</div><div class="step-list">${String(t?.how_it_works || "Backend trigger detail unavailable.").split(/\n+|;\s*/).filter(Boolean).map((step,index) => `<div class="calc-step"><div class="step-number">${index+1}</div><div class="step-body">${h(step)}</div></div>`).join("")}</div></div><div class="details-section"><div class="section-title">Unavailable behavior</div><div class="body-text">${h(t?.unavailable_reason || "If required backend observations or metric inputs are unavailable, the Trigger result is unavailable; the frontend does not convert missing facts to zero or fabricate a signal.")}</div></div><div class="details-section"><div class="section-title">Used in Set Versions</div><div class="reference-links">${usedIn.length ? usedIn.map(s => `<button class="reference-link js-open-set" data-set-id="${h(s.set_id)}" data-set-version="${h(s.set_version)}">${h(s.set_id)} ${h(s.set_version)} · ${h(setStatusLabel(s.set_status))}</button>`).join("") : "—"}</div></div><div class="details-section"><div class="section-title">Version History</div><div class="version-list">${versions.length ? versions.map(v => `<button class="version-button js-open-trigger ${v.version === (version || t?.version) ? "selected" : ""}" data-trigger-id="${h(id)}" data-trigger-version="${h(v.version)}">${h(v.version)} · ${h(v.change_summary || v.created_at || "")}</button>`).join("") : "—"}</div></div>`;
+    const metricLinks = (t?.metric_links && t.metric_links.length ? t.metric_links : (t?.metric_refs || []).map(m => ({id:m,name:m}))).map(m => `<button class="reference-link" onclick="openConfig('metrics'); window.showMetric && window.showMetric('${h(m.id)}')">${h(m.id)}${m.name && m.name !== m.id ? " · " + h(m.name) : ""}</button>`).join("");
+    if(detail) detail.innerHTML = `<div class="details-header"><div class="details-id">Trigger ${h(id)} · Version ${h(version || t?.version || "—")} · ${h(triggerStatusLabel(t))}</div><div class="details-title">${h(t?.display_name || id || "Trigger")}</div><div class="details-meta"><span class="meta-pill">Status: ${h(t?.status || triggerStatusLabel(t))}</span><span class="meta-pill">${h(t?.family || "Research Trigger")}</span><span class="meta-pill">Digest: ${h(t?.canonical_digest || "—")}</span></div></div><div class="details-section"><div class="section-title">Metric</div><div class="reference-links">${metricLinks || h(t?.metric || "Metric unavailable")}</div></div><div class="details-section"><div class="section-title">Condition</div><div class="formula" style="white-space:pre-line">${h(t?.formula_text || t?.condition || t?.what_it_checks || "Unavailable")}</div></div><div class="details-section"><div class="section-title">Output</div><div class="body-text">${h(t?.output || "Output unavailable")}</div></div><div class="details-section"><div class="section-title">Applicability / Scope</div><div class="body-text">${h(t?.applicability || t?.scope || "Scope unavailable")}</div></div><div class="details-section"><div class="section-title">What this Trigger means</div><div class="body-text">${h(t?.how_it_works || "Backend trigger detail unavailable.")}</div></div><div class="details-section"><div class="section-title">Unavailable, ZERO, and NONE handling</div><div class="body-text">${h([t?.unavailable_reason, t?.zero_none_unavailable].filter(Boolean).join("\\n") || "If required backend observations or metric inputs are unavailable, the Trigger result is unavailable; the frontend does not convert missing facts to zero or fabricate a signal.")}</div></div><div class="details-section"><div class="section-title">Raw declarative configuration</div><div class="formula" style="white-space:pre-line">${h(JSON.stringify(t?.raw_definition || {}, null, 2))}</div></div><div class="details-section"><div class="section-title">Used in Set Versions</div><div class="reference-links">${usedIn.length ? usedIn.map(s => `<button class="reference-link js-open-set" data-set-id="${h(s.set_id)}" data-set-version="${h(s.set_version)}">${h(s.set_id)} ${h(s.set_version)} · ${h(setStatusLabel(s.set_status))}</button>`).join("") : "—"}</div></div><div class="details-section"><div class="section-title">Version History</div><div class="version-list">${versions.length ? versions.map(v => `<button class="version-button js-open-trigger ${v.version === (version || t?.version) ? "selected" : ""}" data-trigger-id="${h(id)}" data-trigger-version="${h(v.version)}">${h(v.version)} · ${h(v.change_summary || v.created_at || "")}</button>`).join("") : "—"}</div></div>`;
   };
   function renderSets(){
     const rows = state.registry.sets || [];
@@ -2943,6 +2944,22 @@ def _replace_metrics_reference_panel(html_source: str) -> str:
     return html_source[:start] + _metrics_library_reference_panel() + html_source[end:]
 
 
+def _trigger_reference_panel() -> str:
+    return """
+  <!-- TRIGGERS -->
+
+  <section id="config-triggers" class="config-view"><div class="layout"><section class="panel"><div class="panel-header"><div class="panel-title">Research Triggers</div></div><div class="table-wrap"><table><thead><tr><th>Trigger</th><th>Version</th><th>Metric(s)</th><th>Condition</th><th>Output</th><th>Applicability / Scope</th><th>Status</th></tr></thead><tbody id="triggers-body"></tbody></table></div></section><section class="panel" id="trigger-details"></section></div></section>
+"""
+
+
+def _replace_trigger_reference_panel(html_source: str) -> str:
+    marker_start = html_source.find("  <!-- TRIGGERS -->")
+    marker_end = html_source.find("  <!-- SETS -->", marker_start)
+    if marker_start >= 0 and marker_end >= 0:
+        return html_source[:marker_start] + _trigger_reference_panel() + "\n" + html_source[marker_end:]
+    return html_source
+
+
 def render_product_dashboard(
     *,
     initial_page: str = "overview",
@@ -2991,8 +3008,10 @@ def render_product_dashboard(
         ensure_ascii=False,
     ).replace("</", "<\\/")
     desktop_head = _reference_head(DESKTOP_REFERENCE_HTML)
-    desktop_body = _replace_metrics_reference_panel(
-        _neutral_research_detail_placeholders(_without_reference_scripts(_reference_body(DESKTOP_REFERENCE_HTML)))
+    desktop_body = _replace_trigger_reference_panel(
+        _replace_metrics_reference_panel(
+            _neutral_research_detail_placeholders(_without_reference_scripts(_reference_body(DESKTOP_REFERENCE_HTML)))
+        )
     )
     mobile_styles = _scoped_mobile_reference_styles(MOBILE_OVERVIEW_REFERENCE_HTML)
     mobile_body = _neutral_research_detail_placeholders(_without_reference_scripts(_reference_body(MOBILE_OVERVIEW_REFERENCE_HTML)))
