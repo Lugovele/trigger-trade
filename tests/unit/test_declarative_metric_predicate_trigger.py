@@ -38,7 +38,7 @@ def test_research_v1_web_import_records_are_supported_by_generic_runtime():
         signal = trigger.evaluate(context)
 
         assert signal.trigger_rule_id == rule.rule_id
-        assert signal.trigger_rule_version == "1.0.0"
+        assert signal.trigger_rule_version == record["backend_version"]
         assert signal.trigger_set_id == "research-v1-test"
         assert signal.trigger_set_version == "v1"
         assert signal.condition_result is True
@@ -122,6 +122,50 @@ def test_btc_return_direction_preserves_long_short_zero_and_unavailable_states()
     assert unavailable_signal.signal_type is SignalType.NO_SIGNAL
 
 
+def test_research_v1_btc_direction_records_emit_directional_states_not_true():
+    records = {record["canonical_trigger_id"]: record for record in _import_records()}
+    cases = (
+        ("TR-R-BTC-001", "0.01", "LONG"),
+        ("TR-R-BTC-002", "-0.01", "SHORT"),
+        ("TR-R-BTC-003", "0.01", "LONG"),
+        ("TR-R-BTC-004", "-0.01", "SHORT"),
+    )
+
+    for trigger_id, matched_value, expected_state in cases:
+        rule = _rule(records[trigger_id]["rule_definition"])
+        trigger = DeclarativeMetricPredicateTrigger(rule)
+        metric_ref = str(rule.definition["metric_ref"])
+
+        matched_signal = trigger.evaluate(_context(metric_ref=metric_ref, value=matched_value))
+        zero_signal = trigger.evaluate(_context(metric_ref=metric_ref, value="0"))
+        unavailable_signal = trigger.evaluate(_context(metric_ref=metric_ref, value=None))
+        replayed_signal = trigger.evaluate(_context(metric_ref=metric_ref, value=matched_value))
+
+        assert rule.version == "1.0.1"
+        assert rule.supersedes_version == "1.0.0"
+        assert rule.definition["output_states"] == [expected_state, "ZERO", "UNAVAILABLE"]
+        assert matched_signal.input_snapshot["output_state"] == expected_state
+        assert matched_signal.input_snapshot["output_state"] != "TRUE"
+        assert zero_signal.input_snapshot["output_state"] == "ZERO"
+        assert unavailable_signal.input_snapshot["output_state"] == "UNAVAILABLE"
+        assert matched_signal == replayed_signal
+
+
+def test_research_v1_boolean_trigger_still_emits_boolean_states():
+    records = {record["canonical_trigger_id"]: record for record in _import_records()}
+    rule = _rule(records["TR-R-BTC-005"]["rule_definition"])
+    trigger = DeclarativeMetricPredicateTrigger(rule)
+    metric_ref = str(rule.definition["metric_ref"])
+
+    true_signal = trigger.evaluate(_context(metric_ref=metric_ref, value="0.30"))
+    false_signal = trigger.evaluate(_context(metric_ref=metric_ref, value="0.29"))
+    unavailable_signal = trigger.evaluate(_context(metric_ref=metric_ref, value=None))
+
+    assert true_signal.input_snapshot["output_state"] == "TRUE"
+    assert false_signal.input_snapshot["output_state"] == "FALSE"
+    assert unavailable_signal.input_snapshot["output_state"] == "UNAVAILABLE"
+
+
 def test_declarative_metric_predicate_rejects_unsupported_config():
     with pytest.raises(DeclarativeTriggerConfigError, match="unsupported operator"):
         DeclarativeMetricPredicateTrigger(
@@ -174,6 +218,7 @@ def _rule(payload: dict) -> RuleDefinition:
         provenance=str(payload["provenance"]),
         logical_name=payload.get("logical_name"),
         description=payload.get("description"),
+        supersedes_version=payload.get("supersedes_version"),
         formula=payload.get("formula"),
         parameter_snapshot=payload.get("parameter_snapshot"),
         input_contract=payload.get("input_contract"),

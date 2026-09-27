@@ -35,12 +35,17 @@ def test_research_trigger_projection_preserves_metric_and_config_semantics():
     simple = _by_id(triggers, "TR-R-BTC-006")
     directional = _by_id(triggers, "TR-R-004")
     zero = _by_id(triggers, "TR-R-BTC-001")
+    btc_short = _by_id(triggers, "TR-R-BTC-002")
     unavailable = _by_id(triggers, "TR-R-001")
     contextual = _by_id(triggers, "TR-R-003")
 
     assert simple["condition"] == "ATR percentile >= 15"
     assert directional["condition"] == "classifier_direction = LONG"
     assert "LONG" in directional["applicability"]
+    assert zero["version"] == "1.0.1"
+    assert zero["output"] == "LONG, ZERO, UNAVAILABLE"
+    assert btc_short["version"] == "1.0.1"
+    assert btc_short["output"] == "SHORT, ZERO, UNAVAILABLE"
     assert "ZERO" in zero["zero_none_unavailable"]
     assert "UNAVAILABLE" in unavailable["unavailable_reason"]
     assert "NONE" in contextual["zero_none_unavailable"]

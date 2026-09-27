@@ -3891,7 +3891,7 @@
       "trigger_code": "TR-R-BTC-001",
       "name": "Research V1 predicate TR-R-BTC-001",
       "display_name": "TR-R-BTC-001 - RETURN(asset,5m) > 0",
-      "version": "RESEARCH_V1_FOCUSED_CORRECTION_R2",
+      "version": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
       "status": "RESEARCH_ONLY",
       "research_role": "BTC_DIRECTION_CONSTRUCTION",
       "trigger_family": "direction",
@@ -4016,7 +4016,7 @@
         "raw_source_fields": {
           "trigger_id": "TR-R-BTC-001",
           "identifier_class": "RESEARCH_ONLY",
-          "configuration_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R2",
+          "configuration_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
           "metric_id": "RETURN(asset,5m)",
           "operator": "GT",
           "threshold/state/value": "0",
@@ -4050,12 +4050,27 @@
               "SOURCE_SECTION": "§§2–13, 14–25"
             }
           ],
-          "content_sha256": "06a65bb52f4820475005ff24dd38e6e804469b379c29d5926b392dcd3732094c"
-        }
+          "content_sha256": "06a65bb52f4820475005ff24dd38e6e804469b379c29d5926b392dcd3732094c",
+          "output_states": [
+            "LONG",
+            "ZERO",
+            "UNAVAILABLE"
+          ],
+          "matched_output_state": "LONG"
+        },
+        "output_states": [
+          "LONG",
+          "ZERO",
+          "UNAVAILABLE"
+        ],
+        "matched_output_state": "LONG",
+        "zero_output_state": "ZERO",
+        "unavailable_output_state": "UNAVAILABLE"
       },
       "direction_output": {
         "direction_applicability": "LONG",
         "output_states": [
+          "LONG",
           "ZERO",
           "UNAVAILABLE"
         ],
@@ -4064,7 +4079,8 @@
         "context_only": false,
         "eligibility_only": false,
         "set_formation_predicate": false,
-        "classifier": false
+        "classifier": false,
+        "matched_output_state": "LONG"
       },
       "applicability": {
         "applicable_coins": [
@@ -4108,23 +4124,20 @@
         "formula_references_resolved": true,
         "source_trigger_reference_resolved": true,
         "web_import_readiness": "READY",
-        "web_import_blockers": [
-          "No executable generic declarative metric predicate implementation exists in current trigger runtime.",
-          "Planned implementation_key `triggertrade.research.DeclarativeMetricPredicateTrigger` is not implemented/resolvable in current code."
-        ],
+        "web_import_blockers": [],
         "metric_reference_reconciliation_status": "DERIVED_FROM_EXISTING",
         "current_metric_ids": [
           "F-004"
         ]
       },
-      "semantic_hash": "6dc6f17d305375d38b8bb34380f0d40fca4bd5057d0c61590c07d6ab58077a70"
+      "semantic_hash": "7d4a3383b5f3c3e7204a47aacc81008e88320201e0c4124aef727e1d4c984fc9"
     },
     {
       "trigger_id": "TR-R-BTC-002",
       "trigger_code": "TR-R-BTC-002",
       "name": "Research V1 predicate TR-R-BTC-002",
       "display_name": "TR-R-BTC-002 - RETURN(asset,5m) < 0",
-      "version": "RESEARCH_V1_FOCUSED_CORRECTION_R2",
+      "version": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
       "status": "RESEARCH_ONLY",
       "research_role": "BTC_DIRECTION_CONSTRUCTION",
       "trigger_family": "direction",
@@ -4249,7 +4262,7 @@
         "raw_source_fields": {
           "trigger_id": "TR-R-BTC-002",
           "identifier_class": "RESEARCH_ONLY",
-          "configuration_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R2",
+          "configuration_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
           "metric_id": "RETURN(asset,5m)",
           "operator": "LT",
           "threshold/state/value": "0",
@@ -4283,12 +4296,27 @@
               "SOURCE_SECTION": "§§2–13, 14–25"
             }
           ],
-          "content_sha256": "e6a658d3975967c593ca4f434fec94df9fcc129b472a135517fbbc2c65def6eb"
-        }
+          "content_sha256": "e6a658d3975967c593ca4f434fec94df9fcc129b472a135517fbbc2c65def6eb",
+          "output_states": [
+            "SHORT",
+            "ZERO",
+            "UNAVAILABLE"
+          ],
+          "matched_output_state": "SHORT"
+        },
+        "output_states": [
+          "SHORT",
+          "ZERO",
+          "UNAVAILABLE"
+        ],
+        "matched_output_state": "SHORT",
+        "zero_output_state": "ZERO",
+        "unavailable_output_state": "UNAVAILABLE"
       },
       "direction_output": {
         "direction_applicability": "SHORT",
         "output_states": [
+          "SHORT",
           "ZERO",
           "UNAVAILABLE"
         ],
@@ -4297,7 +4325,8 @@
         "context_only": false,
         "eligibility_only": false,
         "set_formation_predicate": false,
-        "classifier": false
+        "classifier": false,
+        "matched_output_state": "SHORT"
       },
       "applicability": {
         "applicable_coins": [
@@ -4341,23 +4370,20 @@
         "formula_references_resolved": true,
         "source_trigger_reference_resolved": true,
         "web_import_readiness": "READY",
-        "web_import_blockers": [
-          "No executable generic declarative metric predicate implementation exists in current trigger runtime.",
-          "Planned implementation_key `triggertrade.research.DeclarativeMetricPredicateTrigger` is not implemented/resolvable in current code."
-        ],
+        "web_import_blockers": [],
         "metric_reference_reconciliation_status": "DERIVED_FROM_EXISTING",
         "current_metric_ids": [
           "F-004"
         ]
       },
-      "semantic_hash": "aeceda135415bc45605abd4c1159a4a15187008b2da5a785dfc62e8ef00c9d83"
+      "semantic_hash": "6e54bea1e0886d2d53dd5ab952ae839e652dce3b00b175d383184cd19734ebee"
     },
     {
       "trigger_id": "TR-R-BTC-003",
       "trigger_code": "TR-R-BTC-003",
       "name": "Research V1 predicate TR-R-BTC-003",
       "display_name": "TR-R-BTC-003 - RETURN(asset,5m) > 0",
-      "version": "RESEARCH_V1_FOCUSED_CORRECTION_R2",
+      "version": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
       "status": "RESEARCH_ONLY",
       "research_role": "BTC_DIRECTION_CONSTRUCTION",
       "trigger_family": "direction",
@@ -4400,7 +4426,7 @@
         "raw_source_fields": {
           "trigger_id": "TR-R-BTC-003",
           "identifier_class": "RESEARCH_ONLY",
-          "configuration_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R2",
+          "configuration_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
           "metric_id": "RETURN(asset,5m)",
           "operator": "GT",
           "threshold/state/value": "0",
@@ -4434,12 +4460,27 @@
               "SOURCE_SECTION": "§§2–13, 14–25"
             }
           ],
-          "content_sha256": "3af8dd16cca8bb6b907e7b85d10350ddc2f1147085ec8420c15b42cf7fe77186"
-        }
+          "content_sha256": "3af8dd16cca8bb6b907e7b85d10350ddc2f1147085ec8420c15b42cf7fe77186",
+          "output_states": [
+            "LONG",
+            "ZERO",
+            "UNAVAILABLE"
+          ],
+          "matched_output_state": "LONG"
+        },
+        "output_states": [
+          "LONG",
+          "ZERO",
+          "UNAVAILABLE"
+        ],
+        "matched_output_state": "LONG",
+        "zero_output_state": "ZERO",
+        "unavailable_output_state": "UNAVAILABLE"
       },
       "direction_output": {
         "direction_applicability": "LONG",
         "output_states": [
+          "LONG",
           "ZERO",
           "UNAVAILABLE"
         ],
@@ -4448,7 +4489,8 @@
         "context_only": false,
         "eligibility_only": false,
         "set_formation_predicate": false,
-        "classifier": false
+        "classifier": false,
+        "matched_output_state": "LONG"
       },
       "applicability": {
         "applicable_coins": [
@@ -4492,23 +4534,20 @@
         "formula_references_resolved": true,
         "source_trigger_reference_resolved": true,
         "web_import_readiness": "READY",
-        "web_import_blockers": [
-          "No executable generic declarative metric predicate implementation exists in current trigger runtime.",
-          "Planned implementation_key `triggertrade.research.DeclarativeMetricPredicateTrigger` is not implemented/resolvable in current code."
-        ],
+        "web_import_blockers": [],
         "metric_reference_reconciliation_status": "DERIVED_FROM_EXISTING",
         "current_metric_ids": [
           "F-004"
         ]
       },
-      "semantic_hash": "ce143b4e8c7f1ad06e3fee43df34e762ab3c54e59043b1240baf517ebba4f22f"
+      "semantic_hash": "4beadfc193d1a3a9f02be1bb981e410464af8dcbe9102e98b484022600537c26"
     },
     {
       "trigger_id": "TR-R-BTC-004",
       "trigger_code": "TR-R-BTC-004",
       "name": "Research V1 predicate TR-R-BTC-004",
       "display_name": "TR-R-BTC-004 - RETURN(asset,5m) < 0",
-      "version": "RESEARCH_V1_FOCUSED_CORRECTION_R2",
+      "version": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
       "status": "RESEARCH_ONLY",
       "research_role": "BTC_DIRECTION_CONSTRUCTION",
       "trigger_family": "direction",
@@ -4551,7 +4590,7 @@
         "raw_source_fields": {
           "trigger_id": "TR-R-BTC-004",
           "identifier_class": "RESEARCH_ONLY",
-          "configuration_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R2",
+          "configuration_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
           "metric_id": "RETURN(asset,5m)",
           "operator": "LT",
           "threshold/state/value": "0",
@@ -4585,12 +4624,27 @@
               "SOURCE_SECTION": "§§2–13, 14–25"
             }
           ],
-          "content_sha256": "45406e794fe29037b80a9d052778d829a6eb8d39995862872dbc384726e12f55"
-        }
+          "content_sha256": "45406e794fe29037b80a9d052778d829a6eb8d39995862872dbc384726e12f55",
+          "output_states": [
+            "SHORT",
+            "ZERO",
+            "UNAVAILABLE"
+          ],
+          "matched_output_state": "SHORT"
+        },
+        "output_states": [
+          "SHORT",
+          "ZERO",
+          "UNAVAILABLE"
+        ],
+        "matched_output_state": "SHORT",
+        "zero_output_state": "ZERO",
+        "unavailable_output_state": "UNAVAILABLE"
       },
       "direction_output": {
         "direction_applicability": "SHORT",
         "output_states": [
+          "SHORT",
           "ZERO",
           "UNAVAILABLE"
         ],
@@ -4599,7 +4653,8 @@
         "context_only": false,
         "eligibility_only": false,
         "set_formation_predicate": false,
-        "classifier": false
+        "classifier": false,
+        "matched_output_state": "SHORT"
       },
       "applicability": {
         "applicable_coins": [
@@ -4643,16 +4698,13 @@
         "formula_references_resolved": true,
         "source_trigger_reference_resolved": true,
         "web_import_readiness": "READY",
-        "web_import_blockers": [
-          "No executable generic declarative metric predicate implementation exists in current trigger runtime.",
-          "Planned implementation_key `triggertrade.research.DeclarativeMetricPredicateTrigger` is not implemented/resolvable in current code."
-        ],
+        "web_import_blockers": [],
         "metric_reference_reconciliation_status": "DERIVED_FROM_EXISTING",
         "current_metric_ids": [
           "F-004"
         ]
       },
-      "semantic_hash": "02cbf7b76bdbb05e00d97e508bfd60e5062a5e678343a1c8f40c97e454a75e90"
+      "semantic_hash": "5dcbb8c39d2dcab575976fa5a18d3c1508bd14aee93e7b8b8ab88f16fed5ba65"
     },
     {
       "trigger_id": "TR-R-BTC-005",

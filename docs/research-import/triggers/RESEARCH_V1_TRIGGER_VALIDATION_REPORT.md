@@ -20,7 +20,7 @@ Package revision: `RESEARCH_V1_FOCUSED_CORRECTION_R3`
 ## Backend Contract Validation
 
 - Backend model target: `RuleDefinition` / `TriggerVersion`.
-- Backend version mapping: every trigger -> `1.0.0`.
+- Backend version mapping: 27 triggers -> `1.0.0`; corrected BTC deterministic direction triggers `TR-R-BTC-001`, `TR-R-BTC-002`, `TR-R-BTC-003`, and `TR-R-BTC-004` -> `1.0.1` with `supersedes_version=1.0.0`.
 - Semver validity: PASS.
 - Required fields present in web-import records: PASS.
 - Unknown top-level backend fields inside `rule_definition`: NONE.
@@ -31,12 +31,13 @@ Package revision: `RESEARCH_V1_FOCUSED_CORRECTION_R3`
 ## Semantic Integrity
 
 - Operators, thresholds, units, lookbacks/timeframes, output states, BTC exceptions, ZERO/NONE/UNAVAILABLE semantics are preserved in canonical JSON and projected into backend definition payloads.
+- BTC deterministic direction output is corrected: positive RETURN(BTC,5m) predicates emit `LONG`, negative RETURN(BTC,5m) predicates emit `SHORT`, zero emits `ZERO`, and unavailable return emits `UNAVAILABLE`.
 - No source Research trigger ID was renamed.
 - No production selectable/current semantics are changed.
 
 ## Web Import Integrity
 
-- Import path classification: `EXISTING_INTERNAL_IMPORT_PATH` via `TriggerSetStore.sync_trigger_registry()` / `save_rule()`.
+- Import path classification: `EXISTING_INTERNAL_IMPORT_PATH` via `PostgresTriggerRegistry.sync_trigger_registry()` / `save_rule()`.
 - Public HTTP import endpoint found: NO.
 - Triggers ready for executable import: 31.
 - Remaining blocker: NONE for trigger runtime representation. Import execution still requires the separately reviewed loading step; this package does not mutate production state.

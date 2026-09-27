@@ -162,6 +162,45 @@ def test_research_v1_trigger_package_imports_idempotently_into_postgres_registry
         _drop_schema(settings)
 
 
+def test_corrected_btc_direction_trigger_versions_import_idempotently_into_postgres_registry():
+    settings = _settings()
+    try:
+        factory = _migrate(settings)
+        records = tuple(
+            rule for rule in _research_v1_rules() if rule.rule_id in {"TR-R-BTC-001", "TR-R-BTC-002", "TR-R-BTC-003", "TR-R-BTC-004"}
+        )
+        assert len(records) == 4
+        assert {rule.version for rule in records} == {"1.0.1"}
+        assert {rule.supersedes_version for rule in records} == {"1.0.0"}
+        assert {
+            rule.rule_id: tuple(rule.definition["output_states"]) for rule in records
+        } == {
+            "TR-R-BTC-001": ("LONG", "ZERO", "UNAVAILABLE"),
+            "TR-R-BTC-002": ("SHORT", "ZERO", "UNAVAILABLE"),
+            "TR-R-BTC-003": ("LONG", "ZERO", "UNAVAILABLE"),
+            "TR-R-BTC-004": ("SHORT", "ZERO", "UNAVAILABLE"),
+        }
+
+        with PostgresUnitOfWork(factory) as uow:
+            store = PostgresTriggerRegistry(uow.connection)
+            first = store.sync_trigger_registry(records)
+            assert len(first.new_versions_registered) == 4
+            assert first.conflicts == ()
+            assert first.invalid_definitions == ()
+
+        with PostgresUnitOfWork(factory) as uow:
+            store = PostgresTriggerRegistry(uow.connection)
+            second = store.sync_trigger_registry(records)
+            assert len(second.unchanged_versions) == 4
+            assert second.new_versions_registered == ()
+            assert second.conflicts == ()
+            assert second.invalid_definitions == ()
+            assert all(store.get_trigger_version(rule.rule_id, "1.0.1") is not None for rule in records)
+            assert all(store.get_trigger_version(rule.rule_id, "1.0.0") is None for rule in records)
+    finally:
+        _drop_schema(settings)
+
+
 def _trigger_rule(*, version: str, threshold: str) -> RuleDefinition:
     return RuleDefinition(
         rule_id="TRG-PG",

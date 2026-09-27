@@ -387,12 +387,12 @@ Validation rules:
 
 ### TR-R-BTC-001 - RETURN(asset,5m) > 0
 
-- Identity: `TR-R-BTC-001` / `RESEARCH_V1_FOCUSED_CORRECTION_R2` / status `RESEARCH_ONLY`
+- Identity: `TR-R-BTC-001` / `RESEARCH_V1_FOCUSED_CORRECTION_R3` / status `RESEARCH_ONLY`
 - Role/family: `BTC_DIRECTION_CONSTRUCTION` / `direction`
 - Definition: Research predicate over RETURN(asset,5m): RETURN(asset,5m) > 0.
 - Operator/threshold: `GT` / `0` / unit `signed decimal; fractional return`
 - Timeframe/context: Current completed-5m evaluation; underlying DE, ATR percentile and TOD histories/horizons unchanged
-- Output: ZERO, UNAVAILABLE; direction applicability `LONG`
+- Output: LONG, ZERO, UNAVAILABLE; direction applicability `LONG`
 - Dependencies: metrics RETURN(asset,5m); formula refs source methodology sections only
 - Applicability: coins BTC; excluded NONE
 - Research usage: hypotheses R-001, R-002, R-003, R-004, R-005, R-007, R-008, R-009, R-010, R-011, R-012, R-013, R-014, R-015, R-016, R-017, R-018, R-019, R-020, R-021, R-022, R-023, R-024, R-025, R-026, R-027, R-028, R-029, R-030; candidates C-001, C-003, C-007, C-008, C-009, C-011, C-012, C-015, C-016, C-019, C-020, C-021, C-031, C-032, C-034, C-035, C-036, C-037, C-039, C-040, C-041, C-042, C-043, C-051, C-052, C-054, C-055, C-059, C-060
@@ -402,12 +402,12 @@ Validation rules:
 
 ### TR-R-BTC-002 - RETURN(asset,5m) < 0
 
-- Identity: `TR-R-BTC-002` / `RESEARCH_V1_FOCUSED_CORRECTION_R2` / status `RESEARCH_ONLY`
+- Identity: `TR-R-BTC-002` / `RESEARCH_V1_FOCUSED_CORRECTION_R3` / status `RESEARCH_ONLY`
 - Role/family: `BTC_DIRECTION_CONSTRUCTION` / `direction`
 - Definition: Research predicate over RETURN(asset,5m): RETURN(asset,5m) < 0.
 - Operator/threshold: `LT` / `0` / unit `signed decimal; fractional return`
 - Timeframe/context: Current completed-5m evaluation; underlying DE, ATR percentile and TOD histories/horizons unchanged
-- Output: ZERO, UNAVAILABLE; direction applicability `SHORT`
+- Output: SHORT, ZERO, UNAVAILABLE; direction applicability `SHORT`
 - Dependencies: metrics RETURN(asset,5m); formula refs source methodology sections only
 - Applicability: coins BTC; excluded NONE
 - Research usage: hypotheses R-001, R-002, R-003, R-004, R-005, R-007, R-008, R-009, R-010, R-011, R-012, R-013, R-014, R-015, R-016, R-017, R-018, R-019, R-020, R-021, R-022, R-023, R-024, R-025, R-026, R-027, R-028, R-029, R-030; candidates C-001, C-003, C-007, C-008, C-009, C-011, C-012, C-015, C-016, C-019, C-020, C-021, C-031, C-032, C-034, C-035, C-036, C-037, C-039, C-040, C-041, C-042, C-043, C-051, C-052, C-054, C-055, C-059, C-060
@@ -417,12 +417,12 @@ Validation rules:
 
 ### TR-R-BTC-003 - RETURN(asset,5m) > 0
 
-- Identity: `TR-R-BTC-003` / `RESEARCH_V1_FOCUSED_CORRECTION_R2` / status `RESEARCH_ONLY`
+- Identity: `TR-R-BTC-003` / `RESEARCH_V1_FOCUSED_CORRECTION_R3` / status `RESEARCH_ONLY`
 - Role/family: `BTC_DIRECTION_CONSTRUCTION` / `direction`
 - Definition: Research predicate over RETURN(asset,5m): RETURN(asset,5m) > 0.
 - Operator/threshold: `GT` / `0` / unit `signed decimal; fractional return`
 - Timeframe/context: Current completed-5m evaluation; underlying DE, ATR percentile and TOD histories/horizons unchanged
-- Output: ZERO, UNAVAILABLE; direction applicability `LONG`
+- Output: LONG, ZERO, UNAVAILABLE; direction applicability `LONG`
 - Dependencies: metrics RETURN(asset,5m); formula refs source methodology sections only
 - Applicability: coins BTC; excluded NONE
 - Research usage: hypotheses R-008; candidates C-016
@@ -432,12 +432,12 @@ Validation rules:
 
 ### TR-R-BTC-004 - RETURN(asset,5m) < 0
 
-- Identity: `TR-R-BTC-004` / `RESEARCH_V1_FOCUSED_CORRECTION_R2` / status `RESEARCH_ONLY`
+- Identity: `TR-R-BTC-004` / `RESEARCH_V1_FOCUSED_CORRECTION_R3` / status `RESEARCH_ONLY`
 - Role/family: `BTC_DIRECTION_CONSTRUCTION` / `direction`
 - Definition: Research predicate over RETURN(asset,5m): RETURN(asset,5m) < 0.
 - Operator/threshold: `LT` / `0` / unit `signed decimal; fractional return`
 - Timeframe/context: Current completed-5m evaluation; underlying DE, ATR percentile and TOD histories/horizons unchanged
-- Output: ZERO, UNAVAILABLE; direction applicability `SHORT`
+- Output: SHORT, ZERO, UNAVAILABLE; direction applicability `SHORT`
 - Dependencies: metrics RETURN(asset,5m); formula refs source methodology sections only
 - Applicability: coins BTC; excluded NONE
 - Research usage: hypotheses R-008; candidates C-016

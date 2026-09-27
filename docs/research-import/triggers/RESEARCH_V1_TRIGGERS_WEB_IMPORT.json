@@ -2408,12 +2408,12 @@
     {
       "canonical_trigger_id": "TR-R-BTC-001",
       "backend_trigger_id": "TR-R-BTC-001",
-      "backend_version": "1.0.0",
-      "source_research_version": "RESEARCH_V1_FOCUSED_CORRECTION_R2",
+      "backend_version": "1.0.1",
+      "source_research_version": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
       "import_readiness": "READY",
       "rule_definition": {
         "rule_id": "TR-R-BTC-001",
-        "version": "1.0.0",
+        "version": "1.0.1",
         "name": "Research V1 predicate TR-R-BTC-001",
         "status": "DRAFT",
         "asset_scope": "BTC",
@@ -2423,7 +2423,7 @@
           "implementation_key": "triggertrade.research.DeclarativeMetricPredicateTrigger",
           "schema": "research-v1-declarative-metric-predicate@1",
           "canonical_trigger_id": "TR-R-BTC-001",
-          "source_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R2",
+          "source_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
           "metric_ref": "RETURN(asset,5m)",
           "current_metric_ids": [
             "F-004"
@@ -2434,6 +2434,7 @@
           "freshness_semantics": "CURRENT_STATE at the source-authoritative completed cutoff; required UNAVAILABLE is never FALSE or zero; no stale substitution.",
           "direction_applicability": "LONG",
           "output_states": [
+            "LONG",
             "ZERO",
             "UNAVAILABLE"
           ],
@@ -2441,7 +2442,8 @@
           "applicable_coins": [
             "BTC"
           ],
-          "excluded_coins": []
+          "excluded_coins": [],
+          "matched_output_state": "LONG"
         },
         "created_at": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
         "provenance": "docs/research-v1/RESEARCH_V1_FOCUSED_CORRECTION_R3/operative/WEB_RESEARCH_CONFIGURATION_MODEL.md",
@@ -2507,6 +2509,7 @@
         "output_contract": {
           "direction_applicability": "LONG",
           "output_states": [
+            "LONG",
             "ZERO",
             "UNAVAILABLE"
           ],
@@ -2515,29 +2518,33 @@
           "context_only": false,
           "eligibility_only": false,
           "set_formation_predicate": false,
-          "classifier": false
+          "classifier": false,
+          "matched_output_state": "LONG"
         },
         "boundary_semantics": "CURRENT_STATE at the source-authoritative completed cutoff; required UNAVAILABLE is never FALSE or zero; no stale substitution.; Canonical source history, exact metric ancestry and TT_SET_NUMERIC_V1; explicitly NON-F-005 enclosing BTC Set. No classifier object or classifier gate is evaluated for BTC.; RETURN(BTC,5m) > 0 yields LONG, < 0 yields SHORT, = 0 yields ZERO, and unavailable return yields UNAVAILABLE.",
         "stale_data_semantics": "No stale substitution; exact source freshness is defined by the Research predicate.",
         "missing_data_semantics": "UNAVAILABLE propagates unless the source predicate explicitly defines another state.",
-        "semantic_hash": "6dc6f17d305375d38b8bb34380f0d40fca4bd5057d0c61590c07d6ab58077a70",
+        "semantic_hash": "88edcd736348bd04838f0837db004fed6491d2e10dde641ddfcf8daf7f00ab1f",
         "change_summary": {
-          "backend_version_mapping": "1.0.0",
+          "backend_version_mapping": "1.0.1",
           "source_trigger_id": "TR-R-BTC-001",
-          "source_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R2",
+          "source_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
+          "supersedes_version": "1.0.0",
+          "correction": "BTC matched return predicate output now preserves directional LONG/SHORT state instead of boolean TRUE.",
           "import_readiness": "READY"
-        }
+        },
+        "supersedes_version": "1.0.0"
       }
     },
     {
       "canonical_trigger_id": "TR-R-BTC-002",
       "backend_trigger_id": "TR-R-BTC-002",
-      "backend_version": "1.0.0",
-      "source_research_version": "RESEARCH_V1_FOCUSED_CORRECTION_R2",
+      "backend_version": "1.0.1",
+      "source_research_version": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
       "import_readiness": "READY",
       "rule_definition": {
         "rule_id": "TR-R-BTC-002",
-        "version": "1.0.0",
+        "version": "1.0.1",
         "name": "Research V1 predicate TR-R-BTC-002",
         "status": "DRAFT",
         "asset_scope": "BTC",
@@ -2547,7 +2554,7 @@
           "implementation_key": "triggertrade.research.DeclarativeMetricPredicateTrigger",
           "schema": "research-v1-declarative-metric-predicate@1",
           "canonical_trigger_id": "TR-R-BTC-002",
-          "source_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R2",
+          "source_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
           "metric_ref": "RETURN(asset,5m)",
           "current_metric_ids": [
             "F-004"
@@ -2558,6 +2565,7 @@
           "freshness_semantics": "CURRENT_STATE at the source-authoritative completed cutoff; required UNAVAILABLE is never FALSE or zero; no stale substitution.",
           "direction_applicability": "SHORT",
           "output_states": [
+            "SHORT",
             "ZERO",
             "UNAVAILABLE"
           ],
@@ -2565,7 +2573,8 @@
           "applicable_coins": [
             "BTC"
           ],
-          "excluded_coins": []
+          "excluded_coins": [],
+          "matched_output_state": "SHORT"
         },
         "created_at": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
         "provenance": "docs/research-v1/RESEARCH_V1_FOCUSED_CORRECTION_R3/operative/WEB_RESEARCH_CONFIGURATION_MODEL.md",
@@ -2631,6 +2640,7 @@
         "output_contract": {
           "direction_applicability": "SHORT",
           "output_states": [
+            "SHORT",
             "ZERO",
             "UNAVAILABLE"
           ],
@@ -2639,29 +2649,33 @@
           "context_only": false,
           "eligibility_only": false,
           "set_formation_predicate": false,
-          "classifier": false
+          "classifier": false,
+          "matched_output_state": "SHORT"
         },
         "boundary_semantics": "CURRENT_STATE at the source-authoritative completed cutoff; required UNAVAILABLE is never FALSE or zero; no stale substitution.; Canonical source history, exact metric ancestry and TT_SET_NUMERIC_V1; explicitly NON-F-005 enclosing BTC Set. No classifier object or classifier gate is evaluated for BTC.; RETURN(BTC,5m) > 0 yields LONG, < 0 yields SHORT, = 0 yields ZERO, and unavailable return yields UNAVAILABLE.",
         "stale_data_semantics": "No stale substitution; exact source freshness is defined by the Research predicate.",
         "missing_data_semantics": "UNAVAILABLE propagates unless the source predicate explicitly defines another state.",
-        "semantic_hash": "aeceda135415bc45605abd4c1159a4a15187008b2da5a785dfc62e8ef00c9d83",
+        "semantic_hash": "1c04d39c1f3cb8394a8b6bad1e9f4af01263be998713d4009cea8abe99a52d6b",
         "change_summary": {
-          "backend_version_mapping": "1.0.0",
+          "backend_version_mapping": "1.0.1",
           "source_trigger_id": "TR-R-BTC-002",
-          "source_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R2",
+          "source_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
+          "supersedes_version": "1.0.0",
+          "correction": "BTC matched return predicate output now preserves directional LONG/SHORT state instead of boolean TRUE.",
           "import_readiness": "READY"
-        }
+        },
+        "supersedes_version": "1.0.0"
       }
     },
     {
       "canonical_trigger_id": "TR-R-BTC-003",
       "backend_trigger_id": "TR-R-BTC-003",
-      "backend_version": "1.0.0",
-      "source_research_version": "RESEARCH_V1_FOCUSED_CORRECTION_R2",
+      "backend_version": "1.0.1",
+      "source_research_version": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
       "import_readiness": "READY",
       "rule_definition": {
         "rule_id": "TR-R-BTC-003",
-        "version": "1.0.0",
+        "version": "1.0.1",
         "name": "Research V1 predicate TR-R-BTC-003",
         "status": "DRAFT",
         "asset_scope": "BTC",
@@ -2671,7 +2685,7 @@
           "implementation_key": "triggertrade.research.DeclarativeMetricPredicateTrigger",
           "schema": "research-v1-declarative-metric-predicate@1",
           "canonical_trigger_id": "TR-R-BTC-003",
-          "source_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R2",
+          "source_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
           "metric_ref": "RETURN(asset,5m)",
           "current_metric_ids": [
             "F-004"
@@ -2682,6 +2696,7 @@
           "freshness_semantics": "FRESH_EVENT: same-epoch observed FALSE→TRUE of this existing return-side predicate; unconsumed event at the current cutoff only. Initial TRUE and UNAVAILABLE→TRUE are not events; unavailable breaks event ancestry. Current side remains required at MATCHED.",
           "direction_applicability": "LONG",
           "output_states": [
+            "LONG",
             "ZERO",
             "UNAVAILABLE"
           ],
@@ -2689,7 +2704,8 @@
           "applicable_coins": [
             "BTC"
           ],
-          "excluded_coins": []
+          "excluded_coins": [],
+          "matched_output_state": "LONG"
         },
         "created_at": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
         "provenance": "docs/research-v1/RESEARCH_V1_FOCUSED_CORRECTION_R3/operative/WEB_RESEARCH_CONFIGURATION_MODEL.md",
@@ -2712,6 +2728,7 @@
         "output_contract": {
           "direction_applicability": "LONG",
           "output_states": [
+            "LONG",
             "ZERO",
             "UNAVAILABLE"
           ],
@@ -2720,29 +2737,33 @@
           "context_only": false,
           "eligibility_only": false,
           "set_formation_predicate": false,
-          "classifier": false
+          "classifier": false,
+          "matched_output_state": "LONG"
         },
         "boundary_semantics": "FRESH_EVENT: same-epoch observed FALSE→TRUE of this existing return-side predicate; unconsumed event at the current cutoff only. Initial TRUE and UNAVAILABLE→TRUE are not events; unavailable breaks event ancestry. Current side remains required at MATCHED.; Canonical source history, exact metric ancestry and TT_SET_NUMERIC_V1; explicitly NON-F-005 enclosing BTC Set. No classifier object or classifier gate is evaluated for BTC.; RETURN(BTC,5m) > 0 yields LONG, < 0 yields SHORT, = 0 yields ZERO, and unavailable return yields UNAVAILABLE.",
         "stale_data_semantics": "No stale substitution; exact source freshness is defined by the Research predicate.",
         "missing_data_semantics": "UNAVAILABLE propagates unless the source predicate explicitly defines another state.",
-        "semantic_hash": "ce143b4e8c7f1ad06e3fee43df34e762ab3c54e59043b1240baf517ebba4f22f",
+        "semantic_hash": "cf404caea20aa5557c90a18916d7717b13924e9190fecdeb92c74064a1af54e3",
         "change_summary": {
-          "backend_version_mapping": "1.0.0",
+          "backend_version_mapping": "1.0.1",
           "source_trigger_id": "TR-R-BTC-003",
-          "source_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R2",
+          "source_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
+          "supersedes_version": "1.0.0",
+          "correction": "BTC matched return predicate output now preserves directional LONG/SHORT state instead of boolean TRUE.",
           "import_readiness": "READY"
-        }
+        },
+        "supersedes_version": "1.0.0"
       }
     },
     {
       "canonical_trigger_id": "TR-R-BTC-004",
       "backend_trigger_id": "TR-R-BTC-004",
-      "backend_version": "1.0.0",
-      "source_research_version": "RESEARCH_V1_FOCUSED_CORRECTION_R2",
+      "backend_version": "1.0.1",
+      "source_research_version": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
       "import_readiness": "READY",
       "rule_definition": {
         "rule_id": "TR-R-BTC-004",
-        "version": "1.0.0",
+        "version": "1.0.1",
         "name": "Research V1 predicate TR-R-BTC-004",
         "status": "DRAFT",
         "asset_scope": "BTC",
@@ -2752,7 +2773,7 @@
           "implementation_key": "triggertrade.research.DeclarativeMetricPredicateTrigger",
           "schema": "research-v1-declarative-metric-predicate@1",
           "canonical_trigger_id": "TR-R-BTC-004",
-          "source_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R2",
+          "source_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
           "metric_ref": "RETURN(asset,5m)",
           "current_metric_ids": [
             "F-004"
@@ -2763,6 +2784,7 @@
           "freshness_semantics": "FRESH_EVENT: same-epoch observed FALSE→TRUE of this existing return-side predicate; unconsumed event at the current cutoff only. Initial TRUE and UNAVAILABLE→TRUE are not events; unavailable breaks event ancestry. Current side remains required at MATCHED.",
           "direction_applicability": "SHORT",
           "output_states": [
+            "SHORT",
             "ZERO",
             "UNAVAILABLE"
           ],
@@ -2770,7 +2792,8 @@
           "applicable_coins": [
             "BTC"
           ],
-          "excluded_coins": []
+          "excluded_coins": [],
+          "matched_output_state": "SHORT"
         },
         "created_at": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
         "provenance": "docs/research-v1/RESEARCH_V1_FOCUSED_CORRECTION_R3/operative/WEB_RESEARCH_CONFIGURATION_MODEL.md",
@@ -2793,6 +2816,7 @@
         "output_contract": {
           "direction_applicability": "SHORT",
           "output_states": [
+            "SHORT",
             "ZERO",
             "UNAVAILABLE"
           ],
@@ -2801,18 +2825,22 @@
           "context_only": false,
           "eligibility_only": false,
           "set_formation_predicate": false,
-          "classifier": false
+          "classifier": false,
+          "matched_output_state": "SHORT"
         },
         "boundary_semantics": "FRESH_EVENT: same-epoch observed FALSE→TRUE of this existing return-side predicate; unconsumed event at the current cutoff only. Initial TRUE and UNAVAILABLE→TRUE are not events; unavailable breaks event ancestry. Current side remains required at MATCHED.; Canonical source history, exact metric ancestry and TT_SET_NUMERIC_V1; explicitly NON-F-005 enclosing BTC Set. No classifier object or classifier gate is evaluated for BTC.; RETURN(BTC,5m) > 0 yields LONG, < 0 yields SHORT, = 0 yields ZERO, and unavailable return yields UNAVAILABLE.",
         "stale_data_semantics": "No stale substitution; exact source freshness is defined by the Research predicate.",
         "missing_data_semantics": "UNAVAILABLE propagates unless the source predicate explicitly defines another state.",
-        "semantic_hash": "02cbf7b76bdbb05e00d97e508bfd60e5062a5e678343a1c8f40c97e454a75e90",
+        "semantic_hash": "919d715ada2f5997d2fb3bfa372ab6f020ccbc397474aec64443c9966add70ba",
         "change_summary": {
-          "backend_version_mapping": "1.0.0",
+          "backend_version_mapping": "1.0.1",
           "source_trigger_id": "TR-R-BTC-004",
-          "source_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R2",
+          "source_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
+          "supersedes_version": "1.0.0",
+          "correction": "BTC matched return predicate output now preserves directional LONG/SHORT state instead of boolean TRUE.",
           "import_readiness": "READY"
-        }
+        },
+        "supersedes_version": "1.0.0"
       }
     },
     {
