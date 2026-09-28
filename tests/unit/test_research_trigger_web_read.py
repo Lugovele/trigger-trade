@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from http import HTTPStatus
 from pathlib import Path
+from copy import deepcopy
 from dataclasses import replace
 import json
 import re
@@ -137,6 +138,48 @@ def test_research_set_projection_exposes_33_records_and_exact_btc_memberships():
     assert first["version_state"] == "CURRENT"
     assert first["direction"] == "CLASSIFIER SIDE"
     assert "classifier side" in first["direction_semantics"]
+
+
+def test_btc_set_embedded_trigger_snapshots_match_referenced_trigger_versions():
+    trigger_records = _research_v1_trigger_records()
+    set_records = _research_v1_set_records()
+
+    result = _validate_btc_set_member_snapshots(set_records, trigger_records)
+
+    assert result["affected_sets"] == 16
+    assert result["btc_1_0_1_members"] == 34
+    assert result["resolved_refs"] == 242
+    assert result["stale_1_0_0_refs"] == 0
+    assert result["output_counts"] == {
+        "TR-R-BTC-001": 16,
+        "TR-R-BTC-002": 16,
+        "TR-R-BTC-003": 1,
+        "TR-R-BTC-004": 1,
+    }
+
+    expected_missing = {
+        "TR-R-BTC-001": "LONG",
+        "TR-R-BTC-002": "SHORT",
+        "TR-R-BTC-003": "LONG",
+        "TR-R-BTC-004": "SHORT",
+    }
+    for trigger_id, required_state in expected_missing.items():
+        mutated = deepcopy(set_records)
+        member = next(
+            member
+            for record in mutated
+            if record["set_version"] in _AFFECTED_BTC_SET_VERSIONS
+            for member in record["trigger_members"]
+            if member["trigger_id"] == trigger_id and member["trigger_version"] == "1.0.1"
+        )
+        member["output_states"] = [state for state in member["output_states"] if state != required_state]
+        try:
+            _validate_btc_set_member_snapshots(mutated, trigger_records)
+        except AssertionError as exc:
+            assert trigger_id in str(exc)
+            assert "output_states" in str(exc)
+        else:  # pragma: no cover - explicit regression guard
+            raise AssertionError(f"{trigger_id}@1.0.1 missing {required_state} was not rejected")
 
 
 def test_research_trigger_api_is_read_only_and_returns_list_and_detail():
@@ -325,7 +368,7 @@ def _text_request(host, port, method: str, path: str, *, expected=HTTPStatus.OK)
 
 
 def _research_v1_rules() -> tuple[RuleDefinition, ...]:
-    package = json.loads(Path("docs/research-import/triggers/RESEARCH_V1_TRIGGERS_WEB_IMPORT.json").read_text(encoding="utf-8"))
+    package = {"records": _research_v1_trigger_records()}
     rules: list[RuleDefinition] = []
     for record in package["records"]:
         data = dict(record["rule_definition"])
@@ -337,8 +380,83 @@ def _research_v1_rules() -> tuple[RuleDefinition, ...]:
 
 
 def _research_v1_sets() -> tuple[ResearchSetVersion, ...]:
-    package = json.loads(Path("docs/research-import/sets/RESEARCH_V1_SETS.json").read_text(encoding="utf-8"))
-    return tuple(research_set_from_package_record(record) for record in package["sets"])
+    return tuple(research_set_from_package_record(record) for record in _research_v1_set_records())
+
+
+def _research_v1_trigger_records() -> list[dict[str, object]]:
+    return json.loads(Path("docs/research-import/triggers/RESEARCH_V1_TRIGGERS_WEB_IMPORT.json").read_text(encoding="utf-8"))["records"]
+
+
+def _research_v1_set_records() -> list[dict[str, object]]:
+    return json.loads(Path("docs/research-import/sets/RESEARCH_V1_SETS.json").read_text(encoding="utf-8"))["sets"]
+
+
+_AFFECTED_BTC_SET_VERSIONS = {
+    "SET-R-BTC-001-V1",
+    "SET-R-BTC-001-V2",
+    "SET-R-BTC-003-V2",
+    "SET-R-BTC-007-V2",
+    "SET-R-BTC-008-V2",
+    "SET-R-BTC-009-V2",
+    "SET-R-BTC-011-V2",
+    "SET-R-BTC-012-V2",
+    "SET-R-BTC-015-V2",
+    "SET-R-BTC-016-V2",
+    "SET-R-BTC-019-V1",
+    "SET-R-BTC-019-V2",
+    "SET-R-BTC-020-V1",
+    "SET-R-BTC-020-V2",
+    "SET-R-BTC-021-V1",
+    "SET-R-BTC-021-V2",
+}
+
+
+def _validate_btc_set_member_snapshots(set_records, trigger_records):
+    operator_labels = {"EQ": "=", "NE": "!=", "GTE": ">=", "LTE": "<=", "GT": ">", "LT": "<"}
+    trigger_definitions = {
+        (record["rule_definition"]["rule_id"], record["rule_definition"]["version"]): record["rule_definition"]["definition"]
+        for record in trigger_records
+    }
+    btc_triggers = {"TR-R-BTC-001", "TR-R-BTC-002", "TR-R-BTC-003", "TR-R-BTC-004"}
+    resolved_refs = 0
+    stale_refs = 0
+    btc_members = 0
+    output_counts: dict[str, int] = {}
+    affected_seen = {record["set_version"] for record in set_records if record["set_version"] in _AFFECTED_BTC_SET_VERSIONS}
+    for record in set_records:
+        for member in record["trigger_members"]:
+            key = (member["trigger_id"], member["trigger_version"])
+            assert key in trigger_definitions, f"unresolved trigger reference {key}"
+            resolved_refs += 1
+            if record["set_version"] not in _AFFECTED_BTC_SET_VERSIONS or member["trigger_id"] not in btc_triggers:
+                continue
+            if member["trigger_version"] == "1.0.0":
+                stale_refs += 1
+            if member["trigger_version"] != "1.0.1":
+                continue
+            btc_members += 1
+            trigger = trigger_definitions[key]
+            expected = {
+                "condition": f"{trigger['metric_ref']} {operator_labels[trigger['operator']]} {trigger['threshold']}",
+                "operator": trigger["operator"],
+                "threshold": trigger["threshold"],
+                "threshold_unit": None,
+                "metric_references": [trigger["metric_ref"]],
+                "formula_references": trigger["current_metric_ids"],
+                "output_states": trigger["output_states"],
+                "direction_applicability": trigger["direction_applicability"],
+            }
+            for field, value in expected.items():
+                assert member.get(field) == value, f"{record['set_version']} {key} {field}: {member.get(field)!r} != {value!r}"
+            output_counts[member["trigger_id"]] = output_counts.get(member["trigger_id"], 0) + 1
+    assert stale_refs == 0
+    return {
+        "affected_sets": len(affected_seen),
+        "btc_1_0_1_members": btc_members,
+        "resolved_refs": resolved_refs,
+        "stale_1_0_0_refs": stale_refs,
+        "output_counts": output_counts,
+    }
 
 
 class _FakeTriggerRegistry:

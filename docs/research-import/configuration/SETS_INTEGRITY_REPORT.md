@@ -46,6 +46,12 @@ All 16 affected BTC Set versions use corrected `TR-R-BTC-001..004@1.0.1`
 references where required. No affected current BTC Set version references a
 superseded `1.0.0` BTC directional trigger.
 
+Follow-up correction: the Set artifacts also now regenerate copied BTC member
+snapshot fields from the exact referenced Trigger version. This closed stale
+embedded metadata where `TR-R-BTC-001..004@1.0.1` members previously omitted
+their directional output states. See
+`docs/research-import/configuration/BTC_SET_TRIGGER_SNAPSHOT_CORRECTION_REPORT.md`.
+
 ## Remaining Defects
 
 No Set semantic, backend, read-model, or UI projection defects remain in the audited source-backed path.

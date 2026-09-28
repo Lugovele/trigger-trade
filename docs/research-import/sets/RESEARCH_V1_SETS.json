@@ -3741,7 +3741,7 @@
           "condition": "RETURN(asset,5m) > 0",
           "operator": "GT",
           "threshold": "0",
-          "threshold_unit": "signed decimal; fractional return",
+          "threshold_unit": null,
           "metric_references": [
             "RETURN(asset,5m)"
           ],
@@ -3749,6 +3749,7 @@
             "F-004"
           ],
           "output_states": [
+            "LONG",
             "ZERO",
             "UNAVAILABLE"
           ],
@@ -3763,7 +3764,7 @@
           "condition": "RETURN(asset,5m) < 0",
           "operator": "LT",
           "threshold": "0",
-          "threshold_unit": "signed decimal; fractional return",
+          "threshold_unit": null,
           "metric_references": [
             "RETURN(asset,5m)"
           ],
@@ -3771,6 +3772,7 @@
             "F-004"
           ],
           "output_states": [
+            "SHORT",
             "ZERO",
             "UNAVAILABLE"
           ],
@@ -3902,7 +3904,7 @@
         "blocking_reason": null
       },
       "created_at": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
-      "semantic_hash": "250b671da2916523704fac98a5d4d0aadefcadb675a673122a117039c51218d0"
+      "semantic_hash": "d60d92fe7f15a77a4013e9d3c46750061abeb7de4d31b60fd1e597e98130edce"
     },
     {
       "set_version_id": "SET-R-BTC-001-V2",
@@ -3995,7 +3997,7 @@
           "condition": "RETURN(asset,5m) > 0",
           "operator": "GT",
           "threshold": "0",
-          "threshold_unit": "signed decimal; fractional return",
+          "threshold_unit": null,
           "metric_references": [
             "RETURN(asset,5m)"
           ],
@@ -4003,6 +4005,7 @@
             "F-004"
           ],
           "output_states": [
+            "LONG",
             "ZERO",
             "UNAVAILABLE"
           ],
@@ -4017,7 +4020,7 @@
           "condition": "RETURN(asset,5m) < 0",
           "operator": "LT",
           "threshold": "0",
-          "threshold_unit": "signed decimal; fractional return",
+          "threshold_unit": null,
           "metric_references": [
             "RETURN(asset,5m)"
           ],
@@ -4025,6 +4028,7 @@
             "F-004"
           ],
           "output_states": [
+            "SHORT",
             "ZERO",
             "UNAVAILABLE"
           ],
@@ -4156,7 +4160,7 @@
         "blocking_reason": null
       },
       "created_at": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
-      "semantic_hash": "f13b3149aac51279c208b2f3c1d55cf07f126c964af2e0f0388104c52716e583"
+      "semantic_hash": "ddeed6e22a92f6ba6a81026d677edac78e65b63412687f7bba61438ce5e0ee59"
     },
     {
       "set_version_id": "SET-R-BTC-003-V2",
@@ -4272,7 +4276,7 @@
           "condition": "RETURN(asset,5m) > 0",
           "operator": "GT",
           "threshold": "0",
-          "threshold_unit": "signed decimal; fractional return",
+          "threshold_unit": null,
           "metric_references": [
             "RETURN(asset,5m)"
           ],
@@ -4280,6 +4284,7 @@
             "F-004"
           ],
           "output_states": [
+            "LONG",
             "ZERO",
             "UNAVAILABLE"
           ],
@@ -4294,7 +4299,7 @@
           "condition": "RETURN(asset,5m) < 0",
           "operator": "LT",
           "threshold": "0",
-          "threshold_unit": "signed decimal; fractional return",
+          "threshold_unit": null,
           "metric_references": [
             "RETURN(asset,5m)"
           ],
@@ -4302,6 +4307,7 @@
             "F-004"
           ],
           "output_states": [
+            "SHORT",
             "ZERO",
             "UNAVAILABLE"
           ],
@@ -4433,7 +4439,7 @@
         "blocking_reason": null
       },
       "created_at": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
-      "semantic_hash": "8901f936fe670559685cb719dc19a6db9ee2ec7649e810788fb87f2f4c6c9dd8"
+      "semantic_hash": "78138a6c3cfcb9ab28ba56a75bf21511484ad79f50fe5dcda579efb7123d6c89"
     },
     {
       "set_version_id": "SET-R-BTC-007-V2",
@@ -4546,7 +4552,7 @@
           "condition": "RETURN(asset,5m) > 0",
           "operator": "GT",
           "threshold": "0",
-          "threshold_unit": "signed decimal; fractional return",
+          "threshold_unit": null,
           "metric_references": [
             "RETURN(asset,5m)"
           ],
@@ -4554,6 +4560,7 @@
             "F-004"
           ],
           "output_states": [
+            "LONG",
             "ZERO",
             "UNAVAILABLE"
           ],
@@ -4568,7 +4575,7 @@
           "condition": "RETURN(asset,5m) < 0",
           "operator": "LT",
           "threshold": "0",
-          "threshold_unit": "signed decimal; fractional return",
+          "threshold_unit": null,
           "metric_references": [
             "RETURN(asset,5m)"
           ],
@@ -4576,6 +4583,7 @@
             "F-004"
           ],
           "output_states": [
+            "SHORT",
             "ZERO",
             "UNAVAILABLE"
           ],
@@ -4707,7 +4715,7 @@
         "blocking_reason": null
       },
       "created_at": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
-      "semantic_hash": "e2edd4b03aadad76ba002f8271607f60cc265e199ed7baed01dc01b18286b643"
+      "semantic_hash": "62811b8882aa0f3286d251c03dea73644a9300c5b8e905991224b8f442a570fa"
     },
     {
       "set_version_id": "SET-R-BTC-008-V2",
@@ -4845,7 +4853,7 @@
           "condition": "RETURN(asset,5m) > 0",
           "operator": "GT",
           "threshold": "0",
-          "threshold_unit": "signed decimal; fractional return",
+          "threshold_unit": null,
           "metric_references": [
             "RETURN(asset,5m)"
           ],
@@ -4853,6 +4861,7 @@
             "F-004"
           ],
           "output_states": [
+            "LONG",
             "ZERO",
             "UNAVAILABLE"
           ],
@@ -4867,7 +4876,7 @@
           "condition": "RETURN(asset,5m) < 0",
           "operator": "LT",
           "threshold": "0",
-          "threshold_unit": "signed decimal; fractional return",
+          "threshold_unit": null,
           "metric_references": [
             "RETURN(asset,5m)"
           ],
@@ -4875,6 +4884,7 @@
             "F-004"
           ],
           "output_states": [
+            "SHORT",
             "ZERO",
             "UNAVAILABLE"
           ],
@@ -5006,7 +5016,7 @@
         "blocking_reason": null
       },
       "created_at": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
-      "semantic_hash": "bd76b26a70b17a68d942381bef8978b0caa704e7c89f031335bf1aaca8e266f9"
+      "semantic_hash": "1565e40a4d38d09316bc3c697c402a9c8aa595755ed3ee34c531d71378d1779a"
     },
     {
       "set_version_id": "SET-R-BTC-009-V2",
@@ -5142,7 +5152,7 @@
           "condition": "RETURN(asset,5m) > 0",
           "operator": "GT",
           "threshold": "0",
-          "threshold_unit": "signed decimal; fractional return",
+          "threshold_unit": null,
           "metric_references": [
             "RETURN(asset,5m)"
           ],
@@ -5150,6 +5160,7 @@
             "F-004"
           ],
           "output_states": [
+            "LONG",
             "ZERO",
             "UNAVAILABLE"
           ],
@@ -5164,7 +5175,7 @@
           "condition": "RETURN(asset,5m) < 0",
           "operator": "LT",
           "threshold": "0",
-          "threshold_unit": "signed decimal; fractional return",
+          "threshold_unit": null,
           "metric_references": [
             "RETURN(asset,5m)"
           ],
@@ -5172,6 +5183,7 @@
             "F-004"
           ],
           "output_states": [
+            "SHORT",
             "ZERO",
             "UNAVAILABLE"
           ],
@@ -5303,7 +5315,7 @@
         "blocking_reason": null
       },
       "created_at": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
-      "semantic_hash": "6fbc2c3069cb294fefb13432ec3a631f495634229ef1e7880250512ef5320e16"
+      "semantic_hash": "125f05447a79a1567634eaa74339c6ab62dc700d62f7fd9a4621e4378ebe4e18"
     },
     {
       "set_version_id": "SET-R-BTC-011-V2",
@@ -5439,7 +5451,7 @@
           "condition": "RETURN(asset,5m) > 0",
           "operator": "GT",
           "threshold": "0",
-          "threshold_unit": "signed decimal; fractional return",
+          "threshold_unit": null,
           "metric_references": [
             "RETURN(asset,5m)"
           ],
@@ -5447,6 +5459,7 @@
             "F-004"
           ],
           "output_states": [
+            "LONG",
             "ZERO",
             "UNAVAILABLE"
           ],
@@ -5461,7 +5474,7 @@
           "condition": "RETURN(asset,5m) < 0",
           "operator": "LT",
           "threshold": "0",
-          "threshold_unit": "signed decimal; fractional return",
+          "threshold_unit": null,
           "metric_references": [
             "RETURN(asset,5m)"
           ],
@@ -5469,6 +5482,7 @@
             "F-004"
           ],
           "output_states": [
+            "SHORT",
             "ZERO",
             "UNAVAILABLE"
           ],
@@ -5600,7 +5614,7 @@
         "blocking_reason": null
       },
       "created_at": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
-      "semantic_hash": "303d9bb6fea62808fd5e6675aa66616bb0a4d2cd3b631fcb8e930fd0cff1c650"
+      "semantic_hash": "9a9c40b889647681db206481810889bfa58ec3208b663b28c2be6332c77a5c6e"
     },
     {
       "set_version_id": "SET-R-BTC-012-V2",
@@ -5736,7 +5750,7 @@
           "condition": "RETURN(asset,5m) > 0",
           "operator": "GT",
           "threshold": "0",
-          "threshold_unit": "signed decimal; fractional return",
+          "threshold_unit": null,
           "metric_references": [
             "RETURN(asset,5m)"
           ],
@@ -5744,6 +5758,7 @@
             "F-004"
           ],
           "output_states": [
+            "LONG",
             "ZERO",
             "UNAVAILABLE"
           ],
@@ -5758,7 +5773,7 @@
           "condition": "RETURN(asset,5m) < 0",
           "operator": "LT",
           "threshold": "0",
-          "threshold_unit": "signed decimal; fractional return",
+          "threshold_unit": null,
           "metric_references": [
             "RETURN(asset,5m)"
           ],
@@ -5766,6 +5781,7 @@
             "F-004"
           ],
           "output_states": [
+            "SHORT",
             "ZERO",
             "UNAVAILABLE"
           ],
@@ -5897,7 +5913,7 @@
         "blocking_reason": null
       },
       "created_at": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
-      "semantic_hash": "a811349032625d4949cc7ed5ef8eef57d78acb27fa345066c6b50ac46bdc5a6a"
+      "semantic_hash": "265c00dd19f3f2e219942b0ff8955684c71bd63149e9974d0ea55d47fef0e122"
     },
     {
       "set_version_id": "SET-R-BTC-015-V2",
@@ -6033,7 +6049,7 @@
           "condition": "RETURN(asset,5m) > 0",
           "operator": "GT",
           "threshold": "0",
-          "threshold_unit": "signed decimal; fractional return",
+          "threshold_unit": null,
           "metric_references": [
             "RETURN(asset,5m)"
           ],
@@ -6041,6 +6057,7 @@
             "F-004"
           ],
           "output_states": [
+            "LONG",
             "ZERO",
             "UNAVAILABLE"
           ],
@@ -6055,7 +6072,7 @@
           "condition": "RETURN(asset,5m) < 0",
           "operator": "LT",
           "threshold": "0",
-          "threshold_unit": "signed decimal; fractional return",
+          "threshold_unit": null,
           "metric_references": [
             "RETURN(asset,5m)"
           ],
@@ -6063,6 +6080,7 @@
             "F-004"
           ],
           "output_states": [
+            "SHORT",
             "ZERO",
             "UNAVAILABLE"
           ],
@@ -6194,7 +6212,7 @@
         "blocking_reason": null
       },
       "created_at": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
-      "semantic_hash": "7291f70076183f2d8c3585c725a554bf14537ecb2e2659dd9dec12ad01c14924"
+      "semantic_hash": "92cd8de92ae0142c629155804ddac1e602466e189f2381a541033fe47b7cc946"
     },
     {
       "set_version_id": "SET-R-BTC-016-V2",
@@ -6284,7 +6302,7 @@
           "condition": "RETURN(asset,5m) > 0",
           "operator": "GT",
           "threshold": "0",
-          "threshold_unit": "signed decimal; fractional return",
+          "threshold_unit": null,
           "metric_references": [
             "RETURN(asset,5m)"
           ],
@@ -6292,6 +6310,7 @@
             "F-004"
           ],
           "output_states": [
+            "LONG",
             "ZERO",
             "UNAVAILABLE"
           ],
@@ -6306,7 +6325,7 @@
           "condition": "RETURN(asset,5m) < 0",
           "operator": "LT",
           "threshold": "0",
-          "threshold_unit": "signed decimal; fractional return",
+          "threshold_unit": null,
           "metric_references": [
             "RETURN(asset,5m)"
           ],
@@ -6314,6 +6333,7 @@
             "F-004"
           ],
           "output_states": [
+            "SHORT",
             "ZERO",
             "UNAVAILABLE"
           ],
@@ -6328,7 +6348,7 @@
           "condition": "RETURN(asset,5m) > 0",
           "operator": "GT",
           "threshold": "0",
-          "threshold_unit": "signed decimal; fractional return",
+          "threshold_unit": null,
           "metric_references": [
             "RETURN(asset,5m)"
           ],
@@ -6336,6 +6356,7 @@
             "F-004"
           ],
           "output_states": [
+            "LONG",
             "ZERO",
             "UNAVAILABLE"
           ],
@@ -6350,7 +6371,7 @@
           "condition": "RETURN(asset,5m) < 0",
           "operator": "LT",
           "threshold": "0",
-          "threshold_unit": "signed decimal; fractional return",
+          "threshold_unit": null,
           "metric_references": [
             "RETURN(asset,5m)"
           ],
@@ -6358,6 +6379,7 @@
             "F-004"
           ],
           "output_states": [
+            "SHORT",
             "ZERO",
             "UNAVAILABLE"
           ],
@@ -6489,7 +6511,7 @@
         "blocking_reason": null
       },
       "created_at": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
-      "semantic_hash": "29020e2c0f40c8311bb834df8be0bf37e48aab51910730e66ea5bed7e619f8bf"
+      "semantic_hash": "27869473b955d130ab57c78bc7b8311baade5f63af7e44fa75ec4b48246f779b"
     },
     {
       "set_version_id": "SET-R-BTC-019-V1",
@@ -6602,7 +6624,7 @@
           "condition": "RETURN(asset,5m) > 0",
           "operator": "GT",
           "threshold": "0",
-          "threshold_unit": "signed decimal; fractional return",
+          "threshold_unit": null,
           "metric_references": [
             "RETURN(asset,5m)"
           ],
@@ -6610,6 +6632,7 @@
             "F-004"
           ],
           "output_states": [
+            "LONG",
             "ZERO",
             "UNAVAILABLE"
           ],
@@ -6624,7 +6647,7 @@
           "condition": "RETURN(asset,5m) < 0",
           "operator": "LT",
           "threshold": "0",
-          "threshold_unit": "signed decimal; fractional return",
+          "threshold_unit": null,
           "metric_references": [
             "RETURN(asset,5m)"
           ],
@@ -6632,6 +6655,7 @@
             "F-004"
           ],
           "output_states": [
+            "SHORT",
             "ZERO",
             "UNAVAILABLE"
           ],
@@ -6763,7 +6787,7 @@
         "blocking_reason": null
       },
       "created_at": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
-      "semantic_hash": "d669ecaf33f0d6b85f8f571ac22ff8a568b2fb8473bc7ab80db471d078636716"
+      "semantic_hash": "b27c961e8874d05f2abc4fdfd4f81bee28279d873c4cac3895dd78c943efe4c8"
     },
     {
       "set_version_id": "SET-R-BTC-019-V2",
@@ -6876,7 +6900,7 @@
           "condition": "RETURN(asset,5m) > 0",
           "operator": "GT",
           "threshold": "0",
-          "threshold_unit": "signed decimal; fractional return",
+          "threshold_unit": null,
           "metric_references": [
             "RETURN(asset,5m)"
           ],
@@ -6884,6 +6908,7 @@
             "F-004"
           ],
           "output_states": [
+            "LONG",
             "ZERO",
             "UNAVAILABLE"
           ],
@@ -6898,7 +6923,7 @@
           "condition": "RETURN(asset,5m) < 0",
           "operator": "LT",
           "threshold": "0",
-          "threshold_unit": "signed decimal; fractional return",
+          "threshold_unit": null,
           "metric_references": [
             "RETURN(asset,5m)"
           ],
@@ -6906,6 +6931,7 @@
             "F-004"
           ],
           "output_states": [
+            "SHORT",
             "ZERO",
             "UNAVAILABLE"
           ],
@@ -7037,7 +7063,7 @@
         "blocking_reason": null
       },
       "created_at": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
-      "semantic_hash": "459663f0f5be771bd64dbcfc063749bb7fb79f3b46ae2df41bf0e22ffd7f3fd1"
+      "semantic_hash": "e5642b2de7afd80439355301d53cab5208d839738ac745a8c3614264c5eef8e5"
     },
     {
       "set_version_id": "SET-R-BTC-020-V1",
@@ -7150,7 +7176,7 @@
           "condition": "RETURN(asset,5m) > 0",
           "operator": "GT",
           "threshold": "0",
-          "threshold_unit": "signed decimal; fractional return",
+          "threshold_unit": null,
           "metric_references": [
             "RETURN(asset,5m)"
           ],
@@ -7158,6 +7184,7 @@
             "F-004"
           ],
           "output_states": [
+            "LONG",
             "ZERO",
             "UNAVAILABLE"
           ],
@@ -7172,7 +7199,7 @@
           "condition": "RETURN(asset,5m) < 0",
           "operator": "LT",
           "threshold": "0",
-          "threshold_unit": "signed decimal; fractional return",
+          "threshold_unit": null,
           "metric_references": [
             "RETURN(asset,5m)"
           ],
@@ -7180,6 +7207,7 @@
             "F-004"
           ],
           "output_states": [
+            "SHORT",
             "ZERO",
             "UNAVAILABLE"
           ],
@@ -7311,7 +7339,7 @@
         "blocking_reason": null
       },
       "created_at": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
-      "semantic_hash": "6d66e6e81e8ac8bdc057ed7e36df5973cc3f857da900531b0720d6dfabf56c56"
+      "semantic_hash": "3c8da8530ee201c87c85797a511c8351cdcb73b57b8ade9ad0b2bbe7e855c7ed"
     },
     {
       "set_version_id": "SET-R-BTC-020-V2",
@@ -7424,7 +7452,7 @@
           "condition": "RETURN(asset,5m) > 0",
           "operator": "GT",
           "threshold": "0",
-          "threshold_unit": "signed decimal; fractional return",
+          "threshold_unit": null,
           "metric_references": [
             "RETURN(asset,5m)"
           ],
@@ -7432,6 +7460,7 @@
             "F-004"
           ],
           "output_states": [
+            "LONG",
             "ZERO",
             "UNAVAILABLE"
           ],
@@ -7446,7 +7475,7 @@
           "condition": "RETURN(asset,5m) < 0",
           "operator": "LT",
           "threshold": "0",
-          "threshold_unit": "signed decimal; fractional return",
+          "threshold_unit": null,
           "metric_references": [
             "RETURN(asset,5m)"
           ],
@@ -7454,6 +7483,7 @@
             "F-004"
           ],
           "output_states": [
+            "SHORT",
             "ZERO",
             "UNAVAILABLE"
           ],
@@ -7585,7 +7615,7 @@
         "blocking_reason": null
       },
       "created_at": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
-      "semantic_hash": "354d847e0004c5ad13ca1a5542547963ba8e23d5a40ba14304f6309d8e2084bf"
+      "semantic_hash": "836a16d985fa65a6f2f2acd4ca3c5c0c68474dda0a157b8642092f0f2ef2c9b9"
     },
     {
       "set_version_id": "SET-R-BTC-021-V1",
@@ -7721,7 +7751,7 @@
           "condition": "RETURN(asset,5m) > 0",
           "operator": "GT",
           "threshold": "0",
-          "threshold_unit": "signed decimal; fractional return",
+          "threshold_unit": null,
           "metric_references": [
             "RETURN(asset,5m)"
           ],
@@ -7729,6 +7759,7 @@
             "F-004"
           ],
           "output_states": [
+            "LONG",
             "ZERO",
             "UNAVAILABLE"
           ],
@@ -7743,7 +7774,7 @@
           "condition": "RETURN(asset,5m) < 0",
           "operator": "LT",
           "threshold": "0",
-          "threshold_unit": "signed decimal; fractional return",
+          "threshold_unit": null,
           "metric_references": [
             "RETURN(asset,5m)"
           ],
@@ -7751,6 +7782,7 @@
             "F-004"
           ],
           "output_states": [
+            "SHORT",
             "ZERO",
             "UNAVAILABLE"
           ],
@@ -7882,7 +7914,7 @@
         "blocking_reason": null
       },
       "created_at": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
-      "semantic_hash": "c817fe1038d2e6d3ff2ef8fc370928595b7388147c285af1d7195473d0394dbb"
+      "semantic_hash": "96cd6313b55619667f17132cd62a5b49e9e6203b7f1201ade56f1ce76f85866a"
     },
     {
       "set_version_id": "SET-R-BTC-021-V2",
@@ -8018,7 +8050,7 @@
           "condition": "RETURN(asset,5m) > 0",
           "operator": "GT",
           "threshold": "0",
-          "threshold_unit": "signed decimal; fractional return",
+          "threshold_unit": null,
           "metric_references": [
             "RETURN(asset,5m)"
           ],
@@ -8026,6 +8058,7 @@
             "F-004"
           ],
           "output_states": [
+            "LONG",
             "ZERO",
             "UNAVAILABLE"
           ],
@@ -8040,7 +8073,7 @@
           "condition": "RETURN(asset,5m) < 0",
           "operator": "LT",
           "threshold": "0",
-          "threshold_unit": "signed decimal; fractional return",
+          "threshold_unit": null,
           "metric_references": [
             "RETURN(asset,5m)"
           ],
@@ -8048,6 +8081,7 @@
             "F-004"
           ],
           "output_states": [
+            "SHORT",
             "ZERO",
             "UNAVAILABLE"
           ],
@@ -8179,7 +8213,7 @@
         "blocking_reason": null
       },
       "created_at": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
-      "semantic_hash": "700b5a93ea19d6d39bb0a04ce04af4d8b359954f0e3a5202075eb8b05e971ae0"
+      "semantic_hash": "9d98d6f495e3858082795e839d35f12e91b9bdb7010d6a62623a94e36751f0b1"
     }
   ],
   "validation": {
