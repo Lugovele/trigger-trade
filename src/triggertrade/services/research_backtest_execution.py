@@ -453,6 +453,8 @@ def _validate_authoritative_trigger_set(*, research: ResearchRecord, trigger_set
 def _backtest_unavailable_reason(exc: Exception) -> str:
     text = str(exc).lower()
     if isinstance(exc, HistoricalDataError):
+        if text.startswith("research_v1_historical_"):
+            return text
         if "empty" in text:
             return "historical_candles_empty"
         if any(token in text for token in ("gap", "boundary", "requested", "start", "end", "warmup")):

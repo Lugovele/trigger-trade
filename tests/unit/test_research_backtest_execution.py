@@ -14,6 +14,7 @@ from triggertrade.persistence import ResearchBacktestRunRecord, ResearchBacktest
 from triggertrade.research_pins import research_run_pin_payload
 from triggertrade.services.research_backtest_execution import (
     CanonicalResearchBacktestExecutionExecutor,
+    _backtest_unavailable_reason,
     _run_research_v1_certified_position_backtest,
 )
 from tests.unit.test_backtest_replay import _config, _instrument, _trade_candles
@@ -196,6 +197,13 @@ def test_research_v1_backtest_fails_closed_without_factual_historical_market_han
             instrument=_instrument(),
             portfolio_state=object(),
         )
+
+
+def test_research_v1_historical_fail_closed_reason_is_preserved():
+    reason = _backtest_unavailable_reason(HistoricalDataError("research_v1_historical_market_handoff_unavailable"))
+
+    assert reason == "research_v1_historical_market_handoff_unavailable"
+    assert reason != "historical_fetch_failed"
 
 
 class _FakeHistoricalSource:
