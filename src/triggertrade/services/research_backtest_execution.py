@@ -238,18 +238,28 @@ class CanonicalResearchBacktestExecutionExecutor:
         with PostgresUnitOfWork(self._factory) as uow:
             config_registry = PostgresResearchConfigurationRegistry(uow.connection)
             sets = PostgresResearchSetRegistry(uow.connection).list_research_sets()
-            rules = config_registry.get_trading_rules_version(definition.selected_binding.rules_version_id)
-        if rules is None:
+            rules_by_id = {
+                binding.rules_version_id: config_registry.get_trading_rules_version(binding.rules_version_id)
+                for binding in definition.execution_bindings
+            }
+        if any(rules is None for rules in rules_by_id.values()):
             raise PostgresPersistenceError("research_v1_rules_configuration_missing")
         set_by_version = {item.set_version: item for item in sets}
         resolve_research_v1_symbol_bindings(definition, available_sets=set_by_version, instrument_resolver=self._instrument_provider)
-        portfolio = ResearchV1SharedPortfolioState(
-            total_capital=Decimal("1000"),
-            max_capital_in_positions_pct=rules.draft.max_capital_in_positions_pct,
-            allocation_by_symbol={coin.symbol.upper(): coin.max_allocation_pct for coin in rules.draft.coins if coin.enabled and coin.max_allocation_pct is not None},
-            max_open_positions=rules.draft.max_open_positions or 1,
-            max_positions_per_coin=rules.draft.max_positions_per_coin or 1,
-        )
+
+        def portfolio_for_rules(rules_version_id: str) -> ResearchV1SharedPortfolioState:
+            rules = rules_by_id[rules_version_id]
+            if rules is None:
+                raise PostgresPersistenceError("research_v1_rules_configuration_missing")
+            return ResearchV1SharedPortfolioState(
+                total_capital=Decimal("1000"),
+                max_capital_in_positions_pct=rules.draft.max_capital_in_positions_pct,
+                allocation_by_symbol={coin.symbol.upper(): coin.max_allocation_pct for coin in rules.draft.coins if coin.enabled and coin.max_allocation_pct is not None},
+                max_open_positions=rules.draft.max_open_positions or 1,
+                max_positions_per_coin=rules.draft.max_positions_per_coin or 1,
+            )
+
+        portfolio = portfolio_for_rules(definition.selected_binding.rules_version_id)
 
         def runner(binding, portfolio_state):
             research_set = set_by_version[str(binding.set_version_id)]
@@ -303,6 +313,7 @@ class CanonicalResearchBacktestExecutionExecutor:
             run_profile=_backtest_run_profile(record),
             portfolio=portfolio,
             symbol_runner=runner,
+            portfolio_factory=lambda cell: portfolio_for_rules(cell.rules_version_id),
         )
         closed_trades = sum(int(item.get("closed_trades") or 0) for item in result.symbol_results)
         status = ResearchBacktestStatus.COMPLETED if closed_trades > 0 else ResearchBacktestStatus.COMPLETED_NO_TRADES

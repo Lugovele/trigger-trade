@@ -754,6 +754,12 @@ class PostgresResearchConfigurationRegistryClient:
         with PostgresUnitOfWork(self._factory) as uow:
             PostgresResearchConfigurationRegistry(uow.connection).put_trading_rules_version(rules)
 
+    def get_trading_rules_version(self, rules_version_id: str) -> TradingRulesVersion | None:
+        with PostgresUnitOfWork(self._factory) as uow:
+            return PostgresResearchConfigurationRegistry(uow.connection).get_trading_rules_version(
+                rules_version_id
+            )
+
     def get_research_demo_configuration(
         self,
         *,

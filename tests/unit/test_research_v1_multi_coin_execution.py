@@ -41,6 +41,7 @@ from triggertrade.services.research import (
 from triggertrade.rules import TradingRulesVersion
 from triggertrade.rules.trading import CoinRule, StopLossMode, TakeProfitMode, draft_from_json
 from triggertrade.services.research import _backtest_block_reason
+from triggertrade.persistence.postgres_research_registry import PostgresResearchConfigurationRegistryClient
 from tests.unit.test_backtest_replay import _config
 from triggertrade.config import load_config
 from tests.unit.test_research_demo_execution import _demo_runtime_env
@@ -79,6 +80,64 @@ def test_research_v1_execution_pin_covers_full_symbol_set_and_allocation_binding
     changed = json.loads(json.dumps(payload))
     changed["config_pins"]["research_v1_execution"]["allocation_by_symbol"]["BTCUSDT"] = "0.20"
     assert canonical_json_digest(changed) != digest
+
+
+def test_r001_remains_ordinary_baseline_variant_binding_model():
+    definition = build_research_v1_execution_definition("R-001")
+
+    assert definition.set_binding_model == "SYMBOL_SET_BINDING"
+    assert definition.rules_binding_model == "ARM_TRADING_RULES_VERSION"
+    assert definition.selected_arm == "VARIANT"
+    assert definition.baseline.btc.set_version_id == "SET-R-BTC-001-V1"
+    assert definition.baseline.non_btc.set_version_id == "SET-R-001-V1"
+    assert definition.variant.btc.set_version_id == "SET-R-BTC-001-V2"
+    assert definition.variant.non_btc.set_version_id == "SET-R-001-V2"
+    assert tuple(binding.arm for binding in definition.execution_bindings) == ("VARIANT",)
+
+
+def test_r029_parses_exact_four_interaction_cells():
+    definition = build_research_v1_execution_definition("R-029")
+
+    assert definition.set_binding_model == "INTERACTION_CELL_SYMBOL_SET_BINDING"
+    assert definition.rules_binding_model == "INTERACTION_CELL_TRADING_RULES_VERSION"
+    assert definition.selected_arm == "11"
+    assert tuple(definition.interaction_cells) == ("00", "01", "10", "11")
+    assert _cell_tuple(definition, "00") == ("SET-R-BTC-001-V1", "SET-R-001-V1", "TRV-R-POS-001-PR-201")
+    assert _cell_tuple(definition, "01") == ("SET-R-BTC-001-V1", "SET-R-001-V1", "TRV-R-POS-001-PR-207")
+    assert _cell_tuple(definition, "10") == ("SET-R-BTC-003-V2", "SET-R-003-V2", "TRV-R-POS-001-PR-201")
+    assert _cell_tuple(definition, "11") == ("SET-R-BTC-003-V2", "SET-R-003-V2", "TRV-R-POS-001-PR-207")
+
+
+def test_r030_parses_exact_four_interaction_cells():
+    definition = build_research_v1_execution_definition("R-030")
+
+    assert definition.set_binding_model == "INTERACTION_CELL_SYMBOL_SET_BINDING"
+    assert definition.rules_binding_model == "INTERACTION_CELL_TRADING_RULES_VERSION"
+    assert definition.selected_arm == "11"
+    assert _cell_tuple(definition, "00") == ("SET-R-BTC-001-V1", "SET-R-001-V1", "TRV-R-POS-001-PR-201")
+    assert _cell_tuple(definition, "01") == ("SET-R-BTC-001-V1", "SET-R-001-V1", "TRV-R-POS-001-PR-201")
+    assert _cell_tuple(definition, "10") == ("SET-R-BTC-001-V2", "SET-R-001-V2", "TRV-R-POS-003-PR-201")
+    assert _cell_tuple(definition, "11") == ("SET-R-BTC-001-V2", "SET-R-001-V2", "TRV-R-POS-003-PR-201")
+
+
+def test_interaction_pin_payload_and_roundtrip_preserve_all_four_cells():
+    definition = build_research_v1_execution_definition("R-029")
+    payload = research_v1_config_pin_payload(
+        definition,
+        created_source="unit",
+        instrument_resolver=lambda symbol: SimpleNamespace(symbol=symbol),
+    )
+    config = payload["config_pins"]["research_v1_execution"]
+    reconstructed = research_v1_definition_from_pin_payload(payload)
+
+    assert config["set_binding_model"] == "INTERACTION_CELL_SYMBOL_SET_BINDING"
+    assert config["rules_binding_model"] == "INTERACTION_CELL_TRADING_RULES_VERSION"
+    assert tuple(config["interaction_cells"]) == ("00", "01", "10", "11")
+    assert tuple(config["cell_symbol_bindings"]) == ("00", "01", "10", "11")
+    assert config["cell_symbol_bindings"]["00"][0]["cell_id"] == "00"
+    assert config["cell_symbol_bindings"]["11"][0]["set_version_id"] == "SET-R-BTC-003-V2"
+    assert tuple(reconstructed.interaction_cells) == ("00", "01", "10", "11")
+    assert _cell_tuple(reconstructed, "01") == ("SET-R-BTC-001-V1", "SET-R-001-V1", "TRV-R-POS-001-PR-207")
 
 
 def test_research_v1_symbol_resolver_binds_btc_and_non_btc_sets_exactly():
@@ -212,6 +271,43 @@ def test_research_v1_backtest_orchestration_preserves_symbol_set_attribution():
     assert {set_id for symbol, set_id, _shared in calls if symbol != "BTCUSDT"} == {"SET-R-001-V2"}
     assert len(result.symbol_results) == 10
     assert result.symbol_results[0]["set_version_id"] == "SET-R-BTC-001-V2"
+
+
+def test_interaction_backtest_executes_all_four_cells_with_isolated_portfolios():
+    definition = build_research_v1_execution_definition("R-029")
+    portfolio = ResearchV1SharedPortfolioState(
+        total_capital=Decimal("1000"),
+        max_capital_in_positions_pct=Decimal("0.25"),
+        allocation_by_symbol=RESEARCH_V1_ALLOCATION_BY_SYMBOL,
+        max_open_positions=4,
+        max_positions_per_coin=2,
+    )
+    observed = []
+
+    def runner(binding, shared_portfolio):
+        observed.append((binding.cell_id, binding.symbol, shared_portfolio.committed_capital, shared_portfolio.available_capital))
+        if binding.symbol == "BTCUSDT":
+            return {"status": "OBSERVED"}, shared_portfolio.reserve(binding.symbol, Decimal("100"))
+        if binding.symbol == "ETHUSDT":
+            return {"status": "OBSERVED"}, shared_portfolio.reserve(binding.symbol, Decimal("100"))
+        return {"status": "OBSERVED"}, shared_portfolio
+
+    result = run_research_v1_backtest_orchestration(
+        definition,
+        available_sets=_research_v1_sets_by_version(),
+        run_profile="BACKTEST_7D",
+        portfolio=portfolio,
+        symbol_runner=runner,
+    )
+
+    assert len(result.symbol_results) == 40
+    assert {item["cell_id"] for item in result.symbol_results} == {"00", "01", "10", "11"}
+    assert observed[0] == ("00", "BTCUSDT", Decimal("0"), Decimal("250.00"))
+    assert observed[1] == ("00", "ETHUSDT", Decimal("100"), Decimal("150.00"))
+    assert observed[2] == ("00", "SOLUSDT", Decimal("200"), Decimal("50.00"))
+    assert observed[10] == ("01", "BTCUSDT", Decimal("0"), Decimal("250.00"))
+    assert result.portfolio_snapshot["00"]["committed_capital"] == "200"
+    assert result.portfolio_snapshot["01"]["committed_capital"] == "200"
 
 
 def test_research_v1_orchestration_propagates_shared_portfolio_state_between_symbols():
@@ -540,11 +636,136 @@ def test_durable_demo_worker_passes_accumulated_shared_portfolio_state(monkeypat
     assert result["cycle"]["portfolio"]["committed_capital"] == "200"
 
 
+def test_durable_demo_worker_uses_cell_qualified_runtime_scope_for_interactions(monkeypatch):
+    rules = {
+        rule_id: replace(_fixed_research_v1_rule(rule_id), draft=replace(_fixed_research_v1_rule(rule_id).draft, max_capital_in_positions_pct=Decimal("0.25")))
+        for rule_id in ("TRV-R-POS-001-PR-201", "TRV-R-POS-001-PR-207")
+    }
+    research = _research_v1_record("R-029")
+    record = SimpleNamespace(research_id=research.research_id, demo_run_id="rdm-v1", rules_version_id=research.rules_version_id)
+    observed = []
+
+    class FakeRegistry:
+        def __init__(self, _connection):
+            pass
+
+        def get_trading_rules_version(self, rules_version_id):
+            return rules.get(rules_version_id)
+
+    class FakeSetRegistry:
+        def __init__(self, _connection):
+            pass
+
+        def list_research_sets(self):
+            return tuple(_research_v1_sets_by_version().values())
+
+    class FakeCycle:
+        canonical_research_demo_trading_cycle = True
+
+        def run_research_demo_cycle(self, *, record, configuration):
+            state = configuration.research_v1_portfolio_state
+            symbol = configuration.trigger_set.symbol
+            cell_id = record.demo_run_id.rsplit("cell-", 1)[-1]
+            observed.append((cell_id, record.demo_run_id, symbol, state.committed_capital))
+            events = ()
+            if symbol == "BTCUSDT":
+                events = (
+                    {
+                        "action": "RESERVE",
+                        "symbol": symbol,
+                        "actual_committed_capital": "100",
+                        "canonical_source": "lifecycle_start_gate.held_committed_capital",
+                    },
+                )
+            return {
+                "canonical_cycle": True,
+                "research_v1_portfolio_events": events,
+            }
+
+    monkeypatch.setattr("triggertrade.services.research_demo_execution.PostgresUnitOfWork", _FakeUnitOfWork)
+    monkeypatch.setattr("triggertrade.services.research_demo_execution.PostgresResearchConfigurationRegistry", FakeRegistry)
+    monkeypatch.setattr("triggertrade.services.research_demo_execution.PostgresResearchSetRegistry", FakeSetRegistry)
+    executor = CanonicalResearchDemoExecutionExecutor(
+        config=load_config(_demo_runtime_env()),
+        factory=object(),
+        trading_cycle=FakeCycle(),
+        accounting_store=SimpleNamespace(list_closed_trades=lambda limit=20: ()),
+    )
+
+    result = executor._start_research_v1_demo(record, research)
+
+    assert len(result["cycle"]["symbol_results"]) == 40
+    assert {item["cell_id"] for item in result["cycle"]["symbol_results"]} == {"00", "01", "10", "11"}
+    assert observed[0] == ("00", "rdm-v1:cell-00", "BTCUSDT", Decimal("0"))
+    assert observed[1] == ("00", "rdm-v1:cell-00", "ETHUSDT", Decimal("100"))
+    assert observed[10] == ("01", "rdm-v1:cell-01", "BTCUSDT", Decimal("0"))
+
+
+def test_research_v1_preflight_all_30_definitions_resolve_symbols_and_rules():
+    sets = _research_v1_sets_by_version()
+    rules = _research_v1_rules()
+    spec = load_research_v1_build_spec()
+    definitions = [item["research_id"] for item in spec["research_definitions"]]
+    unique_rules = set()
+
+    for research_id in definitions:
+        definition = build_research_v1_execution_definition(research_id, spec=spec)
+        for binding in definition.execution_bindings:
+            assert binding.rules_version_id in rules
+            unique_rules.add(binding.rules_version_id)
+        symbol_bindings = resolve_research_v1_symbol_bindings(
+            definition,
+            available_sets=sets,
+            instrument_resolver=lambda symbol: SimpleNamespace(symbol=symbol),
+        )
+        assert len(symbol_bindings) == 10
+
+    assert len(definitions) == 30
+    assert len(unique_rules) == 16
+
+
+def test_postgres_research_configuration_registry_client_gets_exact_rules_version(monkeypatch):
+    expected = _fixed_research_v1_rule("TRV-R-POS-001-PR-201")
+    calls = []
+
+    class FakeUnitOfWork:
+        def __init__(self, factory):
+            self.connection = object()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeRegistry:
+        def __init__(self, connection):
+            pass
+
+        def get_trading_rules_version(self, rules_version_id):
+            calls.append(rules_version_id)
+            return expected if rules_version_id == expected.rules_version_id else None
+
+    monkeypatch.setattr("triggertrade.persistence.postgres_research_registry.PostgresUnitOfWork", FakeUnitOfWork)
+    monkeypatch.setattr("triggertrade.persistence.postgres_research_registry.PostgresResearchConfigurationRegistry", FakeRegistry)
+
+    client = PostgresResearchConfigurationRegistryClient(object())
+
+    assert client.get_trading_rules_version(expected.rules_version_id) == expected
+    assert client.get_trading_rules_version("missing") is None
+    assert calls == [expected.rules_version_id, "missing"]
+
+
 def _plan(symbol):
     from datetime import UTC, datetime
     from triggertrade.backtest import BacktestPlan
 
     return BacktestPlan(symbol, "linear", "1m", datetime(2026, 9, 1, tzinfo=UTC), datetime(2026, 9, 2, tzinfo=UTC))
+
+
+def _cell_tuple(definition, cell_id: str) -> tuple[str | None, str | None, str]:
+    cell = definition.interaction_cells[cell_id]
+    return (cell.btc.set_version_id, cell.non_btc.set_version_id, cell.rules_version_id)
 
 
 def _research_v1_record(research_id: str) -> ResearchRecord:

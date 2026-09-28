@@ -65,6 +65,7 @@ class ResearchV1SymbolBinding:
     applicability: str
     reason: str | None
     arm: str
+    cell_id: str | None
     set_version_id: str | None
     set_id: str | None
     set_version: str | None
@@ -80,10 +81,13 @@ class ResearchV1ExecutionDefinition:
     program_id: str
     methodology_baseline: str
     selected_arm: str
+    set_binding_model: str
+    rules_binding_model: str
     primary_set_version_id: str
     primary_rules_version_id: str
     baseline: ResearchV1ArmBinding
     variant: ResearchV1ArmBinding
+    interaction_cells: Mapping[str, ResearchV1ArmBinding]
     universe_id: str
     ordered_assets: tuple[str, ...]
     ordered_symbols: tuple[str, ...]
@@ -102,11 +106,26 @@ class ResearchV1ExecutionDefinition:
 
     @property
     def selected_binding(self) -> ResearchV1ArmBinding:
+        if self.is_interaction:
+            try:
+                return self.interaction_cells[self.selected_arm]
+            except KeyError as exc:
+                raise ResearchV1ExecutionError(f"unsupported Research V1 interaction cell: {self.selected_arm}") from exc
         if self.selected_arm == "BASELINE":
             return self.baseline
         if self.selected_arm == "VARIANT":
             return self.variant
         raise ResearchV1ExecutionError(f"unsupported Research V1 arm: {self.selected_arm}")
+
+    @property
+    def is_interaction(self) -> bool:
+        return self.set_binding_model == "INTERACTION_CELL_SYMBOL_SET_BINDING"
+
+    @property
+    def execution_bindings(self) -> tuple[ResearchV1ArmBinding, ...]:
+        if not self.is_interaction:
+            return (self.selected_binding,)
+        return tuple(self.interaction_cells[cell_id] for cell_id in ("00", "01", "10", "11"))
 
 
 @dataclass(frozen=True)
@@ -308,9 +327,23 @@ def build_research_v1_execution_definition(
         record = definitions[research_id]
     except KeyError as exc:
         raise ResearchV1ExecutionError(f"unknown Research V1 definition: {research_id}") from exc
-    selected = str(selected_arm or _mapping(record.get("set_version_bindings"), "set_version_bindings").get("primary_arm") or "VARIANT").upper()
-    baseline = _arm_binding(record, "BASELINE")
-    variant = _arm_binding(record, "VARIANT")
+    set_bindings = _mapping(record.get("set_version_bindings"), "set_version_bindings")
+    rules_bindings = _mapping(record.get("rules_version_bindings"), "rules_version_bindings")
+    set_binding_model = str(set_bindings.get("binding_model") or "")
+    rules_binding_model = str(rules_bindings.get("binding_model") or "")
+    selected = str(selected_arm or set_bindings.get("primary_arm") or "VARIANT").upper()
+    if set_binding_model == "SYMBOL_SET_BINDING" and rules_binding_model == "ARM_TRADING_RULES_VERSION":
+        baseline = _arm_binding(record, "BASELINE")
+        variant = _arm_binding(record, "VARIANT")
+        interaction_cells: dict[str, ResearchV1ArmBinding] = {}
+    elif set_binding_model == "INTERACTION_CELL_SYMBOL_SET_BINDING" and rules_binding_model == "INTERACTION_CELL_TRADING_RULES_VERSION":
+        if selected not in {"00", "01", "10", "11"}:
+            raise ResearchV1ExecutionError(f"unsupported Research V1 interaction primary cell: {selected}")
+        interaction_cells = _interaction_cell_bindings(record)
+        baseline = interaction_cells["00"]
+        variant = interaction_cells["11"]
+    else:
+        raise ResearchV1ExecutionError(f"unsupported Research V1 binding model: {set_binding_model}/{rules_binding_model}")
     universe = _universe_profile(payload)
     allocation = _allocation_profile(payload)
     return ResearchV1ExecutionDefinition(
@@ -321,10 +354,13 @@ def build_research_v1_execution_definition(
         program_id=str(_mapping(payload.get("research_program"), "research_program")["program_id"]),
         methodology_baseline=str(_mapping(payload.get("research_program"), "research_program")["methodology_baseline"]),
         selected_arm=selected,
+        set_binding_model=set_binding_model,
+        rules_binding_model=rules_binding_model,
         primary_set_version_id=str(record["set_version_id"]),
         primary_rules_version_id=str(record["rules_version_id"]),
         baseline=baseline,
         variant=variant,
+        interaction_cells=interaction_cells,
         universe_id=str(record["universe_id"]),
         ordered_assets=tuple(str(item["asset"]) for item in universe["ordered_assets"]),
         ordered_symbols=tuple(f"{item['asset']}USDT" for item in universe["ordered_assets"]),
@@ -348,9 +384,10 @@ def resolve_research_v1_symbol_bindings(
     *,
     available_sets: Mapping[str, ResearchSetVersion] | Sequence[ResearchSetVersion],
     instrument_resolver: Callable[[str], object] | None = None,
+    binding: ResearchV1ArmBinding | None = None,
 ) -> tuple[ResearchV1SymbolBinding, ...]:
     set_map = _set_map(available_sets)
-    selected = definition.selected_binding
+    selected = binding or definition.selected_binding
     bindings: list[ResearchV1SymbolBinding] = []
     for asset in definition.ordered_assets:
         symbol = f"{asset}USDT"
@@ -399,11 +436,29 @@ def research_v1_config_pin_payload(
                 "hypothesis_id": definition.hypothesis_id,
                 "title": definition.title,
                 "selected_arm": definition.selected_arm,
+                "set_binding_model": definition.set_binding_model,
+                "rules_binding_model": definition.rules_binding_model,
                 "primary_set_version_id": definition.primary_set_version_id,
                 "primary_rules_version_id": definition.primary_rules_version_id,
                 "baseline": _arm_payload(definition.baseline),
                 "variant": _arm_payload(definition.variant),
+                "interaction_cells": {
+                    cell_id: _arm_payload(binding)
+                    for cell_id, binding in sorted(definition.interaction_cells.items())
+                },
                 "symbol_bindings": tuple(_binding_payload(binding) for binding in symbol_bindings),
+                "cell_symbol_bindings": {
+                    cell_id: tuple(
+                        _binding_payload(binding)
+                        for binding in resolve_research_v1_symbol_bindings(
+                            definition,
+                            available_sets={item.set_version_id: _stub_set(item) for item in (cell.btc, cell.non_btc) if item.set_version_id},
+                            instrument_resolver=instrument_resolver,
+                            binding=cell,
+                        )
+                    )
+                    for cell_id, cell in sorted(definition.interaction_cells.items())
+                },
                 "universe_id": definition.universe_id,
                 "ordered_assets": definition.ordered_assets,
                 "ordered_universe": definition.ordered_assets,
@@ -449,6 +504,10 @@ def research_v1_definition_from_pin_payload(pin_payload: Mapping[str, Any]) -> R
     config = _research_v1_pin_config(pin_payload)
     baseline = _arm_from_pin(_mapping(config.get("baseline"), "baseline"))
     variant = _arm_from_pin(_mapping(config.get("variant"), "variant"))
+    interaction_cells = {
+        str(cell_id): _arm_from_pin(_mapping(cell, f"interaction cell {cell_id}"))
+        for cell_id, cell in _mapping(config.get("interaction_cells") or {}, "interaction_cells").items()
+    }
     allocation = {
         str(symbol): Decimal(str(value))
         for symbol, value in _mapping(config.get("allocation_by_symbol"), "allocation_by_symbol").items()
@@ -461,10 +520,13 @@ def research_v1_definition_from_pin_payload(pin_payload: Mapping[str, Any]) -> R
         program_id=str(config["program_id"]),
         methodology_baseline=str(config["methodology_baseline"]),
         selected_arm=str(config["selected_arm"]),
+        set_binding_model=str(config.get("set_binding_model") or "SYMBOL_SET_BINDING"),
+        rules_binding_model=str(config.get("rules_binding_model") or "ARM_TRADING_RULES_VERSION"),
         primary_set_version_id=str(config["primary_set_version_id"]),
         primary_rules_version_id=str(config["primary_rules_version_id"]),
         baseline=baseline,
         variant=variant,
+        interaction_cells=interaction_cells,
         universe_id=str(config["universe_id"]),
         ordered_assets=tuple(str(item) for item in config.get("ordered_assets") or config.get("ordered_universe") or ()),
         ordered_symbols=tuple(str(item) for item in config.get("ordered_symbols") or ()),
@@ -509,10 +571,11 @@ def run_research_v1_backtest_orchestration(
     run_profile: str,
     portfolio: ResearchV1SharedPortfolioState,
     symbol_runner: Callable[[ResearchV1SymbolBinding, ResearchV1SharedPortfolioState], Mapping[str, Any] | tuple[Mapping[str, Any], ResearchV1SharedPortfolioState]],
+    portfolio_factory: Callable[[ResearchV1ArmBinding], ResearchV1SharedPortfolioState] | None = None,
 ) -> ResearchV1ExecutionResult:
     if run_profile not in RESEARCH_V1_RUN_PROFILES or not run_profile.startswith("BACKTEST_"):
         raise ResearchV1ExecutionError("unsupported Research V1 backtest run profile")
-    return _run_research_v1_orchestration(definition, available_sets=available_sets, run_kind="BACKTEST", run_profile=run_profile, portfolio=portfolio, runner=symbol_runner)
+    return _run_research_v1_orchestration(definition, available_sets=available_sets, run_kind="BACKTEST", run_profile=run_profile, portfolio=portfolio, runner=symbol_runner, portfolio_factory=portfolio_factory)
 
 
 def run_research_v1_demo_orchestration(
@@ -521,8 +584,9 @@ def run_research_v1_demo_orchestration(
     available_sets: Mapping[str, ResearchSetVersion] | Sequence[ResearchSetVersion],
     portfolio: ResearchV1SharedPortfolioState,
     symbol_runner: Callable[[ResearchV1SymbolBinding, ResearchV1SharedPortfolioState], Mapping[str, Any] | tuple[Mapping[str, Any], ResearchV1SharedPortfolioState]],
+    portfolio_factory: Callable[[ResearchV1ArmBinding], ResearchV1SharedPortfolioState] | None = None,
 ) -> ResearchV1ExecutionResult:
-    return _run_research_v1_orchestration(definition, available_sets=available_sets, run_kind="DEMO", run_profile="DEMO_7D", portfolio=portfolio, runner=symbol_runner)
+    return _run_research_v1_orchestration(definition, available_sets=available_sets, run_kind="DEMO", run_profile="DEMO_7D", portfolio=portfolio, runner=symbol_runner, portfolio_factory=portfolio_factory)
 
 
 def _run_research_v1_orchestration(
@@ -533,29 +597,44 @@ def _run_research_v1_orchestration(
     run_profile: str,
     portfolio: ResearchV1SharedPortfolioState,
     runner: Callable[[ResearchV1SymbolBinding, ResearchV1SharedPortfolioState], Mapping[str, Any] | tuple[Mapping[str, Any], ResearchV1SharedPortfolioState]],
+    portfolio_factory: Callable[[ResearchV1ArmBinding], ResearchV1SharedPortfolioState] | None = None,
 ) -> ResearchV1ExecutionResult:
     results: list[Mapping[str, Any]] = []
     not_applicable: list[ResearchV1SymbolBinding] = []
-    current_portfolio = portfolio
-    for binding in resolve_research_v1_symbol_bindings(definition, available_sets=available_sets):
-        if not binding.applicable:
-            not_applicable.append(binding)
-            continue
-        runner_result = runner(binding, current_portfolio)
-        if isinstance(runner_result, tuple):
-            raw_result, next_portfolio = runner_result
-        else:
-            raw_result, next_portfolio = runner_result, current_portfolio
-        result = dict(raw_result)
-        current_portfolio = next_portfolio
-        result.setdefault("research_id", definition.research_id)
-        result.setdefault("hypothesis_id", definition.hypothesis_id)
-        result.setdefault("run_kind", run_kind)
-        result.setdefault("symbol", binding.symbol)
-        result.setdefault("set_version_id", binding.set_version_id)
-        result.setdefault("rules_version_id", binding.rules_version_id)
-        result.setdefault("arm", binding.arm)
-        results.append(result)
+    final_snapshot: Mapping[str, str | Mapping[str, str]] | dict[str, Mapping[str, str | Mapping[str, str]]] = {}
+    if definition.is_interaction:
+        cell_snapshots: dict[str, Mapping[str, str | Mapping[str, str]]] = {}
+        for cell in definition.execution_bindings:
+            cell_portfolio = portfolio_factory(cell) if portfolio_factory is not None else portfolio
+            for binding in resolve_research_v1_symbol_bindings(definition, available_sets=available_sets, binding=cell):
+                if not binding.applicable:
+                    not_applicable.append(binding)
+                    continue
+                runner_result = runner(binding, cell_portfolio)
+                if isinstance(runner_result, tuple):
+                    raw_result, next_portfolio = runner_result
+                else:
+                    raw_result, next_portfolio = runner_result, cell_portfolio
+                result = _result_payload(definition, run_kind, binding, raw_result)
+                cell_portfolio = next_portfolio
+                results.append(result)
+            cell_snapshots[cell.arm] = cell_portfolio.snapshot()
+        final_snapshot = cell_snapshots
+    else:
+        current_portfolio = portfolio
+        for binding in resolve_research_v1_symbol_bindings(definition, available_sets=available_sets):
+            if not binding.applicable:
+                not_applicable.append(binding)
+                continue
+            runner_result = runner(binding, current_portfolio)
+            if isinstance(runner_result, tuple):
+                raw_result, next_portfolio = runner_result
+            else:
+                raw_result, next_portfolio = runner_result, current_portfolio
+            result = _result_payload(definition, run_kind, binding, raw_result)
+            current_portfolio = next_portfolio
+            results.append(result)
+        final_snapshot = current_portfolio.snapshot()
     return ResearchV1ExecutionResult(
         research_id=definition.research_id,
         hypothesis_id=definition.hypothesis_id,
@@ -563,7 +642,7 @@ def _run_research_v1_orchestration(
         run_profile=run_profile,
         symbol_results=tuple(results),
         not_applicable=tuple(not_applicable),
-        portfolio_snapshot=current_portfolio.snapshot(),
+        portfolio_snapshot=final_snapshot,
     )
 
 
@@ -603,6 +682,24 @@ def _arm_binding(record: Mapping[str, Any], arm: str) -> ResearchV1ArmBinding:
         btc=_set_binding(arm_sets, "btc"),
         non_btc=_set_binding(arm_sets, "non_btc"),
     )
+
+
+def _interaction_cell_bindings(record: Mapping[str, Any]) -> dict[str, ResearchV1ArmBinding]:
+    set_bindings = _mapping(record.get("set_version_bindings"), "set_version_bindings")
+    rules_bindings = _mapping(record.get("rules_version_bindings"), "rules_version_bindings")
+    set_cells = _mapping(set_bindings.get("cells"), "interaction set cells")
+    rules_cells = _mapping(rules_bindings.get("cells"), "interaction rules cells")
+    if set(set_cells) != {"00", "01", "10", "11"} or set(rules_cells) != {"00", "01", "10", "11"}:
+        raise ResearchV1ExecutionError("Research V1 interaction studies require exactly cells 00/01/10/11")
+    return {
+        cell_id: ResearchV1ArmBinding(
+            arm=cell_id,
+            rules_version_id=str(_mapping(rules_cells[cell_id], f"{cell_id} rules binding")["rules_version_id"]),
+            btc=_set_binding(_mapping(set_cells[cell_id], f"{cell_id} set binding"), "btc"),
+            non_btc=_set_binding(_mapping(set_cells[cell_id], f"{cell_id} set binding"), "non_btc"),
+        )
+        for cell_id in ("00", "01", "10", "11")
+    }
 
 
 def _set_binding(payload: Mapping[str, Any], key: str) -> ResearchV1SetBinding:
@@ -676,6 +773,7 @@ def _symbol_binding(
         applicability=applicability,
         reason=reason,
         arm=selected.arm,
+        cell_id=selected.arm if selected.arm in {"00", "01", "10", "11"} else None,
         set_version_id=None if research_set is None else research_set.set_version,
         set_id=None if research_set is None else research_set.set_id,
         set_version=None if research_set is None else research_set.set_version,
@@ -743,7 +841,10 @@ def _stub_set(binding: ResearchV1SetBinding) -> ResearchSetVersion:
 
 
 def _arm_set_bindings(definition: ResearchV1ExecutionDefinition) -> tuple[ResearchV1SetBinding, ...]:
-    return (definition.baseline.btc, definition.baseline.non_btc, definition.variant.btc, definition.variant.non_btc)
+    bindings = [definition.baseline.btc, definition.baseline.non_btc, definition.variant.btc, definition.variant.non_btc]
+    for cell in definition.interaction_cells.values():
+        bindings.extend((cell.btc, cell.non_btc))
+    return tuple(bindings)
 
 
 def _arm_payload(binding: ResearchV1ArmBinding) -> dict[str, Any]:
@@ -775,6 +876,7 @@ def _binding_payload(binding: ResearchV1SymbolBinding) -> dict[str, Any]:
         "applicability": binding.applicability,
         "reason": binding.reason,
         "arm": binding.arm,
+        "cell_id": binding.cell_id,
         "set_version_id": binding.set_version_id,
         "set_id": binding.set_id,
         "set_version": binding.set_version,
@@ -797,6 +899,25 @@ def _arm_from_pin(payload: Mapping[str, Any]) -> ResearchV1ArmBinding:
         btc=_set_binding_from_pin(_mapping(payload.get("btc"), "btc")),
         non_btc=_set_binding_from_pin(_mapping(payload.get("non_btc"), "non_btc")),
     )
+
+
+def _result_payload(
+    definition: ResearchV1ExecutionDefinition,
+    run_kind: str,
+    binding: ResearchV1SymbolBinding,
+    raw_result: Mapping[str, Any],
+) -> dict[str, Any]:
+    result = dict(raw_result)
+    result.setdefault("research_id", definition.research_id)
+    result.setdefault("hypothesis_id", definition.hypothesis_id)
+    result.setdefault("run_kind", run_kind)
+    result.setdefault("symbol", binding.symbol)
+    result.setdefault("set_version_id", binding.set_version_id)
+    result.setdefault("rules_version_id", binding.rules_version_id)
+    result.setdefault("arm", binding.arm)
+    if binding.cell_id is not None:
+        result.setdefault("cell_id", binding.cell_id)
+    return result
 
 
 def _set_binding_from_pin(payload: Mapping[str, Any]) -> ResearchV1SetBinding:

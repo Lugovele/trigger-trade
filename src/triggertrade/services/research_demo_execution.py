@@ -354,21 +354,35 @@ class CanonicalResearchDemoExecutionExecutor:
         with PostgresUnitOfWork(self._factory) as uow:
             registry = PostgresResearchConfigurationRegistry(uow.connection)
             sets = PostgresResearchSetRegistry(uow.connection).list_research_sets()
-            rules = registry.get_trading_rules_version(definition.selected_binding.rules_version_id)
-        if rules is None:
+            rules_by_id = {
+                binding.rules_version_id: registry.get_trading_rules_version(binding.rules_version_id)
+                for binding in definition.execution_bindings
+            }
+        if any(rules is None for rules in rules_by_id.values()):
             raise PostgresPersistenceError("research_v1_demo_configuration_missing")
         set_by_version = {item.set_version: item for item in sets}
-        portfolio = ResearchV1SharedPortfolioState(
-            total_capital=Decimal("1000"),
-            max_capital_in_positions_pct=rules.draft.max_capital_in_positions_pct,
-            allocation_by_symbol={coin.symbol.upper(): coin.max_allocation_pct for coin in rules.draft.coins if coin.enabled and coin.max_allocation_pct is not None},
-            max_open_positions=rules.draft.max_open_positions or 1,
-            max_positions_per_coin=rules.draft.max_positions_per_coin or 1,
-        )
+
+        def portfolio_for_rules(rules_version_id: str) -> ResearchV1SharedPortfolioState:
+            rules = rules_by_id[rules_version_id]
+            if rules is None:
+                raise PostgresPersistenceError("research_v1_demo_configuration_missing")
+            return ResearchV1SharedPortfolioState(
+                total_capital=Decimal("1000"),
+                max_capital_in_positions_pct=rules.draft.max_capital_in_positions_pct,
+                allocation_by_symbol={coin.symbol.upper(): coin.max_allocation_pct for coin in rules.draft.coins if coin.enabled and coin.max_allocation_pct is not None},
+                max_open_positions=rules.draft.max_open_positions or 1,
+                max_positions_per_coin=rules.draft.max_positions_per_coin or 1,
+            )
+
+        portfolio = portfolio_for_rules(definition.selected_binding.rules_version_id)
 
         def runner(binding, portfolio_state):
             research_set = set_by_version[str(binding.set_version_id)]
             trigger_set = research_set_to_trigger_set(research_set, symbol=binding.instrument_symbol)
+            rules = rules_by_id[binding.rules_version_id]
+            if rules is None:
+                raise PostgresPersistenceError("research_v1_demo_configuration_missing")
+            scoped_record = _record_with_demo_run_id(record, f"{record.demo_run_id}:cell-{binding.cell_id}") if binding.cell_id is not None else record
             configuration = type(
                 "ResearchV1DemoConfiguration",
                 (),
@@ -379,11 +393,13 @@ class CanonicalResearchDemoExecutionExecutor:
                     "research_v1_portfolio_state": portfolio_state,
                 },
             )()
-            cycle = dict(self._trading_cycle.run_research_demo_cycle(record=record, configuration=configuration))
+            cycle = dict(self._trading_cycle.run_research_demo_cycle(record=scoped_record, configuration=configuration))
             cycle.setdefault("symbol", binding.instrument_symbol)
             cycle.setdefault("set_id", trigger_set.set_id)
             cycle.setdefault("set_version", trigger_set.version)
             cycle.setdefault("rules_version_id", rules.rules_version_id)
+            if binding.cell_id is not None:
+                cycle.setdefault("cell_id", binding.cell_id)
             next_portfolio = apply_research_v1_portfolio_events(
                 portfolio_state,
                 _research_v1_portfolio_events_from_cycle(cycle),
@@ -395,6 +411,7 @@ class CanonicalResearchDemoExecutionExecutor:
             available_sets=set_by_version,
             portfolio=portfolio,
             symbol_runner=runner,
+            portfolio_factory=lambda cell: portfolio_for_rules(cell.rules_version_id),
         )
         return {
             "terminal": False,
@@ -1553,6 +1570,15 @@ def _research_v1_portfolio_events_from_cycle(cycle_result: Mapping[str, Any]) ->
     if raw is None:
         return ()
     return tuple(dict(item) for item in raw)
+
+
+def _record_with_demo_run_id(record: object, demo_run_id: str) -> object:
+    try:
+        return replace(record, demo_run_id=demo_run_id)
+    except TypeError:
+        payload = dict(getattr(record, "__dict__", {}))
+        payload["demo_run_id"] = demo_run_id
+        return type("ResearchV1CellDemoRecord", (), payload)()
 
 
 def _research_v1_portfolio_events_from_positions(positions: tuple[object, ...]) -> tuple[dict[str, Any], ...]:
