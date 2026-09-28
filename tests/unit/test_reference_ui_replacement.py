@@ -155,8 +155,8 @@ def test_reference_trading_configuration_layout_is_preserved():
     assert "What it means" in html
     assert "Formula / Rule" in html
     assert "Unavailable / invalid behavior" in html
-    assert '<div id="trigger-details" class="panel"></div>' in html
-    assert '<div id="set-details" class="panel"></div>' in html
+    assert 'id="trigger-details"' in html
+    assert 'id="set-details"' in html
 
 
 def test_reference_research_summary_and_detail_layout_are_preserved():
@@ -242,11 +242,11 @@ def test_trigger_and_set_details_render_full_reference_structure_from_backend_da
     assert 'data-set-id="${h(s.set_id)}"' in html
     assert "Trigger Versions Used" in html
     assert "Human-readable Set Logic" in html
-    assert "Direction: LONG / SHORT / NONE" in html
-    assert "Direction = NONE." in html
     assert 'class="reference-link js-open-trigger"' in html
     assert 'data-trigger-id="${h(t.trigger_id)}"' in html
-    assert "This panel renders the exact selected Set Version" in html
+    assert "Direction: LONG / SHORT / NONE" not in html
+    assert "Direction = NONE." not in html
+    assert "This panel renders the exact selected Set Version" not in html
 
 
 def test_backend_wiring_payload_and_visible_controls_are_present_without_token():

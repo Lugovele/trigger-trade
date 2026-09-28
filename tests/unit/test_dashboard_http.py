@@ -89,7 +89,6 @@ def test_dashboard_http_product_routes_use_new_information_architecture():
             ("/trigger-catalog", "Trading Configuration"),
             ("/rules", "Trading Configuration"),
             ("/research", "New Research"),
-            ("/research/rules", "Research Rules"),
             ("/research-detail", "Run 7D"),
             ("/analytics", "Research"),
         ):

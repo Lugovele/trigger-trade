@@ -298,7 +298,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
             "/trigger-detail": "config",
             "/research/triggers": "trigger-catalog",
             "/research/sets": "sets",
-            "/research/rules": "research",
             "/rules": "config",
             "/rules-version": "config",
             "/research": "research",
