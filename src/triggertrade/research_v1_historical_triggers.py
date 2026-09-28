@@ -19,16 +19,23 @@ from triggertrade.backtest.models import HistoricalCandle
 from triggertrade.canonical_json import canonical_decimal_text as canonical_json_decimal_text
 from triggertrade.canonical_json import canonical_json_digest
 from triggertrade.numeric_policy import NumericPolicyError, canonical_decimal_text, exact_divide, q36_working
+from triggertrade.research_v1_execution import RESEARCH_V1_INSTRUMENT_SYMBOL_OVERRIDES
+from triggertrade.instruments import FuturesInstrument
 from triggertrade.set_engine import (
     Candle,
     IndicatorStatus,
+    SwingPoint,
+    SwingSequenceState,
     TriggerResult,
     directional_efficiency,
     evaluate_f001_price_displacement,
     evaluate_f002_participation,
+    swing_points,
+    swing_sequence_state,
     wilder_atr_seed,
     wilder_atr_update,
 )
+from triggertrade.set_engine.formulas import SetKernelError
 from triggertrade.trigger_sets import RuleDefinition
 from triggertrade.triggers import DeclarativeMetricPredicateTrigger, DeclarativeTriggerContext, Signal
 
@@ -42,12 +49,12 @@ HISTORICAL_READY_METRICS = frozenset(
         "ATR percentile",
         "DE",
         "RETURN(asset,5m)",
+        "SWING_SEQUENCE_STATE(asset,1h)",
     }
 )
 
 KERNEL_EXISTS_BUT_ADAPTER_MISSING_METRICS = frozenset(
     {
-        "SWING_SEQUENCE_STATE(asset,1h)",
     }
 )
 
@@ -127,6 +134,17 @@ class AggregatedHistoricalCandle:
 
 
 @dataclass(frozen=True)
+class ResearchV1HistoricalInstrumentMetadata:
+    logical_symbol: str
+    instrument_symbol: str
+    tick_size: str
+    metadata_revision: str
+    metadata_source: str
+    metadata_as_of: str
+    metadata_digest: str
+
+
+@dataclass(frozen=True)
 class HistoricalMetricObservation:
     metric_ref: str
     value: str
@@ -180,6 +198,7 @@ def evaluate_research_v1_historical_triggers(
     trigger_set_id: str,
     trigger_set_version: str,
     observed_at: datetime | None = None,
+    instrument_metadata: FuturesInstrument | None = None,
 ) -> tuple[HistoricalTriggerEvaluation, ...]:
     """Evaluate pinned declarative Research V1 triggers from factual candles.
 
@@ -200,6 +219,7 @@ def evaluate_research_v1_historical_triggers(
             candles=candles,
             symbol=symbol,
             observed_at=observed_at,
+            instrument_metadata=instrument_metadata,
         )
         context_time = _parse_iso(observation.observed_at)
         signal = DeclarativeMetricPredicateTrigger(rule).evaluate(
@@ -255,6 +275,7 @@ def produce_research_v1_historical_metric(
     candles: Sequence[HistoricalCandle],
     symbol: str,
     observed_at: datetime | None = None,
+    instrument_metadata: FuturesInstrument | None = None,
 ) -> HistoricalMetricObservation:
     """Produce one factual Research V1 metric observation from historical candles."""
 
@@ -268,7 +289,13 @@ def produce_research_v1_historical_metric(
     )
     if not ordered:
         raise ResearchV1HistoricalTriggerInputUnavailable(f"research_v1_historical_metric_unavailable:{metric_ref}")
-    return _metric_observation(metric_ref=metric_ref, rule=rule, candles=ordered)
+    return _metric_observation(
+        metric_ref=metric_ref,
+        rule=rule,
+        candles=ordered,
+        symbol=symbol,
+        instrument_metadata=instrument_metadata,
+    )
 
 
 def _metric_observation(
@@ -276,6 +303,8 @@ def _metric_observation(
     metric_ref: str,
     rule: RuleDefinition,
     candles: Sequence[HistoricalCandle],
+    symbol: str,
+    instrument_metadata: FuturesInstrument | None,
 ) -> HistoricalMetricObservation:
     if metric_ref == "F-001 trigger_result":
         return _f001_observation(rule=rule, candles=candles)
@@ -287,6 +316,12 @@ def _metric_observation(
         return _atr_percentile_observation(candles=candles)
     if metric_ref == "RETURN(asset,5m)":
         return _return_5m_observation(candles=candles)
+    if metric_ref == "SWING_SEQUENCE_STATE(asset,1h)":
+        return _swing_sequence_observation(
+            candles=candles,
+            symbol=symbol,
+            instrument_metadata=instrument_metadata,
+        )
     raise ResearchV1HistoricalTriggerInputUnavailable(f"research_v1_historical_metric_unavailable:{metric_ref}")
 
 
@@ -506,6 +541,90 @@ def _atr_percentile_observation(*, candles: Sequence[HistoricalCandle]) -> Histo
     )
 
 
+def _swing_sequence_observation(
+    *,
+    candles: Sequence[HistoricalCandle],
+    symbol: str,
+    instrument_metadata: FuturesInstrument | None,
+) -> HistoricalMetricObservation:
+    metadata, metadata_error = _coerce_instrument_metadata(symbol=symbol, instrument_metadata=instrument_metadata)
+    if metadata_error is not None:
+        return _unavailable_observation(
+            "SWING_SEQUENCE_STATE(asset,1h)",
+            candles,
+            reason_code=f"research_v1_historical_swing_sequence_unavailable:{metadata_error}",
+        )
+    assert metadata is not None
+    if Decimal(metadata.tick_size) <= 0:
+        return _unavailable_observation(
+            "SWING_SEQUENCE_STATE(asset,1h)",
+            candles,
+            reason_code="research_v1_historical_swing_sequence_unavailable:INVALID_TICK_SIZE",
+        )
+    hourly = _aggregate_completed_candles(candles, timeframe="1h")
+    if len(hourly) < 7:
+        return _unavailable_observation(
+            "SWING_SEQUENCE_STATE(asset,1h)",
+            candles,
+            reason_code="research_v1_historical_swing_sequence_unavailable:INSUFFICIENT_1H_HISTORY",
+        )
+    if not _is_contiguous_window(hourly, timedelta(hours=1)):
+        return _unavailable_observation(
+            "SWING_SEQUENCE_STATE(asset,1h)",
+            candles,
+            reason_code="research_v1_historical_swing_sequence_unavailable:NON_CONTINUOUS_1H_WINDOW",
+        )
+    try:
+        kernel_candles = tuple(_set_candle(candle) for candle in hourly)
+        highs = swing_points(kernel_candles, point_type="HIGH")
+        lows = swing_points(kernel_candles, point_type="LOW")
+        state = swing_sequence_state(highs=highs, lows=lows, tick_size=metadata.tick_size)
+        if state is SwingSequenceState.UNAVAILABLE:
+            return _observation(
+                metric_ref="SWING_SEQUENCE_STATE(asset,1h)",
+                value=SwingSequenceState.UNAVAILABLE.value,
+                status="UNAVAILABLE",
+                candles=hourly[-1:],
+                reason_code="research_v1_historical_swing_sequence_unavailable:INSUFFICIENT_CONFIRMED_SWING_POINTS",
+                payload={
+                    "swing_sequence_state": {
+                        "status": "UNAVAILABLE",
+                        "reason_code": "INSUFFICIENT_CONFIRMED_SWING_POINTS",
+                        "input_timeframe": "1h",
+                        "pivot_window": "2_LEFT_2_RIGHT",
+                        "confirmation_delay": "2_COMPLETED_1H_CANDLES",
+                        "high_count": len(highs),
+                        "low_count": len(lows),
+                        "instrument_metadata": _instrument_metadata_payload(metadata),
+                    }
+                },
+            )
+        payload = _swing_sequence_payload(
+            state=state,
+            highs=highs,
+            lows=lows,
+            hourly=hourly,
+            metadata=metadata,
+        )
+        return _observation(
+            metric_ref="SWING_SEQUENCE_STATE(asset,1h)",
+            value=state.value,
+            status="AVAILABLE",
+            candles=hourly,
+            reason_code=None,
+            payload={"swing_sequence_state": payload},
+        )
+    except (SetKernelError, NumericPolicyError, ArithmeticError, ValueError) as exc:
+        return _observation(
+            metric_ref="SWING_SEQUENCE_STATE(asset,1h)",
+            value=SwingSequenceState.UNAVAILABLE.value,
+            status="UNAVAILABLE",
+            candles=hourly[-1:],
+            reason_code=f"research_v1_historical_swing_sequence_unavailable:{exc}",
+            payload={"swing_sequence_state": {"status": "UNAVAILABLE", "reason_code": str(exc)}},
+        )
+
+
 def _eligible_candles(
     candles: Sequence[HistoricalCandle],
     *,
@@ -674,12 +793,152 @@ def _atr_observation_provenance(candle: AggregatedHistoricalCandle, update: Any)
     return {**payload, "digest": canonical_json_digest(payload)}
 
 
+def _swing_sequence_payload(
+    *,
+    state: SwingSequenceState,
+    highs: Sequence[SwingPoint],
+    lows: Sequence[SwingPoint],
+    hourly: Sequence[AggregatedHistoricalCandle],
+    metadata: ResearchV1HistoricalInstrumentMetadata,
+) -> dict[str, Any]:
+    selected_highs = tuple(highs[-2:])
+    selected_lows = tuple(lows[-2:])
+    high_payloads = tuple(_swing_point_payload(point) for point in selected_highs)
+    low_payloads = tuple(_swing_point_payload(point) for point in selected_lows)
+    equality_basis = {
+        "tick_size": metadata.tick_size,
+        "highs": high_payloads,
+        "lows": low_payloads,
+        "state": state.value,
+        "semantics": "BULLISH if h2 > h1 + tick and l2 > l1 + tick; BEARISH if h2 < h1 - tick and l2 < l1 - tick; else AMBIGUOUS",
+    }
+    source_candle_ids = tuple(_candle_id(candle) for candle in hourly)
+    payload = {
+        "status": "AVAILABLE",
+        "input_timeframe": "1h",
+        "pivot_window": "2_LEFT_2_RIGHT",
+        "confirmation_delay": "2_COMPLETED_1H_CANDLES",
+        "availability": "candidate swing is available at the second completed 1h candle after the pivot candle",
+        "state": state.value,
+        "tick_equality": {
+            "tolerance": "1_tick",
+            "instrument_symbol": metadata.instrument_symbol,
+            "tick_size": metadata.tick_size,
+            "metadata_revision": metadata.metadata_revision,
+            "metadata_digest": metadata.metadata_digest,
+            "decision_digest": canonical_json_digest(equality_basis),
+        },
+        "selected_confirmed_highs": high_payloads,
+        "selected_confirmed_lows": low_payloads,
+        "all_confirmed_high_count": len(tuple(highs)),
+        "all_confirmed_low_count": len(tuple(lows)),
+        "source_1h_candle_ids": source_candle_ids,
+        "source_1h_population_digest": canonical_json_digest(
+            {
+                "timeframe": "1h",
+                "source_1h_candle_ids": source_candle_ids,
+                "aggregation_provenance": tuple(
+                    {
+                        "candle_id": _candle_id(candle),
+                        "aggregation_provenance_digest": candle.aggregation_provenance_digest,
+                        "constituent_candle_ids": candle.constituent_candle_ids,
+                    }
+                    for candle in hourly
+                ),
+            }
+        ),
+        "instrument_metadata": _instrument_metadata_payload(metadata),
+    }
+    return {**payload, "digest": canonical_json_digest(payload)}
+
+
+def _swing_point_payload(point: SwingPoint) -> dict[str, str]:
+    payload = {
+        "point_type": point.point_type,
+        "candle_id": point.candle_id,
+        "price": point.price,
+        "confirmed_at": point.confirmed_at,
+    }
+    return {**payload, "digest": canonical_json_digest(payload)}
+
+
+def _coerce_instrument_metadata(
+    *,
+    symbol: str,
+    instrument_metadata: FuturesInstrument | None,
+) -> tuple[ResearchV1HistoricalInstrumentMetadata | None, str | None]:
+    if instrument_metadata is None:
+        return None, "INSTRUMENT_METADATA_UNAVAILABLE"
+    if not isinstance(instrument_metadata, FuturesInstrument):
+        return None, "INSTRUMENT_METADATA_UNAVAILABLE"
+    logical_symbol = symbol.upper()
+    expected_instrument_symbol = _expected_instrument_symbol(logical_symbol)
+    instrument_symbol = instrument_metadata.symbol.upper()
+    if instrument_symbol != expected_instrument_symbol:
+        return None, "INSTRUMENT_BINDING_MISMATCH"
+    if instrument_metadata.quote_coin.upper() != "USDT" or instrument_metadata.settle_coin.upper() != "USDT":
+        return None, "UNSUPPORTED_INSTRUMENT_CONTRACT"
+    if instrument_metadata.contract_type != "LinearPerpetual":
+        return None, "UNSUPPORTED_INSTRUMENT_CONTRACT"
+    if instrument_metadata.status != "Trading" or not instrument_metadata.is_tradeable:
+        return None, "UNSUPPORTED_INSTRUMENT_CONTRACT"
+    metadata_revision = instrument_metadata.catalog_hash or ""
+    if not metadata_revision:
+        return None, "METADATA_REVISION_UNAVAILABLE"
+    metadata_source = instrument_metadata.source or ""
+    if not metadata_source:
+        return None, "METADATA_SOURCE_UNAVAILABLE"
+    metadata_as_of = instrument_metadata.updated_at or ""
+    if not metadata_as_of:
+        return None, "METADATA_AS_OF_UNAVAILABLE"
+    try:
+        tick = Decimal(str(instrument_metadata.tick_size))
+    except Exception:
+        return None, "INVALID_TICK_SIZE"
+    if tick <= 0:
+        return None, "INVALID_TICK_SIZE"
+    metadata_payload = {
+        "logical_symbol": logical_symbol,
+        "instrument_symbol": instrument_symbol,
+        "tick_size": _decimal_text(tick),
+        "metadata_revision": metadata_revision,
+        "metadata_source": metadata_source,
+        "metadata_as_of": metadata_as_of,
+    }
+    return ResearchV1HistoricalInstrumentMetadata(
+        logical_symbol=logical_symbol,
+        instrument_symbol=instrument_symbol,
+        tick_size=_decimal_text(tick),
+        metadata_revision=metadata_revision,
+        metadata_source=metadata_source,
+        metadata_as_of=metadata_as_of,
+        metadata_digest=canonical_json_digest(metadata_payload),
+    ), None
+
+
+def _expected_instrument_symbol(logical_symbol: str) -> str:
+    asset = logical_symbol.removesuffix("USDT")
+    return str(RESEARCH_V1_INSTRUMENT_SYMBOL_OVERRIDES.get(asset, logical_symbol)).upper()
+
+
+def _instrument_metadata_payload(metadata: ResearchV1HistoricalInstrumentMetadata) -> dict[str, str]:
+    return {
+        "logical_symbol": metadata.logical_symbol,
+        "instrument_symbol": metadata.instrument_symbol,
+        "tick_size": metadata.tick_size,
+        "metadata_revision": metadata.metadata_revision,
+        "metadata_source": metadata.metadata_source,
+        "metadata_as_of": metadata.metadata_as_of,
+        "metadata_digest": metadata.metadata_digest,
+    }
+
+
 def _observation(
     *,
     metric_ref: str,
     value: str,
     status: str,
-    candles: Sequence[HistoricalCandle],
+    candles: Sequence[HistoricalCandle | AggregatedHistoricalCandle],
     reason_code: str | None,
     payload: Mapping[str, Any] | None,
 ) -> HistoricalMetricObservation:
@@ -729,7 +988,14 @@ def _unavailable_observation(
 
 
 def _metric_source_timeframe(metric_ref: str) -> str:
-    if metric_ref in {"F-001 trigger_result", "F-002 trigger_result", "RETURN(asset,5m)", "DE", "ATR percentile"}:
+    if metric_ref in {
+        "F-001 trigger_result",
+        "F-002 trigger_result",
+        "RETURN(asset,5m)",
+        "DE",
+        "ATR percentile",
+        "SWING_SEQUENCE_STATE(asset,1h)",
+    }:
         return "1m"
     raise ResearchV1HistoricalTriggerInputUnavailable(f"research_v1_historical_metric_unavailable:{metric_ref}")
 

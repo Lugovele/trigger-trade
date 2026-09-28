@@ -10,6 +10,7 @@ import re
 import pytest
 
 from triggertrade.backtest.models import HistoricalCandle
+from triggertrade.instruments import FuturesInstrument
 import triggertrade.research_v1_historical_triggers as historical_triggers
 from triggertrade.research_v1_execution import RESEARCH_V1_SYMBOLS
 from triggertrade.research_v1_historical_triggers import (
@@ -507,24 +508,298 @@ def test_atr_percentile_independent_aggregation_rebuild_preserves_evidence_ident
     assert first.payload["atr_percentile"]["reference_population_digest"] == second.payload["atr_percentile"]["reference_population_digest"]
 
 
-def test_swing_sequence_state_remains_fail_closed_without_factual_tick_metadata():
+def test_swing_sequence_state_requires_factual_tick_metadata():
     rule = _rule("TR-R-009")
-    candles = _one_minute_buckets_15m(tuple(str(100 + index) for index in range(20)))
+    candles = _one_minute_buckets_1h(_bullish_swing_hourly_ohlc())
 
-    with pytest.raises(
-        ResearchV1HistoricalTriggerInputUnavailable,
-        match="research_v1_historical_trigger_input_unavailable:TR-R-009",
-    ):
-        evaluate_research_v1_historical_triggers(
-            rules=(rule,),
-            candles=candles,
-            symbol="BTCUSDT",
-            trigger_set_id="SET-R-UNIT",
-            trigger_set_version="v1",
-        )
+    evaluation = evaluate_research_v1_historical_triggers(
+        rules=(rule,),
+        candles=candles,
+        symbol="BTCUSDT",
+        trigger_set_id="SET-R-UNIT",
+        trigger_set_version="v1",
+    )[0]
 
-    assert metric_readiness("SWING_SEQUENCE_STATE(asset,1h)") == "KERNEL_EXISTS_BUT_ADAPTER_MISSING"
-    assert "SWING_SEQUENCE_STATE(asset,1h)" not in HISTORICAL_READY_METRICS
+    assert evaluation.metric_value == "UNAVAILABLE"
+    assert evaluation.output_state == "UNAVAILABLE"
+    assert evaluation.condition_result is False
+    assert metric_readiness("SWING_SEQUENCE_STATE(asset,1h)") == "HISTORICAL_READY"
+    assert "SWING_SEQUENCE_STATE(asset,1h)" in HISTORICAL_READY_METRICS
+
+
+def test_swing_sequence_state_rejects_zero_tick_and_wrong_metadata_binding():
+    rule = _rule("TR-R-009")
+    candles = _one_minute_buckets_1h(_bullish_swing_hourly_ohlc())
+
+    zero_tick = produce_research_v1_historical_metric(
+        metric_ref="SWING_SEQUENCE_STATE(asset,1h)",
+        rule=rule,
+        candles=candles,
+        symbol="BTCUSDT",
+        instrument_metadata=_instrument("BTCUSDT", tick="0"),
+    )
+    wrong_binding = produce_research_v1_historical_metric(
+        metric_ref="SWING_SEQUENCE_STATE(asset,1h)",
+        rule=rule,
+        candles=candles,
+        symbol="BTCUSDT",
+        instrument_metadata=_instrument("ETHUSDT"),
+    )
+
+    assert zero_tick.status == "UNAVAILABLE"
+    assert zero_tick.reason_code == "research_v1_historical_swing_sequence_unavailable:INVALID_TICK_SIZE"
+    assert wrong_binding.status == "UNAVAILABLE"
+    assert wrong_binding.reason_code == "research_v1_historical_swing_sequence_unavailable:INSTRUMENT_BINDING_MISMATCH"
+
+
+def test_swing_sequence_state_requires_revision_source_and_as_of_identity():
+    rule = _rule("TR-R-009")
+    candles = _one_minute_buckets_1h(_bullish_swing_hourly_ohlc())
+
+    missing_revision = produce_research_v1_historical_metric(
+        metric_ref="SWING_SEQUENCE_STATE(asset,1h)",
+        rule=rule,
+        candles=candles,
+        symbol="BTCUSDT",
+        instrument_metadata=_instrument("BTCUSDT", revision=""),
+    )
+    missing_source = produce_research_v1_historical_metric(
+        metric_ref="SWING_SEQUENCE_STATE(asset,1h)",
+        rule=rule,
+        candles=candles,
+        symbol="BTCUSDT",
+        instrument_metadata=_instrument("BTCUSDT", source=""),
+    )
+    missing_as_of = produce_research_v1_historical_metric(
+        metric_ref="SWING_SEQUENCE_STATE(asset,1h)",
+        rule=rule,
+        candles=candles,
+        symbol="BTCUSDT",
+        instrument_metadata=_instrument("BTCUSDT", updated_at=""),
+    )
+
+    assert missing_revision.reason_code == "research_v1_historical_swing_sequence_unavailable:METADATA_REVISION_UNAVAILABLE"
+    assert missing_source.reason_code == "research_v1_historical_swing_sequence_unavailable:METADATA_SOURCE_UNAVAILABLE"
+    assert missing_as_of.reason_code == "research_v1_historical_swing_sequence_unavailable:METADATA_AS_OF_UNAVAILABLE"
+
+
+def test_swing_sequence_state_rejects_loose_metadata_mapping():
+    rule = _rule("TR-R-009")
+    candles = _one_minute_buckets_1h(_bullish_swing_hourly_ohlc())
+
+    loose_mapping = produce_research_v1_historical_metric(
+        metric_ref="SWING_SEQUENCE_STATE(asset,1h)",
+        rule=rule,
+        candles=candles,
+        symbol="BTCUSDT",
+        instrument_metadata={  # type: ignore[arg-type]
+            "symbol": "BTCUSDT",
+            "tick_size": "0.5",
+            "metadata_revision": "instrument:BTCUSDT:loose",
+            "metadata_source": "unit-test-catalog",
+            "updated_at": "2026-09-05T00:00:00+00:00",
+        },
+    )
+
+    assert loose_mapping.status == "UNAVAILABLE"
+    assert loose_mapping.reason_code == "research_v1_historical_swing_sequence_unavailable:INSTRUMENT_METADATA_UNAVAILABLE"
+
+
+def test_swing_sequence_state_rejects_unsupported_contract_metadata():
+    rule = _rule("TR-R-009")
+    candles = _one_minute_buckets_1h(_bullish_swing_hourly_ohlc())
+
+    wrong_contract = produce_research_v1_historical_metric(
+        metric_ref="SWING_SEQUENCE_STATE(asset,1h)",
+        rule=rule,
+        candles=candles,
+        symbol="BTCUSDT",
+        instrument_metadata=_instrument("BTCUSDT", contract_type="InversePerpetual"),
+    )
+    not_tradeable = produce_research_v1_historical_metric(
+        metric_ref="SWING_SEQUENCE_STATE(asset,1h)",
+        rule=rule,
+        candles=candles,
+        symbol="BTCUSDT",
+        instrument_metadata=_instrument("BTCUSDT", status="Settled", is_tradeable=False),
+    )
+
+    assert wrong_contract.reason_code == "research_v1_historical_swing_sequence_unavailable:UNSUPPORTED_INSTRUMENT_CONTRACT"
+    assert not_tradeable.reason_code == "research_v1_historical_swing_sequence_unavailable:UNSUPPORTED_INSTRUMENT_CONTRACT"
+
+
+def test_swing_sequence_state_uses_canonical_kernel_and_one_tick_equality():
+    bullish = _rule("TR-R-009")
+    bearish = _rule("TR-R-010")
+    candles = _one_minute_buckets_1h(_bullish_swing_hourly_ohlc())
+
+    bullish_eval, bearish_eval = evaluate_research_v1_historical_triggers(
+        rules=(bullish, bearish),
+        candles=candles,
+        symbol="BTCUSDT",
+        trigger_set_id="SET-R-UNIT",
+        trigger_set_version="v1",
+        instrument_metadata=_instrument("BTCUSDT", tick="0.5", revision="instrument:BTCUSDT:tick-0.5"),
+    )
+
+    assert bullish_eval.metric_ref == "SWING_SEQUENCE_STATE(asset,1h)"
+    assert bullish_eval.metric_value == "BULLISH"
+    assert bullish_eval.condition_result is True
+    assert bearish_eval.metric_value == "BULLISH"
+    assert bearish_eval.condition_result is False
+    assert bullish_eval.signal.window == "1h"
+
+
+def test_swing_sequence_state_one_tick_tolerance_can_change_state():
+    rule = _rule("TR-R-009")
+    candles = _one_minute_buckets_1h(_bullish_swing_hourly_ohlc())
+
+    loose_tick = produce_research_v1_historical_metric(
+        metric_ref="SWING_SEQUENCE_STATE(asset,1h)",
+        rule=rule,
+        candles=candles,
+        symbol="BTCUSDT",
+        instrument_metadata=_instrument("BTCUSDT", tick="1.5", revision="instrument:BTCUSDT:tick-1.5"),
+    )
+
+    assert loose_tick.value == "AMBIGUOUS"
+    payload = loose_tick.payload["swing_sequence_state"]
+    assert payload["tick_equality"]["tick_size"] == "1.5"
+    assert payload["tick_equality"]["metadata_revision"] == "instrument:BTCUSDT:tick-1.5"
+
+
+def test_swing_sequence_state_accepts_pepe_logical_and_factual_instrument_binding():
+    rule = _rule("TR-R-009")
+    candles = _one_minute_buckets_1h(_bullish_swing_hourly_ohlc(), symbol="PEPEUSDT")
+
+    observation = produce_research_v1_historical_metric(
+        metric_ref="SWING_SEQUENCE_STATE(asset,1h)",
+        rule=rule,
+        candles=candles,
+        symbol="PEPEUSDT",
+        instrument_metadata=_instrument("1000PEPEUSDT", tick="0.000001", revision="instrument:1000PEPEUSDT:1"),
+    )
+
+    assert observation.status == "AVAILABLE"
+    assert observation.value == "BULLISH"
+    metadata = observation.payload["swing_sequence_state"]["instrument_metadata"]
+    assert metadata["logical_symbol"] == "PEPEUSDT"
+    assert metadata["instrument_symbol"] == "1000PEPEUSDT"
+
+
+def test_swing_sequence_state_1h_aggregation_is_gap_safe_and_excludes_partial_current_hour():
+    rule = _rule("TR-R-009")
+    candles = _one_minute_buckets_1h(_bullish_swing_hourly_ohlc())
+    missing_constituent = tuple(candle for index, candle in enumerate(candles) if index != 3 * 60 + 17)
+    partial_current = candles + tuple(replace(candles[-1], open_time=candles[-1].close_time, close_time=candles[-1].close_time + timedelta(minutes=1), completed=False) for _ in range(1))
+
+    missing = produce_research_v1_historical_metric(
+        metric_ref="SWING_SEQUENCE_STATE(asset,1h)",
+        rule=rule,
+        candles=missing_constituent,
+        symbol="BTCUSDT",
+        instrument_metadata=_instrument("BTCUSDT"),
+    )
+    complete = produce_research_v1_historical_metric(
+        metric_ref="SWING_SEQUENCE_STATE(asset,1h)",
+        rule=rule,
+        candles=candles,
+        symbol="BTCUSDT",
+        instrument_metadata=_instrument("BTCUSDT"),
+    )
+    with_partial = produce_research_v1_historical_metric(
+        metric_ref="SWING_SEQUENCE_STATE(asset,1h)",
+        rule=rule,
+        candles=partial_current,
+        symbol="BTCUSDT",
+        instrument_metadata=_instrument("BTCUSDT"),
+    )
+
+    assert missing.status == "UNAVAILABLE"
+    assert missing.reason_code == "research_v1_historical_swing_sequence_unavailable:NON_CONTINUOUS_1H_WINDOW"
+    assert complete.status == "AVAILABLE"
+    assert with_partial.evidence_id == complete.evidence_id
+
+
+def test_swing_sequence_state_confirmation_delay_and_no_future_leakage():
+    rule = _rule("TR-R-009")
+    candles = _one_minute_buckets_1h(_bullish_swing_hourly_ohlc())
+
+    before_second_high_confirmed = produce_research_v1_historical_metric(
+        metric_ref="SWING_SEQUENCE_STATE(asset,1h)",
+        rule=rule,
+        candles=candles[:-60],
+        symbol="BTCUSDT",
+        instrument_metadata=_instrument("BTCUSDT"),
+    )
+    confirmed = produce_research_v1_historical_metric(
+        metric_ref="SWING_SEQUENCE_STATE(asset,1h)",
+        rule=rule,
+        candles=candles,
+        symbol="BTCUSDT",
+        instrument_metadata=_instrument("BTCUSDT"),
+    )
+
+    assert before_second_high_confirmed.status == "UNAVAILABLE"
+    assert before_second_high_confirmed.reason_code == "research_v1_historical_swing_sequence_unavailable:INSUFFICIENT_CONFIRMED_SWING_POINTS"
+    assert confirmed.value == "BULLISH"
+    assert confirmed.payload["swing_sequence_state"]["selected_confirmed_highs"][-1]["confirmed_at"] == "2026-09-05T22:00:00+00:00"
+
+
+def test_swing_sequence_state_deterministic_replay_and_provenance_binding():
+    rule = _rule("TR-R-009")
+    candles = _one_minute_buckets_1h(_bullish_swing_hourly_ohlc())
+    changed = list(candles)
+    changed[6 * 60 + 20] = replace(changed[6 * 60 + 20], high=Decimal("16"), close=Decimal("14"), turnover=Decimal("14"))
+
+    first = produce_research_v1_historical_metric(
+        metric_ref="SWING_SEQUENCE_STATE(asset,1h)",
+        rule=rule,
+        candles=candles,
+        symbol="BTCUSDT",
+        instrument_metadata=_instrument("BTCUSDT"),
+    )
+    second = produce_research_v1_historical_metric(
+        metric_ref="SWING_SEQUENCE_STATE(asset,1h)",
+        rule=rule,
+        candles=tuple(reversed(candles)),
+        symbol="BTCUSDT",
+        instrument_metadata=_instrument("BTCUSDT"),
+    )
+    changed_observation = produce_research_v1_historical_metric(
+        metric_ref="SWING_SEQUENCE_STATE(asset,1h)",
+        rule=rule,
+        candles=tuple(changed),
+        symbol="BTCUSDT",
+        instrument_metadata=_instrument("BTCUSDT"),
+    )
+    changed_revision = produce_research_v1_historical_metric(
+        metric_ref="SWING_SEQUENCE_STATE(asset,1h)",
+        rule=rule,
+        candles=candles,
+        symbol="BTCUSDT",
+        instrument_metadata=_instrument("BTCUSDT", revision="instrument:BTCUSDT:2"),
+    )
+    changed_source = produce_research_v1_historical_metric(
+        metric_ref="SWING_SEQUENCE_STATE(asset,1h)",
+        rule=rule,
+        candles=candles,
+        symbol="BTCUSDT",
+        instrument_metadata=_instrument("BTCUSDT", source="unit-test-catalog-v2"),
+    )
+    changed_as_of = produce_research_v1_historical_metric(
+        metric_ref="SWING_SEQUENCE_STATE(asset,1h)",
+        rule=rule,
+        candles=candles,
+        symbol="BTCUSDT",
+        instrument_metadata=_instrument("BTCUSDT", updated_at="2026-09-06T00:00:00+00:00"),
+    )
+
+    assert first.evidence_id == second.evidence_id
+    assert first.evidence_id != changed_observation.evidence_id
+    assert first.evidence_id != changed_revision.evidence_id
+    assert first.evidence_id != changed_source.evidence_id
+    assert first.evidence_id != changed_as_of.evidence_id
 
 
 def test_btc_return_trigger_uses_factual_5m_return_and_directional_outputs():
@@ -725,3 +1000,90 @@ def _flat_atr_source_minutes(*, days: int, extra_buckets: int) -> tuple[Historic
             )
         )
     return tuple(candles)
+
+
+def _bullish_swing_hourly_ohlc() -> tuple[tuple[str, str, str], ...]:
+    return (
+        ("10", "8", "9"),
+        ("11", "7", "10"),
+        ("13", "6", "9"),
+        ("12", "8", "10"),
+        ("11", "9", "10"),
+        ("12", "7", "10"),
+        ("15", "10", "14"),
+        ("14", "11", "13"),
+        ("13", "12", "13"),
+    )
+
+
+def _one_minute_buckets_1h(
+    hourly: tuple[tuple[str, str, str], ...],
+    *,
+    symbol: str = "BTCUSDT",
+) -> tuple[HistoricalCandle, ...]:
+    start = datetime(2026, 9, 5, 13, 0, tzinfo=UTC)
+    candles: list[HistoricalCandle] = []
+    for hour_index, (high, low, close) in enumerate(hourly):
+        high_value = Decimal(high)
+        low_value = Decimal(low)
+        close_value = Decimal(close)
+        open_value = close_value
+        for minute in range(60):
+            opened = start + timedelta(hours=hour_index, minutes=minute)
+            minute_high = high_value if minute == 20 else max(open_value, close_value)
+            minute_low = low_value if minute == 20 else min(open_value, close_value)
+            candles.append(
+                HistoricalCandle(
+                    symbol=symbol,
+                    category="linear",
+                    timeframe="1m",
+                    open_time=opened,
+                    close_time=opened + timedelta(minutes=1),
+                    open=open_value,
+                    high=minute_high,
+                    low=minute_low,
+                    close=close_value,
+                    volume=Decimal("1"),
+                    turnover=close_value,
+                    completed=True,
+                )
+            )
+    return tuple(candles)
+
+
+def _instrument(
+    symbol: str,
+    *,
+    tick: str = "0.5",
+    revision: str | None = None,
+    source: str = "unit-test-catalog",
+    updated_at: str = "2026-09-05T00:00:00+00:00",
+    contract_type: str = "LinearPerpetual",
+    status: str = "Trading",
+    is_tradeable: bool = True,
+) -> FuturesInstrument:
+    base_coin = symbol.removesuffix("USDT")
+    return FuturesInstrument(
+        symbol=symbol,
+        base_coin=base_coin,
+        quote_coin="USDT",
+        settle_coin="USDT",
+        contract_type=contract_type,
+        status=status,
+        tick_size=Decimal(tick),
+        price_scale=1,
+        min_order_qty=Decimal("0.001"),
+        max_order_qty=Decimal("1000"),
+        qty_step=Decimal("0.001"),
+        min_notional_value=Decimal("5"),
+        max_market_order_qty=Decimal("1000"),
+        min_leverage=Decimal("1"),
+        max_leverage=Decimal("100"),
+        leverage_step=Decimal("0.01"),
+        launch_time=None,
+        delivery_time=None,
+        is_tradeable=is_tradeable,
+        updated_at=updated_at,
+        source=source,
+        catalog_hash=f"instrument:{symbol}:1" if revision is None else revision,
+    )
