@@ -2719,10 +2719,11 @@ def _reference_backend_script(payload: str) -> str:
     const demoFilter = String(q("#demo-filter", desktop)?.value || "").trim().toLowerCase();
     const decisionFilter = String(q("#decision-filter", desktop)?.value || "").trim().toLowerCase();
     const demoState = (r) => String(r.demo_status || r.selected_demo_status || r.status || "").toLowerCase().includes("running") ? "running" : r.selected_demo_run_id ? "complete" : "pending";
+    const researchDisplayId = (r) => String(r?.research_display_id || r?.research_id || "");
     const rows = (state.research.summaries || []).filter(r => {
       const demo = demoState(r);
       const decision = String(r.decision || r.status || "NONE").toLowerCase();
-      const haystack = [r.research_id, r.set_id, r.set_version, r.rules_display_version, r.rules_version_id, decision].join(" ").toLowerCase();
+      const haystack = [researchDisplayId(r), r.research_id, r.set_id, r.set_version, r.rules_display_version, r.rules_version_id, decision].join(" ").toLowerCase();
       return (!search || haystack.includes(search)) && (!demoFilter || demo === demoFilter) && (!decisionFilter || decision === decisionFilter);
     });
     if(!body) return;
@@ -2731,7 +2732,7 @@ def _reference_backend_script(payload: str) -> str:
       applyCommandAvailability();
       return;
     }
-    body.innerHTML = rows.length ? rows.map(r => `<tr class="research-row" data-research-id="${h(r.research_id)}"><td><div class="research-id">${h(r.research_id)}</div></td><td>${h(r.set_id)}<div class="panel-meta">${h(r.set_version)}</div></td><td>${h(r.rules_display_version)}<div class="panel-meta">${h(r.rules_version_id)}</div></td><td>${h(demoState(r).replace(/^./, c => c.toUpperCase()))}</td><td>${h(r.selected_demo_profit_factor ?? "—")}</td><td>${h(r.compare_to_active || "—")}</td><td>—</td><td>${badge(r.decision || r.status || "NONE")}</td></tr>`).join("") : '<tr><td colspan="8" class="empty">No Research records.</td></tr>';
+    body.innerHTML = rows.length ? rows.map(r => `<tr class="research-row" data-research-id="${h(r.research_id)}"><td><div class="research-id">${h(researchDisplayId(r))}</div></td><td>${h(r.set_id)}<div class="panel-meta">${h(r.set_version)}</div></td><td>${h(r.rules_display_version)}<div class="panel-meta">${h(r.rules_version_id)}</div></td><td>${h(demoState(r).replace(/^./, c => c.toUpperCase()))}</td><td>${h(r.selected_demo_profit_factor ?? "—")}</td><td>${h(r.compare_to_active || "—")}</td><td>—</td><td>${badge(r.decision || r.status || "NONE")}</td></tr>`).join("") : '<tr><td colspan="8" class="empty">No Research records.</td></tr>';
     qa("[data-research-id]", desktop).forEach(row => row.onclick = () => window.openResearchById(row.dataset.researchId));
     applyCommandAvailability();
   }
@@ -2853,7 +2854,10 @@ def _reference_backend_script(payload: str) -> str:
     const backtests = Array.isArray(currentResearch?.backtests) ? currentResearch.backtests : [];
     const demos = Array.isArray(currentResearch?.demos) ? currentResearch.demos : [];
     const title = q("#research-detail-title", desktop) || q("#researchTitle", desktop);
-    if(title) title.textContent = r.research_id ? `${r.research_id} · ${r.set_id} ${r.set_version} · Rules ${r.rules_display_version || r.rules_version_id}` : "Research";
+    const displayId = String(r.research_display_id || r.research_id || "");
+    const physicalId = String(r.research_id || "");
+    const physicalMeta = physicalId && displayId && physicalId !== displayId ? ` · storage ${physicalId}` : "";
+    if(title) title.textContent = displayId ? `${displayId}${physicalMeta} · ${r.set_id} ${r.set_version} · Rules ${r.rules_display_version || r.rules_version_id}` : "Research";
     const bt = q("#backtest-body", desktop) || q("#backtestBody", desktop);
     const dm = q("#demo-body", desktop) || q("#demoBody", desktop);
     if(bt) bt.innerHTML = loading ? '<tr><td colspan="7" class="empty">Loading Research detail.</td></tr>' : runRows(backtests, "backtest");

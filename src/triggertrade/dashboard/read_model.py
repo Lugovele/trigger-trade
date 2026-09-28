@@ -363,6 +363,7 @@ class BacktestRunRow:
 @dataclass(frozen=True)
 class ResearchSummaryRow:
     research_id: str
+    research_display_id: str
     status: str
     set_id: str
     set_version: str
@@ -2075,7 +2076,7 @@ class DashboardReadModel:
                     SELECT r.research_id, r.status, r.set_id, r.set_version,
                            r.rules_version_id, r.rules_display_version,
                            r.selected_backtest_run_id, r.selected_demo_run_id,
-                           r.decision, r.updated_at,
+                           r.decision, r.updated_at, r.pin_payload,
                            bt.metrics_json AS selected_backtest_metrics_json,
                            dm.metrics_json AS selected_demo_metrics_json
                     FROM research_entities r
@@ -2100,6 +2101,7 @@ class DashboardReadModel:
             summaries.append(
                 ResearchSummaryRow(
                 research_id=row["research_id"],
+                research_display_id=_research_display_id_from_pin(row["pin_payload"], fallback=row["research_id"]),
                 status=row["status"],
                 set_id=row["set_id"],
                 set_version=row["set_version"],
@@ -2151,8 +2153,13 @@ class DashboardReadModel:
                 ).fetchall()
         except sqlite3.Error:
             return None
+        research_payload = _safe_dict(dict(research))
+        research_payload["research_display_id"] = _research_display_id_from_pin(
+            research_payload.get("pin_payload"),
+            fallback=research_payload.get("research_id"),
+        )
         return {
-            "research": _safe_dict(dict(research)),
+            "research": research_payload,
             "backtests": tuple(_research_backtest_payload(row) for row in backtests),
             "demos": tuple(_research_demo_payload(row) for row in demos),
         }
@@ -3617,6 +3624,19 @@ def _json_value(raw: str) -> Any:
 def _json_dict(raw: Any) -> dict[str, Any]:
     value = _json_value(raw)
     return value if isinstance(value, dict) else {}
+
+
+def _research_display_id_from_pin(pin_payload: Any, *, fallback: Any) -> str:
+    fallback_text = str(fallback or "")
+    pin = _json_dict(pin_payload) if isinstance(pin_payload, str) else (pin_payload if isinstance(pin_payload, dict) else {})
+    config = pin.get("config_pins") if isinstance(pin, dict) else None
+    research_v1 = config.get("research_v1_execution") if isinstance(config, dict) else None
+    display_id = research_v1.get("research_id") if isinstance(research_v1, dict) else None
+    if isinstance(display_id, str):
+        clean = display_id.strip()
+        if clean:
+            return clean[:160]
+    return fallback_text
 
 
 def _json_list(raw: Any) -> list[str]:

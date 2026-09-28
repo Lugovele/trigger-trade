@@ -1170,6 +1170,7 @@ def _research_detail_payload(server: DashboardServer, research_id: str) -> dict[
 def _research_summary_from_record(record) -> ResearchSummaryRow:
     return ResearchSummaryRow(
         research_id=record.research_id,
+        research_display_id=_research_display_id_from_pin_payload(record.pin_payload, fallback=record.research_id),
         status=record.status.value,
         set_id=record.set_id,
         set_version=record.set_version,
@@ -1414,6 +1415,7 @@ def _message_payload(row) -> dict[str, object]:
 def _research_summary_payload(row) -> dict[str, object]:
     return {
         "research_id": row.research_id,
+        "research_display_id": row.research_display_id,
         "status": row.status,
         "set_id": row.set_id,
         "set_version": row.set_version,
@@ -1434,6 +1436,7 @@ def _research_summary_payload(row) -> dict[str, object]:
 def _research_record_payload(record) -> dict[str, object]:
     return {
         "research_id": record.research_id,
+        "research_display_id": _research_display_id_from_pin_payload(record.pin_payload, fallback=record.research_id),
         "created_at": record.created_at,
         "updated_at": record.updated_at,
         "status": record.status.value,
@@ -1457,6 +1460,24 @@ def _research_record_payload(record) -> dict[str, object]:
         "created_source": record.created_source,
         "schema_version": record.schema_version,
     }
+
+
+def _research_display_id_from_pin_payload(pin_payload, *, fallback) -> str:
+    fallback_text = str(fallback or "")
+    if not isinstance(pin_payload, dict):
+        return fallback_text
+    config = pin_payload.get("config_pins")
+    if not isinstance(config, dict):
+        return fallback_text
+    research_v1 = config.get("research_v1_execution")
+    if not isinstance(research_v1, dict):
+        return fallback_text
+    display_id = research_v1.get("research_id")
+    if isinstance(display_id, str):
+        clean = display_id.strip()
+        if clean:
+            return clean[:160]
+    return fallback_text
 
 
 def _research_run_payload(record) -> dict[str, object]:

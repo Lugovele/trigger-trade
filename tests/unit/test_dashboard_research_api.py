@@ -4,7 +4,9 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from decimal import Decimal
 import json
+from pathlib import Path
 import sqlite3
+import uuid
 
 import triggertrade.dashboard.__main__ as dashboard_main
 from triggertrade.dashboard.__main__ import create_server, render_dashboard
@@ -711,6 +713,74 @@ def test_demo_start_reuses_existing_running_postgres_run_without_duplicate_hando
         _stop(server, thread)
 
 
+def test_postgres_research_api_exposes_display_id_without_replacing_physical_locator():
+    tmp_path = Path(".tmp") / "dashboard-research-display-id" / uuid.uuid4().hex
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    db, rules = _research_db(tmp_path)
+    current = rules.get_current_rules_version()
+    r001 = _research_record(
+        research_id="res-492ab0809a3942bf9c10",
+        set_id="pg-canonical-set",
+        set_version="v42",
+        rules_version_id=current.rules_version_id,
+        rules_display_version=current.version,
+        pin_payload=_research_v1_pin("R-001", set_id="pg-canonical-set", set_version="v42", rules_version_id=current.rules_version_id),
+    )
+    r029 = _research_record(
+        research_id="res-r029-physical",
+        set_id="pg-canonical-set",
+        set_version="v42",
+        rules_version_id=current.rules_version_id,
+        rules_display_version=current.version,
+        pin_payload=_research_v1_pin("R-029", set_id="pg-canonical-set", set_version="v42", rules_version_id=current.rules_version_id),
+    )
+    r030 = _research_record(
+        research_id="res-r030-physical",
+        set_id="pg-canonical-set",
+        set_version="v42",
+        rules_version_id=current.rules_version_id,
+        rules_display_version=current.version,
+        pin_payload=_research_v1_pin("R-030", set_id="pg-canonical-set", set_version="v42", rules_version_id=current.rules_version_id),
+    )
+    legacy = _research_record(
+        research_id="legacy-physical",
+        set_id="pg-canonical-set",
+        set_version="v42",
+        rules_version_id=current.rules_version_id,
+        rules_display_version=current.version,
+        pin_payload={"config_pins": {"research_v1_execution": {"research_id": ""}}},
+    )
+    registry = _FakeResearchConfigRegistry(
+        trigger_set=_trigger_set("pg-canonical-set", "v42"),
+        rules=current,
+        research=(r001, r029, r030, legacy),
+    )
+    run_store = _FakeResearchRunStore(research=(r001, r029, r030, legacy))
+    server = create_server(
+        port=0,
+        db_path=db,
+        operator_authorizer=OperatorCommandAuthorizer(db, auth_mode="local_dev_compat"),
+        research_config_registry=registry,
+        research_run_store=run_store,
+    )
+    host, port = server.server_address
+    thread = _start(server)
+    try:
+        listed = _json_request(host, port, "GET", "/api/research")["research"]
+        by_physical = {item["research_id"]: item for item in listed}
+        detail = _json_request(host, port, "GET", f"/api/research/{r001.research_id}")["research"]
+
+        assert by_physical[r001.research_id]["research_id"] == "res-492ab0809a3942bf9c10"
+        assert by_physical[r001.research_id]["research_display_id"] == "R-001"
+        assert by_physical[r029.research_id]["research_display_id"] == "R-029"
+        assert by_physical[r030.research_id]["research_display_id"] == "R-030"
+        assert by_physical[legacy.research_id]["research_display_id"] == "legacy-physical"
+        assert detail["research_id"] == "res-492ab0809a3942bf9c10"
+        assert detail["research_display_id"] == "R-001"
+    finally:
+        _stop(server, thread)
+
+
 def test_postgres_research_runs_survive_service_reconstruction_and_replica_visibility(tmp_path):
     db, rules = _research_db(tmp_path)
     current = rules.get_current_rules_version()
@@ -1155,7 +1225,7 @@ class _FailingResearchConfigRegistry:
         raise RuntimeError("registry offline")
 
 
-def _research_record(*, research_id, set_id, set_version, rules_version_id, rules_display_version):
+def _research_record(*, research_id, set_id, set_version, rules_version_id, rules_display_version, pin_payload=None):
     return ResearchRecord(
         research_id=research_id,
         created_at="2026-09-25T00:00:00+00:00",
@@ -1180,10 +1250,23 @@ def _research_record(*, research_id, set_id, set_version, rules_version_id, rule
         promotion_result_metadata={},
         created_source="unit",
         schema_version="research.v1",
-        pin_payload={
+        pin_payload=pin_payload or {
             "set_id": set_id,
             "set_version": set_version,
             "rules_version_id": rules_version_id,
         },
         pin_digest="unit-digest",
     )
+
+
+def _research_v1_pin(research_id, *, set_id, set_version, rules_version_id):
+    return {
+        "config_pins": {
+            "research_v1_execution": {
+                "research_id": research_id,
+                "set_id": set_id,
+                "set_version": set_version,
+                "rules_version_id": rules_version_id,
+            }
+        }
+    }

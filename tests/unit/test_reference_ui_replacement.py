@@ -94,6 +94,7 @@ def _html(**kwargs) -> str:
             "summaries": (
                 {
                     "research_id": "RES-1",
+                    "research_display_id": "R-001",
                     "set_id": "SET-CORE",
                     "set_version": "V1",
                     "rules_display_version": "V1",
@@ -171,6 +172,22 @@ def test_reference_research_summary_and_detail_layout_are_preserved():
     assert '<tbody id="demo-body"></tbody>' in html
     assert 'id="compare-table"' in html
     assert 'id="decision-state"' in html
+
+
+def test_research_ui_displays_logical_research_id_but_keeps_physical_locator():
+    html = _html()
+
+    assert '"research_id": "RES-1"' in html
+    assert '"research_display_id": "R-001"' in html
+    assert 'const researchDisplayId = (r) => String(r?.research_display_id || r?.research_id || "");' in html
+    assert '[researchDisplayId(r), r.research_id, r.set_id' in html
+    assert 'data-research-id="${h(r.research_id)}"' in html
+    assert '<div class="research-id">${h(researchDisplayId(r))}</div>' in html
+    assert 'const displayId = String(r.research_display_id || r.research_id || "");' in html
+    assert 'const physicalId = String(r.research_id || "");' in html
+    assert 'storage ${physicalId}' in html
+    assert 'await postJson(`/api/research/${encodeURIComponent(currentResearchId)}/backtests`' in html
+    assert 'await postJson(`/api/research/${encodeURIComponent(currentResearchId)}/demo/start`' in html
 
 
 def test_trading_rules_layout_uses_desktop_columns_and_mobile_single_column():
