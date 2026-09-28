@@ -1837,7 +1837,7 @@ window.runDemo=async()=>{{await fetch(`/api/research/${{encodeURIComponent(curre
 window.setDecision=async what=>{{if(!canSubmitOperatorAction())return;if(what==="reject"){{if(!confirm("Archive this Research configuration?"))return;await fetch(`/api/research/${{encodeURIComponent(currentResearchId)}}/archive`,{{method:"POST",headers:{{"Content-Type":"application/json"}},body:"{{}}"}});await openResearchById(currentResearchId);return}}if(!confirm("Make this Research configuration Active?"))return;const url=`/api/research/${{encodeURIComponent(currentResearchId)}}/decision/make-active`;await fetch(url,{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{idempotency_key:"ui-"+Date.now()}})}});await openResearchById(currentResearchId)}};
 window.exportResearch=()=>{{const blob=new Blob([JSON.stringify({{research:currentResearch,compare:currentCompare}},null,2)],{{type:"application/json"}});const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=`${{currentResearchId||"research"}}.json`;a.click();}};
 window.openNewResearch=()=>{{newResearchModal.classList.add("show")}};window.closeNewResearch=()=>newResearchModal.classList.remove("show");
-function setupNewResearch(){{newResearchSet.innerHTML=(state.registry.sets||[]).map(s=>`<option value="${{html(s.set_id+"|"+s.version)}}">${{html(s.set_id+" "+s.version+" · "+s.status)}}</option>`).join("");const versions=[state.rules.current,...(state.rules.history||[])].filter(Boolean);newResearchRules.innerHTML=versions.map(r=>`<option value="${{html(r.rules_version_id)}}">${{html((r.display_version||"Rules")+" · "+r.rules_version_id)}}</option>`).join("")}}
+function setupNewResearch(){{newResearchSet.innerHTML=(state.registry.research_sets||state.registry.sets||[]).map(s=>`<option value="${{html(s.set_id+"|"+s.version)}}">${{html(s.set_id+" "+s.version+" · "+s.status)}}</option>`).join("");const versions=[state.rules.current,...(state.rules.history||[])].filter(Boolean);newResearchRules.innerHTML=versions.map(r=>`<option value="${{html(r.rules_version_id)}}">${{html((r.display_version||"Rules")+" · "+r.rules_version_id)}}</option>`).join("")}}
 window.createResearch=async()=>{{const [set_id,set_version]=newResearchSet.value.split("|"),rules_version_id=newResearchRules.value;const res=await fetch("/api/research",{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{set_id,set_version,rules_version_id}})}});const data=await res.json();if(!res.ok){{newResearchState.textContent=data.error||"Research creation failed";return}}closeNewResearch();await openResearchById(data.research.research_id)}};
 function boot(){{applyOperatorState();setupOverview();renderMetrics();renderTriggers();renderSets();renderRules();renderResearchSummary();setupNewResearch();showPage(page);if(page==="research-detail"){{const path=location.pathname.split("/").filter(Boolean);if(path[0]==="research"&&path[1])openResearchById(decodeURIComponent(path[1]));}}}}
 boot();
@@ -2061,7 +2061,7 @@ def _reference_backend_script(payload: str) -> str:
     bindCoinSearchOptions(box);
   }
   function researchSetOptions(){
-    return (state.registry.sets || []).map(s => ({
+    return (state.registry.research_sets || state.registry.sets || []).map(s => ({
       set_id: String(s.set_id || "").trim(),
       set_version: String(s.version || s.set_version || "").trim(),
       label: [s.display_name || s.set_id, s.version || s.set_version].filter(Boolean).join(" ")
