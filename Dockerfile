@@ -11,6 +11,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 COPY pyproject.toml README.md ./
 COPY src ./src
 COPY migrations ./migrations
+COPY docs/research-import/build/RESEARCH_V1_BUILD_SPEC.json ./docs/research-import/build/RESEARCH_V1_BUILD_SPEC.json
 
 RUN python -m pip install --no-cache-dir .
 RUN groupadd --system triggertrade \

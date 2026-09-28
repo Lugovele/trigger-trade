@@ -251,6 +251,9 @@ def apply_research_v1_portfolio_events(
 
 
 def default_build_spec_path() -> Path:
+    deployed = Path("/app/docs/research-import/build/RESEARCH_V1_BUILD_SPEC.json")
+    if deployed.is_file():
+        return deployed
     return Path(__file__).resolve().parents[2] / "docs" / "research-import" / "build" / "RESEARCH_V1_BUILD_SPEC.json"
 
 
