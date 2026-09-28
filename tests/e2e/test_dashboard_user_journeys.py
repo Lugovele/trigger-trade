@@ -216,8 +216,9 @@ def test_e2e_trigger_metric_set_exact_version_navigation(dashboard_base_url):
         page.goto(f"{dashboard_base_url}/rules", wait_until="domcontentloaded")
         desktop = page.locator("#tt-desktop-reference")
 
-        desktop.locator('[data-config="triggers"]').click()
-        desktop.locator("#config-triggers tbody tr.catalog-row").first.click()
+        desktop.locator('[data-page="research"]').click()
+        desktop.locator('[data-research-view="triggers"]').click()
+        desktop.locator("#research-triggers tbody tr.catalog-row").first.click()
         trigger_title = desktop.locator("#triggerDetail .details-title, #trigger-details .details-title").inner_text()
         assert trigger_title
 
@@ -225,13 +226,14 @@ def test_e2e_trigger_metric_set_exact_version_navigation(dashboard_base_url):
         assert desktop.locator(".config-tab.active").inner_text() == "Metrics"
         assert desktop.locator("#metricDetail .details-title, #metric-details .details-title").inner_text()
 
-        desktop.locator('[data-config="triggers"]').click()
-        desktop.locator("#config-triggers tbody tr.catalog-row").first.click()
+        desktop.locator('[data-page="research"]').click()
+        desktop.locator('[data-research-view="triggers"]').click()
+        desktop.locator("#research-triggers tbody tr.catalog-row").first.click()
         desktop.locator("#triggerDetail .js-open-set, #trigger-details .js-open-set").first.click()
-        assert desktop.locator(".config-tab.active").inner_text() == "Sets"
+        assert desktop.locator(".research-tab.active").inner_text() == "Sets"
         assert "Set " in desktop.locator("#setDetail .details-id, #set-details .details-id").inner_text()
 
-        desktop.locator("#config-sets tbody tr.catalog-row").first.click()
+        desktop.locator("#research-sets tbody tr.catalog-row").first.click()
         desktop.locator("#setDetail .reference-link, #set-details .reference-link").first.click()
-        assert desktop.locator(".config-tab.active").inner_text() == "Triggers"
+        assert desktop.locator(".research-tab.active").inner_text() == "Triggers"
         assert "Trigger " in desktop.locator("#triggerDetail .details-id, #trigger-details .details-id").inner_text()

@@ -2169,14 +2169,14 @@ def _reference_backend_script(payload: str) -> str:
     const triggerButton = event.target.closest(".js-open-trigger");
     if(triggerButton){
       event.stopPropagation();
-      openConfig("triggers");
+      openResearchView("triggers");
       window.showTrigger(triggerButton.dataset.triggerId || "", triggerButton.dataset.triggerVersion || "");
       return;
     }
     const setButton = event.target.closest(".js-open-set");
     if(setButton){
       event.stopPropagation();
-      openConfig("sets");
+      openResearchView("sets");
       window.showSet(setButton.dataset.setId || "", setButton.dataset.setVersion || "");
     }
   });
@@ -2203,7 +2203,19 @@ def _reference_backend_script(payload: str) -> str:
     qa(".config-tab", desktop).forEach(node => node.classList.toggle("active", node.dataset.config === view));
     qa(".config-view", desktop).forEach(node => node.classList.toggle("active", node.id === "config-" + view));
   };
-  qa(".top-tab", desktop).forEach(node => node.addEventListener("click", () => showPage(node.dataset.page)));
+  window.openResearchView = function(view, options={}){
+    const normalized = ["overview", "triggers", "sets"].includes(view) ? view : "overview";
+    showPage("research", {preserveUrl:true});
+    qa(".research-tab", desktop).forEach(node => node.classList.toggle("active", node.dataset.researchView === normalized));
+    qa(".research-view", desktop).forEach(node => node.classList.toggle("active", node.id === "research-" + normalized));
+    if(!options.preserveUrl){
+      history.replaceState(null, "", normalized === "overview" ? "/research" : "/research/" + normalized);
+    }
+  };
+  qa(".top-tab", desktop).forEach(node => node.addEventListener("click", () => {
+    if(node.dataset.page === "research") window.openResearchView("overview");
+    else showPage(node.dataset.page);
+  }));
   qa(".nav button", mobile).forEach(node => node.addEventListener("click", () => showPage(pageMap[node.textContent.trim().toLowerCase()] || "overview")));
 
   function applyOperatorState(){
@@ -2417,10 +2429,20 @@ def _reference_backend_script(payload: str) -> str:
     detail.innerHTML = `<div class="details-header"><div class="details-id">${h(m.id)} · ${h(m.status)}</div><div class="details-title">${h(m.name)}</div><div class="details-meta"><span class="meta-pill">${h(metricFamilyCode(m))}: ${h(metricFamilyLabel(metricFamilyCode(m)))}</span><span class="meta-pill">Owner: ${h(m.owner)}</span><span class="meta-pill">${h(m.type)}</span></div></div>${metricSection("What it is", m.what_it_is)}${metricSection("What it means", m.what_it_means)}${metricSection("Why it exists", m.why_it_exists)}${metricSection("Inputs", m.inputs)}${metricSection("Data source", m.data_source)}${metricSection("Formula / Rule", m.formula_or_rule)}${metricSection("Calculation / Evaluation steps", m.calculation_steps)}${metricSection("Output", m.output)}${metricSection("Worked example", m.worked_example)}${metricSection("Unavailable / invalid behavior", m.unavailable_behavior)}${metricSection("Dependencies", m.dependencies)}${metricSection("Used by", m.used_by)}${metricSection("Important boundaries", m.important_boundaries)}${metricSection("Technical traceability", m.technical_traceability)}`;
   };
   function renderTriggers(){
-    const rows = state.registry.triggers || [];
-    const sets = state.registry.sets || [];
+    const allRows = state.registry.triggers || [];
+    const search = String(q("#trigger-search", desktop)?.value || "").trim().toUpperCase();
+    const stateFilter = String(q("#trigger-version-state-filter", desktop)?.value || "");
+    const formulaFilter = String(q("#trigger-formula-filter", desktop)?.value || "");
+    const rows = allRows.filter(t => (!search || String(t.trigger_id || "").toUpperCase().includes(search)) && (!stateFilter || t.version_state === stateFilter) && (!formulaFilter || (t.formula_refs || []).includes(formulaFilter)));
+    const sets = state.registry.research_sets || state.registry.sets || [];
     const body = q("#triggers-body", desktop) || q("#triggersBody", desktop) || q("#config-triggers tbody", desktop);
-    if(body) body.innerHTML = rows.length ? rows.map(t => `<tr class="catalog-row" data-trigger-id="${h(t.trigger_id)}" data-trigger-version="${h(t.version)}"><td>${h(t.display_name || t.trigger_id)}</td><td>${h(t.version)}</td><td>${h(t.metric || (t.metric_refs||[]).join(", ") || "—")}</td><td>${h(t.condition || t.what_it_checks || "—")}</td><td>${h(t.output || "—")}</td><td>${h(t.applicability || t.scope || "—")}</td><td>${badge(t.status || (t.immutable ? "ACTIVE" : "RESEARCH"))}</td></tr>`).join("") : '<tr><td colspan="7" class="empty">No Trigger versions available.</td></tr>';
+    const formulaSelect = q("#trigger-formula-filter", desktop);
+    if(formulaSelect && !formulaSelect.dataset.ready){
+      const formulas = [...new Set(allRows.flatMap(t => t.formula_refs || []).filter(Boolean))].sort();
+      formulaSelect.innerHTML = '<option value="">Formula: All</option>' + formulas.map(value => `<option value="${h(value)}">${h(value)}</option>`).join("");
+      formulaSelect.dataset.ready = "1";
+    }
+    if(body) body.innerHTML = rows.length ? rows.map(t => `<tr class="catalog-row" data-trigger-id="${h(t.trigger_id)}" data-trigger-version="${h(t.version)}"><td>${h(t.trigger_id)}</td><td>${h(t.version)}</td><td>${h(t.metric || (t.metric_refs||[]).join(", ") || "—")}</td><td>${h(t.formula || (t.formula_refs||[]).join(", ") || "—")}</td><td>${h(t.condition || t.what_it_checks || "—")}</td><td>${h(t.output || "—")}</td><td>${h(t.applicability || t.scope || "—")}</td><td>${badge(t.status || (t.immutable ? "ACTIVE" : "RESEARCH"))}</td><td>${badge(t.version_state || "CURRENT")}</td></tr>`).join("") : '<tr><td colspan="9" class="empty">No Trigger versions match the current filter.</td></tr>';
     qa("[data-trigger-id]", desktop).forEach(row => row.onclick = () => window.showTrigger(row.dataset.triggerId, row.dataset.triggerVersion));
     if(rows[0]) window.showTrigger(rows[0].trigger_id, rows[0].version);
   }
@@ -2429,29 +2451,36 @@ def _reference_backend_script(payload: str) -> str:
     const detail = q("#trigger-details", desktop) || q("#triggerDetail", desktop);
     const usedIn = (t?.used_in && t.used_in.length)
       ? t.used_in
-      : (state.registry.sets || [])
+      : (state.registry.research_sets || state.registry.sets || [])
           .filter(s => (s.trigger_versions || []).some(v => v.trigger_id === id && v.version === version))
           .map(s => ({set_id:s.set_id, set_version:s.version, set_status:s.status}));
     const versions = t?.version_history || [];
     const metricLinks = (t?.metric_links && t.metric_links.length ? t.metric_links : (t?.metric_refs || []).map(m => ({id:m,name:m}))).map(m => `<button class="reference-link" onclick="openConfig('metrics'); window.showMetric && window.showMetric('${h(m.id)}')">${h(m.id)}${m.name && m.name !== m.id ? " · " + h(m.name) : ""}</button>`).join("");
-    if(detail) detail.innerHTML = `<div class="details-header"><div class="details-id">Trigger ${h(id)} · Version ${h(version || t?.version || "—")} · ${h(triggerStatusLabel(t))}</div><div class="details-title">${h(t?.display_name || id || "Trigger")}</div><div class="details-meta"><span class="meta-pill">Status: ${h(t?.status || triggerStatusLabel(t))}</span><span class="meta-pill">${h(t?.family || "Research Trigger")}</span><span class="meta-pill">Digest: ${h(t?.canonical_digest || "—")}</span></div></div><div class="details-section"><div class="section-title">Metric</div><div class="reference-links">${metricLinks || h(t?.metric || "Metric unavailable")}</div></div><div class="details-section"><div class="section-title">Condition</div><div class="formula" style="white-space:pre-line">${h(t?.formula_text || t?.condition || t?.what_it_checks || "Unavailable")}</div></div><div class="details-section"><div class="section-title">Output</div><div class="body-text">${h(t?.output || "Output unavailable")}</div></div><div class="details-section"><div class="section-title">Applicability / Scope</div><div class="body-text">${h(t?.applicability || t?.scope || "Scope unavailable")}</div></div><div class="details-section"><div class="section-title">What this Trigger means</div><div class="body-text">${h(t?.how_it_works || "Backend trigger detail unavailable.")}</div></div><div class="details-section"><div class="section-title">Unavailable, ZERO, and NONE handling</div><div class="body-text">${h([t?.unavailable_reason, t?.zero_none_unavailable].filter(Boolean).join("\\n") || "If required backend observations or metric inputs are unavailable, the Trigger result is unavailable; the frontend does not convert missing facts to zero or fabricate a signal.")}</div></div><div class="details-section"><div class="section-title">Raw declarative configuration</div><div class="formula" style="white-space:pre-line">${h(JSON.stringify(t?.raw_definition || {}, null, 2))}</div></div><div class="details-section"><div class="section-title">Used in Set Versions</div><div class="reference-links">${usedIn.length ? usedIn.map(s => `<button class="reference-link js-open-set" data-set-id="${h(s.set_id)}" data-set-version="${h(s.set_version)}">${h(s.set_id)} ${h(s.set_version)} · ${h(setStatusLabel(s.set_status))}</button>`).join("") : "—"}</div></div><div class="details-section"><div class="section-title">Version History</div><div class="version-list">${versions.length ? versions.map(v => `<button class="version-button js-open-trigger ${v.version === (version || t?.version) ? "selected" : ""}" data-trigger-id="${h(id)}" data-trigger-version="${h(v.version)}">${h(v.version)} · ${h(v.change_summary || v.created_at || "")}</button>`).join("") : "—"}</div></div>`;
+    if(detail) detail.innerHTML = `<div class="details-header"><div class="details-id">Trigger ${h(id)} · Version ${h(version || t?.version || "—")} · ${h(t?.version_state || "CURRENT")}</div><div class="details-title">${h(t?.display_name || id || "Trigger")}</div><div class="details-meta"><span class="meta-pill">Research status: ${h(t?.status || triggerStatusLabel(t))}</span><span class="meta-pill">${h(t?.family || "Research Trigger")}</span><span class="meta-pill">Implementation: ${h(t?.implementation_key || "—")}</span><span class="meta-pill">Digest: ${h(t?.canonical_digest || "—")}</span></div></div><div class="details-section"><div class="section-title">Metric</div><div class="reference-links">${metricLinks || h(t?.metric || "Metric unavailable")}</div></div><div class="details-section"><div class="section-title">Formula</div><div class="body-text">${h(t?.formula || (t?.formula_refs || []).join(", ") || "—")}</div></div><div class="details-section"><div class="section-title">Condition</div><div class="formula" style="white-space:pre-line">${h(t?.formula_text || t?.condition || t?.what_it_checks || "Unavailable")}</div></div><div class="details-section"><div class="section-title">Operator / Threshold</div><div class="body-text">${h([t?.operator, t?.threshold].filter(Boolean).join(" ") || "—")}</div></div><div class="details-section"><div class="section-title">Output</div><div class="body-text">${h(t?.output || "Output unavailable")}</div></div><div class="details-section"><div class="section-title">Applicability / Scope</div><div class="body-text">${h(t?.applicability || t?.scope || "Scope unavailable")}</div></div><div class="details-section"><div class="section-title">Coin Applicability</div><div class="body-text">Coins: ${h((t?.coin_applicability || []).join(", ") || "ALL")}\\nExcluded: ${h((t?.excluded_coins || []).join(", ") || "—")}\\nDirection: ${h(t?.direction_applicability || "—")}</div></div><div class="details-section"><div class="section-title">What this Trigger means</div><div class="body-text">${h(t?.how_it_works || "Backend trigger detail unavailable.")}</div></div><div class="details-section"><div class="section-title">Unavailable, ZERO, and NONE handling</div><div class="body-text">${h([t?.unavailable_reason, t?.zero_none_unavailable].filter(Boolean).join("\\n") || "If required backend observations or metric inputs are unavailable, the Trigger result is unavailable; the frontend does not convert missing facts to zero or fabricate a signal.")}</div></div><div class="details-section"><div class="section-title">Raw immutable configuration</div><div class="formula" style="white-space:pre-line">${h(JSON.stringify(t?.raw_definition || {}, null, 2))}</div></div><div class="details-section"><div class="section-title">Used in Set Versions</div><div class="reference-links">${usedIn.length ? usedIn.map(s => `<button class="reference-link js-open-set" data-set-id="${h(s.set_id)}" data-set-version="${h(s.set_version)}">${h(s.set_id)} ${h(s.set_version)} · ${h(s.version_state || setStatusLabel(s.set_status))}</button>`).join("") : "—"}</div></div><div class="details-section"><div class="section-title">Version History</div><div class="version-list">${versions.length ? versions.map(v => `<button class="version-button js-open-trigger ${v.version === (version || t?.version) ? "selected" : ""}" data-trigger-id="${h(id)}" data-trigger-version="${h(v.version)}">${h(v.version)} · ${h(v.version_state || "")}</button>`).join("") : "—"}</div></div>`;
   };
   function renderSets(){
-    const rows = state.registry.sets || [];
+    const allRows = state.registry.research_sets || state.registry.sets || [];
+    const search = String(q("#set-search", desktop)?.value || "").trim().toUpperCase();
+    const stateFilter = String(q("#set-version-state-filter", desktop)?.value || "");
+    const rows = allRows.filter(s => (!search || String(s.set_id || "").toUpperCase().includes(search) || String(s.hypothesis || "").toUpperCase().includes(search)) && (!stateFilter || s.version_state === stateFilter));
     const body = q("#sets-body", desktop) || q("#setsBody", desktop) || q("#config-sets tbody", desktop);
-    if(body) body.innerHTML = rows.length ? rows.map(s => `<tr class="catalog-row" data-set-id="${h(s.set_id)}" data-set-version="${h(s.version)}"><td>${h(s.display_name || s.set_id)}</td><td>${h(s.version)}</td><td>${h([s.symbol, s.timeframe].filter(Boolean).join(" · ") || "—")}</td><td>${h((s.trigger_versions || []).map(t => t.trigger_id + " " + t.version).join(", ") || "—")}</td><td>${badge(s.status || "UNKNOWN")}</td></tr>`).join("") : '<tr><td colspan="5" class="empty">No Set versions available.</td></tr>';
+    if(body) body.innerHTML = rows.length ? rows.map(s => `<tr class="catalog-row" data-set-id="${h(s.set_id)}" data-set-version="${h(s.version)}"><td>${h(s.set_id)}</td><td>${h(s.version)}</td><td>${h(s.hypothesis || (s.hypothesis_ids || []).join(", ") || "—")}</td><td>${h(s.direction || "—")}</td><td>${h(s.coin_scope || [s.symbol, s.timeframe].filter(Boolean).join(" · ") || "—")}</td><td>${h(s.trigger_count ?? (s.trigger_versions || []).length)}</td><td>${badge(s.status || "UNKNOWN")}</td><td>${badge(s.version_state || "CURRENT")}</td></tr>`).join("") : '<tr><td colspan="8" class="empty">No Research Set versions match the current filter.</td></tr>';
     qa("[data-set-id]", desktop).forEach(row => row.onclick = () => window.showSet(row.dataset.setId, row.dataset.setVersion));
     if(rows[0]) window.showSet(rows[0].set_id, rows[0].version);
   }
   window.showSet = function(id, version){
-    const s = (state.registry.selected_set && state.registry.selected_set.set_id === id && state.registry.selected_set.version === version) ? state.registry.selected_set : (state.registry.sets || []).find(x => x.set_id === id && x.version === version);
-    const members = (s?.trigger_versions || s?.rules || []).map(x => ({trigger_id:x.trigger_id || x.rule_id, version:x.version || x.rule_version, display_name:x.display_name || x.name, condition:x.condition}));
+    const setRows = state.registry.research_sets || state.registry.sets || [];
+    const s = (state.registry.selected_research_set && state.registry.selected_research_set.set_id === id && state.registry.selected_research_set.version === version) ? state.registry.selected_research_set : setRows.find(x => x.set_id === id && x.version === version);
+    const members = (s?.trigger_members || s?.trigger_versions || s?.rules || []).map(x => ({trigger_id:x.trigger_id || x.rule_id, version:x.version || x.trigger_version || x.rule_version, display_name:x.display_name || x.name, condition:x.condition_summary || x.condition, role:x.role, position:x.position}));
     const detail = q("#set-details", desktop) || q("#setDetail", desktop);
     const triggerLinks = members.map(t => `<button class="reference-link js-open-trigger" data-trigger-id="${h(t.trigger_id)}" data-trigger-version="${h(t.version)}">${h(t.trigger_id)} ${h(t.version)}</button>`).join(" ");
-    const condition = members.map(t => `<span class="logic-trigger">${h(t.trigger_id)} ${h(t.version)}</span> evaluates TRUE`).join(" AND ");
-    if(detail) detail.innerHTML = `<div class="details-header"><div class="details-id">Set ${h(id)} · Version ${h(version)} · ${h(setStatusLabel(s?.status))}</div><div class="details-title">${h(s?.display_name || s?.purpose || id || "Set")}</div><div class="details-meta"><span class="meta-pill">Direction: LONG / SHORT / NONE</span><span class="meta-pill">${h([s?.symbol, s?.timeframe].filter(Boolean).join(" · ") || "Market unavailable")}</span></div></div><div class="details-section"><div class="section-title">Trigger Versions Used</div><div class="reference-links">${triggerLinks || "—"}</div></div><div class="details-section"><div class="section-title">Human-readable Set Logic</div><div class="set-logic"><div class="set-logic-row"><div class="logic-keyword">IF</div><div class="logic-condition">${condition || "No trigger versions recorded"}</div></div><div class="set-logic-row"><div class="logic-keyword">THEN</div><div class="logic-condition">Direction resolves through this Set to LONG / SHORT / NONE for the configured market.</div></div><div class="set-logic-row"><div class="logic-keyword">ELSE</div><div class="logic-condition">Direction = NONE.</div></div></div></div><div class="details-section"><div class="section-title">Historical correctness</div><div class="body-text">This panel renders the exact selected Set Version and the exact Trigger Versions recorded for that version.</div></div>`;
+    const condition = members.map(t => `<div><span class="logic-trigger">${h(t.trigger_id)} ${h(t.version)}</span> ${h(t.role || "")} ${h(t.condition || "")}</div>`).join("");
+    if(detail) detail.innerHTML = `<div class="details-header"><div class="details-id">Set ${h(id)} · Version ${h(version)} · ${h(s?.version_state || "CURRENT")}</div><div class="details-title">${h(s?.display_name || s?.purpose || id || "Set")}</div><div class="details-meta"><span class="meta-pill">Research status: ${h(s?.status || "UNKNOWN")}</span><span class="meta-pill">Direction: ${h(s?.direction || "—")}</span><span class="meta-pill">Triggers: ${h(s?.trigger_count ?? members.length)}</span><span class="meta-pill">Digest: ${h(s?.canonical_digest || "—")}</span></div></div><div class="details-section"><div class="section-title">Hypothesis / Scope</div><div class="body-text">Hypothesis: ${h(s?.hypothesis || (s?.hypothesis_ids || []).join(", ") || "—")}\\nCoins: ${h(s?.coin_scope || (s?.coin_applicability || []).join(", ") || "ALL")}\\nExcluded: ${h((s?.excluded_coins || []).join(", ") || "—")}\\nSegment: ${h(s?.segment_applicability || "—")}</div></div><div class="details-section"><div class="section-title">Trigger Versions Used</div><div class="reference-links">${triggerLinks || "—"}</div></div><div class="details-section"><div class="section-title">Membership Order</div><div class="set-logic">${condition || "No trigger versions recorded"}</div></div><div class="details-section"><div class="section-title">Composition / Direction Semantics</div><div class="formula" style="white-space:pre-line">${h([s?.trigger_composition_logic || s?.composition, s?.direction_semantics].filter(Boolean).join("\\n\\n") || "—")}</div></div><div class="details-section"><div class="section-title">Raw immutable Set configuration</div><div class="formula" style="white-space:pre-line">${h(JSON.stringify(s?.raw_definition || {}, null, 2))}</div></div><div class="details-section"><div class="section-title">Version History</div><div class="version-list">${(s?.version_history || []).map(v => `<button class="version-button js-open-set ${v.version === (version || s?.version) ? "selected" : ""}" data-set-id="${h(id)}" data-set-version="${h(v.version)}">${h(v.version)} · ${h(v.version_state || "")}</button>`).join("") || "—"}</div></div>`;
   };
+  ["trigger-search","trigger-version-state-filter","trigger-formula-filter"].forEach(id => q("#"+id, desktop)?.addEventListener("input", renderTriggers));
+  ["set-search","set-version-state-filter"].forEach(id => q("#"+id, desktop)?.addEventListener("input", renderSets));
   qa(".config-tab", desktop).forEach(b => b.onclick = () => openConfig(b.dataset.config));
+  qa(".research-tab", desktop).forEach(b => b.onclick = () => openResearchView(b.dataset.researchView));
 
   function renderRules(){
     const c = state.rules.current;
@@ -2912,9 +2941,16 @@ def _reference_backend_script(payload: str) -> str:
   if(initialPage === "research-detail"){
     if(initialResearchId) window.openResearchById(initialResearchId, {preserveUrl:true});
     else showResearchUnavailable("Research record unavailable.");
-  }else if(initialPage === "sets" && state.registry.selected_set){
-    showPage(initialPage);
-    window.showSet(state.registry.selected_set.set_id, state.registry.selected_set.version);
+  }else if(initialPage === "trigger-catalog" || initialPage === "trigger-detail"){
+    openResearchView("triggers", {preserveUrl:true});
+    if(state.registry.selected_trigger) window.showTrigger(state.registry.selected_trigger.trigger_id, state.registry.selected_trigger.version);
+  }else if(initialPage === "sets"){
+    openResearchView("sets", {preserveUrl:true});
+    if(state.registry.selected_research_set) window.showSet(state.registry.selected_research_set.set_id, state.registry.selected_research_set.version);
+    else if(state.registry.selected_set) window.showSet(state.registry.selected_set.set_id, state.registry.selected_set.version);
+  }else if(initialPage === "research"){
+    const parts = location.pathname.split("/").filter(Boolean);
+    openResearchView(parts[1] === "triggers" || parts[1] === "sets" ? parts[1] : "overview", {preserveUrl:true});
   }else{
     showPage(initialPage);
   }
@@ -2948,7 +2984,15 @@ def _trigger_reference_panel() -> str:
     return """
   <!-- TRIGGERS -->
 
-  <section id="config-triggers" class="config-view"><div class="layout"><section class="panel"><div class="panel-header"><div class="panel-title">Research Triggers</div></div><div class="table-wrap"><table><thead><tr><th>Trigger</th><th>Version</th><th>Metric(s)</th><th>Condition</th><th>Output</th><th>Applicability / Scope</th><th>Status</th></tr></thead><tbody id="triggers-body"></tbody></table></div></section><section class="panel" id="trigger-details"></section></div></section>
+  <section id="config-triggers" class="config-view"><div class="layout"><section class="panel"><div class="panel-header"><div><div class="panel-title">Research Triggers</div><div class="panel-meta">Immutable trigger versions from the Research registry</div></div><div class="toolbar"><input class="search" id="trigger-search" placeholder="Search trigger ID"><select id="trigger-version-state-filter"><option value="">Version State: All</option><option>CURRENT</option><option>HISTORICAL</option></select><select id="trigger-formula-filter"><option value="">Formula: All</option></select></div></div><div class="table-wrap"><table><thead><tr><th>Trigger</th><th>Version</th><th>Metric</th><th>Formula</th><th>Condition</th><th>Output</th><th>Applicability</th><th>Status</th><th>Version State</th></tr></thead><tbody id="triggers-body"></tbody></table></div></section><section class="panel" id="trigger-details"></section></div></section>
+"""
+
+
+def _set_reference_panel() -> str:
+    return """
+  <!-- SETS -->
+
+  <section id="config-sets" class="config-view"><div class="layout"><section class="panel"><div class="panel-header"><div><div class="panel-title">Research Sets</div><div class="panel-meta">Immutable Research Set versions from the Set registry</div></div><div class="toolbar"><input class="search" id="set-search" placeholder="Search Set or hypothesis"><select id="set-version-state-filter"><option value="">Version State: All</option><option>CURRENT</option><option>HISTORICAL</option></select></div></div><div class="table-wrap"><table><thead><tr><th>Set</th><th>Version</th><th>Hypothesis</th><th>Direction</th><th>Coin / Scope</th><th>Trigger Count</th><th>Status</th><th>Version State</th></tr></thead><tbody id="sets-body"></tbody></table></div></section><section class="panel" id="set-details"></section></div></section>
 """
 
 
@@ -2958,6 +3002,65 @@ def _replace_trigger_reference_panel(html_source: str) -> str:
     if marker_start >= 0 and marker_end >= 0:
         return html_source[:marker_start] + _trigger_reference_panel() + "\n" + html_source[marker_end:]
     return html_source
+
+
+def _replace_set_reference_panel(html_source: str) -> str:
+    marker_start = html_source.find("  <!-- SETS -->")
+    marker_end = html_source.find("  <!-- TRADING RULES -->", marker_start)
+    if marker_start >= 0 and marker_end >= 0:
+        return html_source[:marker_start] + _set_reference_panel() + "\n" + html_source[marker_end:]
+    return html_source
+
+
+def _remove_config_research_registry_panels(html_source: str) -> str:
+    """Keep imported Research Triggers/Sets out of Trading Configuration."""
+
+    body = re.sub(
+        r"\s*<button\s+class=\"config-tab\"\s+data-config=\"(?:triggers|sets)\".*?</button>",
+        "",
+        html_source,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    marker_start = body.find("  <!-- TRIGGERS -->")
+    marker_end = body.find("  <!-- TRADING RULES -->", marker_start)
+    if marker_start >= 0 and marker_end >= 0:
+        body = body[:marker_start] + body[marker_end:]
+    return body
+
+
+def _research_registry_panels() -> str:
+    return (
+        """
+  <nav class="research-nav"><div class="research-tabs"><button type="button" class="research-tab active" data-research-view="overview">Overview</button><button type="button" class="research-tab" data-research-view="triggers">Triggers</button><button type="button" class="research-tab" data-research-view="sets">Sets</button></div></nav>
+  <section class="research-view active" id="research-overview">
+"""
+        + """
+  </section>
+  <section id="research-triggers" class="research-view"><div class="layout"><section class="panel"><div class="panel-header"><div><div class="panel-title">Research Triggers</div><div class="panel-meta">Immutable trigger versions from the Research registry</div></div><div class="toolbar"><input class="search" id="trigger-search" placeholder="Search trigger ID"><select id="trigger-version-state-filter"><option value="">Version State: All</option><option>CURRENT</option><option>HISTORICAL</option></select><select id="trigger-formula-filter"><option value="">Formula: All</option></select></div></div><div class="table-wrap"><table><thead><tr><th>Trigger</th><th>Version</th><th>Metric</th><th>Formula</th><th>Condition</th><th>Output</th><th>Applicability</th><th>Status</th><th>Version State</th></tr></thead><tbody id="triggers-body"></tbody></table></div></section><section class="panel" id="trigger-details"></section></div></section>
+  <section id="research-sets" class="research-view"><div class="layout"><section class="panel"><div class="panel-header"><div><div class="panel-title">Research Sets</div><div class="panel-meta">Immutable Research Set versions from the Set registry</div></div><div class="toolbar"><input class="search" id="set-search" placeholder="Search Set or hypothesis"><select id="set-version-state-filter"><option value="">Version State: All</option><option>CURRENT</option><option>HISTORICAL</option></select></div></div><div class="table-wrap"><table><thead><tr><th>Set</th><th>Version</th><th>Hypothesis</th><th>Direction</th><th>Coin / Scope</th><th>Trigger Count</th><th>Status</th><th>Version State</th></tr></thead><tbody id="sets-body"></tbody></table></div></section><section class="panel" id="set-details"></section></div></section>
+"""
+    )
+
+
+def _inject_research_registry_panels(html_source: str) -> str:
+    start = html_source.find('<main id="page-research" class="page">')
+    if start < 0:
+        return html_source
+    content_start = html_source.find("\n", start)
+    end = html_source.find("</main>", start)
+    if content_start < 0 or end < 0:
+        return html_source
+    content_start += 1
+    panels = _research_registry_panels()
+    overview_open = panels.split("  </section>", 1)[0]
+    overview_close_and_panels = "  </section>" + panels.split("  </section>", 1)[1]
+    return (
+        html_source[:content_start]
+        + overview_open
+        + html_source[content_start:end]
+        + overview_close_and_panels
+        + html_source[end:]
+    )
 
 
 def render_product_dashboard(
@@ -2980,9 +3083,9 @@ def render_product_dashboard(
     page_map = {
         "portfolio": "overview",
         "overview": "overview",
-        "sets": "config",
-        "trigger-catalog": "config",
-        "trigger-detail": "config",
+        "sets": "sets",
+        "trigger-catalog": "trigger-catalog",
+        "trigger-detail": "trigger-detail",
         "rules": "config",
         "rules-version": "config",
         "config": "config",
@@ -3008,9 +3111,11 @@ def render_product_dashboard(
         ensure_ascii=False,
     ).replace("</", "<\\/")
     desktop_head = _reference_head(DESKTOP_REFERENCE_HTML)
-    desktop_body = _replace_trigger_reference_panel(
-        _replace_metrics_reference_panel(
-            _neutral_research_detail_placeholders(_without_reference_scripts(_reference_body(DESKTOP_REFERENCE_HTML)))
+    desktop_body = _inject_research_registry_panels(
+        _remove_config_research_registry_panels(
+            _replace_metrics_reference_panel(
+                _neutral_research_detail_placeholders(_without_reference_scripts(_reference_body(DESKTOP_REFERENCE_HTML)))
+            )
         )
     )
     mobile_styles = _scoped_mobile_reference_styles(MOBILE_OVERVIEW_REFERENCE_HTML)
@@ -3144,6 +3249,43 @@ def render_product_dashboard(
 }
 #config-rules .coin-search-error{
   color:#b42318;
+}
+.research-nav{
+  display:flex;
+  margin-bottom:12px;
+  padding:0 14px;
+  background:#fff;
+  border:1px solid var(--line);
+  border-radius:10px;
+  box-shadow:var(--shadow);
+  overflow:auto;
+}
+.research-tabs{
+  display:inline-flex;
+  gap:2px;
+  padding:11px 0;
+}
+.research-tab{
+  height:28px;
+  padding:0 10px;
+  border:0;
+  border-radius:6px;
+  background:transparent;
+  color:#7b8493;
+  font-size:9px;
+  font-weight:800;
+  white-space:nowrap;
+}
+.research-tab.active{
+  background:#fff;
+  color:#253858;
+  box-shadow:0 1px 2px rgba(16,24,40,.08);
+}
+.research-view{
+  display:none;
+}
+.research-view.active{
+  display:block;
 }
 @media(max-width:760px){
   body.tt-mobile-overview-active{background:#f5f7fb}

@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from http import HTTPStatus
+import threading
 import json
 import os
 from pathlib import Path
 import uuid
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 
 import pytest
 
+from triggertrade.dashboard.__main__ import create_server
 from triggertrade.persistence import (
     PostgresConnectionFactory,
     PostgresResearchSetRegistry,
@@ -216,6 +221,84 @@ def test_research_set_registry_does_not_require_rules_bindings():
     assert record.backend_mapping.get("requires_risk_profile_version") is False
 
 
+def test_dashboard_reads_research_sets_from_postgres_registry():
+    settings = _settings()
+    try:
+        factory = _migrate(settings)
+        with PostgresUnitOfWork(factory) as uow:
+            PostgresTriggerRegistry(uow.connection).sync_trigger_registry(_research_v1_rules())
+            PostgresResearchSetRegistry(uow.connection).sync_research_sets(_research_v1_sets())
+
+        db_path = Path(".tt-tmp") / f"research-set-web-{uuid.uuid4().hex}" / "dashboard.sqlite3"
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        server = create_server(
+            port=0,
+            db_path=db_path,
+            trigger_registry=_TriggerRegistryClient(factory),
+            research_set_registry=_ResearchSetRegistryClient(factory),
+        )
+        host, port = server.server_address
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            sets_payload = _json_request(host, port, "GET", "/api/research/sets")
+            detail = _json_request(host, port, "GET", "/api/research/sets/SET-R-BTC-001/SET-R-BTC-001-V1")
+            mutation = _json_request(
+                host,
+                port,
+                "POST",
+                "/api/research/sets",
+                data=b"{}",
+                expected=HTTPStatus.FORBIDDEN,
+            )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+        affected = {
+            "SET-R-BTC-001-V1",
+            "SET-R-BTC-001-V2",
+            "SET-R-BTC-003-V2",
+            "SET-R-BTC-007-V2",
+            "SET-R-BTC-008-V2",
+            "SET-R-BTC-009-V2",
+            "SET-R-BTC-011-V2",
+            "SET-R-BTC-012-V2",
+            "SET-R-BTC-015-V2",
+            "SET-R-BTC-016-V2",
+            "SET-R-BTC-019-V1",
+            "SET-R-BTC-019-V2",
+            "SET-R-BTC-020-V1",
+            "SET-R-BTC-020-V2",
+            "SET-R-BTC-021-V1",
+            "SET-R-BTC-021-V2",
+        }
+        btc_trigger_ids = {"TR-R-BTC-001", "TR-R-BTC-002", "TR-R-BTC-003", "TR-R-BTC-004"}
+
+        assert sets_payload["count"] == 33
+        assert len(sets_payload["sets"]) == 33
+        btc_sets = [row for row in sets_payload["sets"] if row["version"] in affected]
+        assert len(btc_sets) == 16
+        assert sum(
+            1
+            for row in btc_sets
+            for member in row["trigger_members"]
+            if member["trigger_id"] in btc_trigger_ids and member["version"] == "1.0.1"
+        ) == 34
+        assert not [
+            member
+            for row in btc_sets
+            for member in row["trigger_members"]
+            if member["trigger_id"] in btc_trigger_ids and member["version"] == "1.0.0"
+        ]
+        assert detail["set"]["trigger_members"][0]["position"] == 1
+        assert detail["set"]["trigger_members"][0]["trigger_id"].startswith("TR-R-")
+        assert mutation["error"] == "operator token required"
+    finally:
+        _drop_schema(settings)
+
+
 def _research_v1_sets() -> tuple[ResearchSetVersion, ...]:
     package = json.loads(Path("docs/research-import/sets/RESEARCH_V1_SETS.json").read_text(encoding="utf-8"))
     return tuple(research_set_from_package_record(record) for record in package["sets"])
@@ -235,3 +318,44 @@ def _research_v1_rules() -> tuple[RuleDefinition, ...]:
         assert definition_hash(rule)
         rules.append(rule)
     return tuple(rules)
+
+
+def _json_request(host, port, method: str, path: str, *, data: bytes | None = None, expected=HTTPStatus.OK):
+    request = Request(f"http://{host}:{port}{path}", method=method, data=data)
+    if data is not None:
+        request.add_header("Content-Type", "application/json")
+    try:
+        with urlopen(request, timeout=30) as response:
+            body = response.read().decode("utf-8")
+            assert response.status == expected
+            return json.loads(body) if body.startswith("{") else body
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8")
+        assert exc.code == expected
+        return json.loads(body) if body.startswith("{") else body
+
+
+class _TriggerRegistryClient:
+    def __init__(self, factory: PostgresConnectionFactory) -> None:
+        self._factory = factory
+
+    def list_trigger_versions(self):
+        with self._factory.connect() as connection:
+            return PostgresTriggerRegistry(connection).list_trigger_versions()
+
+    def get_rule(self, rule_id: str, version: str | None = None):
+        with self._factory.connect() as connection:
+            return PostgresTriggerRegistry(connection).get_rule(rule_id, version)
+
+
+class _ResearchSetRegistryClient:
+    def __init__(self, factory: PostgresConnectionFactory) -> None:
+        self._factory = factory
+
+    def list_research_sets(self):
+        with self._factory.connect() as connection:
+            return PostgresResearchSetRegistry(connection).list_research_sets()
+
+    def get_research_set(self, set_id: str, version: str):
+        with self._factory.connect() as connection:
+            return PostgresResearchSetRegistry(connection).get_research_set(set_id, version)

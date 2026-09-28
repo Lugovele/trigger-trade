@@ -26,6 +26,11 @@ from triggertrade.dashboard.read_model import (
 from triggertrade.dashboard.readiness import evaluate_dashboard_readiness
 from triggertrade.dashboard.commands import DashboardCommandBoundary, DashboardCommandError
 from triggertrade.dashboard.metrics_library import get_metric, metrics_payload
+from triggertrade.dashboard.research_sets import (
+    research_set_detail_payload,
+    research_sets_payload,
+    trigger_lookup_from_payloads,
+)
 from triggertrade.dashboard.research_triggers import research_trigger_detail_payload, research_trigger_payload
 from triggertrade.exchanges import BybitDemoClient
 from triggertrade.backtest import BacktestPlan
@@ -37,6 +42,7 @@ from triggertrade.persistence import (
     PostgresConnectionFactory,
     PostgresSettings,
     PostgresResearchConfigurationRegistryClient,
+    PostgresResearchSetRegistry,
     ResearchPromotionGovernanceClient,
     ResearchStore,
     ResearchStoreError,
@@ -95,6 +101,7 @@ class DashboardServer(ThreadingHTTPServer):
         research_config_registry=None,
         research_run_store=None,
         trigger_registry=None,
+        research_set_registry=None,
     ) -> None:
         super().__init__(server_address, handler_class)
         self.read_model = read_model
@@ -118,6 +125,7 @@ class DashboardServer(ThreadingHTTPServer):
         self.research_config_registry = research_config_registry
         self.research_run_store = research_run_store
         self.trigger_registry = trigger_registry
+        self.research_set_registry = research_set_registry
 
 
 class DashboardHandler(BaseHTTPRequestHandler):
@@ -223,6 +231,25 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 else:
                     self._send_json({"trigger": payload})
                 return
+        if parsed.path == "/api/research/sets":
+            try:
+                self._send_json(_research_sets_payload(self.server))
+            except DashboardRegistryUnavailable as exc:
+                self._send_json({"error": str(exc)}, HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+        if parsed.path.startswith("/api/research/sets/"):
+            parts = [unquote(part) for part in parsed.path.strip("/").split("/")]
+            if len(parts) == 5 and parts[:3] == ["api", "research", "sets"]:
+                try:
+                    payload = _research_set_detail(self.server, parts[3], parts[4])
+                except DashboardRegistryUnavailable as exc:
+                    self._send_json({"error": str(exc)}, HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                if payload is None:
+                    self._send_json({"error": "research set not found"}, HTTPStatus.NOT_FOUND)
+                else:
+                    self._send_json({"set": payload})
+                return
         if parsed.path.startswith("/api/research/"):
             parts = [unquote(part) for part in parsed.path.strip("/").split("/")]
             if len(parts) == 3 and parts[0] == "api" and parts[1] == "research":
@@ -270,6 +297,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             "/trigger-catalog": "config",
             "/trigger-detail": "config",
             "/research/triggers": "trigger-catalog",
+            "/research/sets": "sets",
             "/rules": "config",
             "/rules-version": "config",
             "/research": "research",
@@ -284,6 +312,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     initial_page=product_pages[parsed.path],
                     research_config_registry=self.server.research_config_registry,
                     trigger_registry=self.server.trigger_registry,
+                    research_set_registry=self.server.research_set_registry,
                 )
             )
             return
@@ -301,6 +330,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     initial_page="sets",
                     research_config_registry=self.server.research_config_registry,
                     trigger_registry=self.server.trigger_registry,
+                    research_set_registry=self.server.research_set_registry,
                 )
             )
             return
@@ -319,6 +349,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     selected_trigger_version=version,
                     research_config_registry=self.server.research_config_registry,
                     trigger_registry=self.server.trigger_registry,
+                    research_set_registry=self.server.research_set_registry,
                 )
             )
             return
@@ -329,6 +360,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     initial_page="rules-version",
                     research_config_registry=self.server.research_config_registry,
                     trigger_registry=self.server.trigger_registry,
+                    research_set_registry=self.server.research_set_registry,
                 )
             )
             return
@@ -339,6 +371,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     initial_page="research-detail",
                     research_config_registry=self.server.research_config_registry,
                     trigger_registry=self.server.trigger_registry,
+                    research_set_registry=self.server.research_set_registry,
                 )
             )
             return
@@ -753,6 +786,7 @@ def render_dashboard(
     selected_trigger_version: str | None = None,
     research_config_registry=None,
     trigger_registry=None,
+    research_set_registry=None,
 ) -> str:
     from triggertrade.dashboard.product_ui import render_product_dashboard
 
@@ -781,12 +815,18 @@ def render_dashboard(
         registry_error = str(exc)
         registry_set_summaries = ()
     try:
-        registry_trigger_catalog = _research_trigger_catalog(trigger_registry, read_model)
+        registry_research_sets = _research_set_catalog(research_set_registry, trigger_registry)
+    except DashboardRegistryUnavailable as exc:
+        registry_error = registry_error or str(exc)
+        registry_research_sets = ()
+    try:
+        registry_trigger_catalog = _research_trigger_catalog(trigger_registry, read_model, research_set_registry)
         registry_selected_trigger = _research_trigger_detail_from_inputs(
             trigger_registry,
             read_model,
             selected_trigger_id,
             selected_trigger_version,
+            research_set_registry,
         )
     except DashboardRegistryUnavailable as exc:
         registry_error = registry_error or str(exc)
@@ -795,6 +835,7 @@ def render_dashboard(
     selected_set_view = _selected_set_summary(read_model, selected_set)
     registry = {
         "sets": registry_set_summaries if research_config_registry is not None else read_model.list_set_summaries(),
+        "research_sets": registry_research_sets,
         "selected_set": selected_set_view,
         "triggers": registry_trigger_catalog,
         "selected_trigger": registry_selected_trigger,
@@ -881,11 +922,20 @@ def _registry_set_summaries(registry, *, selectable_only: bool = True) -> tuple[
     return tuple(summaries)
 
 
-def _research_trigger_catalog(trigger_registry, read_model: DashboardReadModel) -> tuple[dict[str, object], ...] | tuple:
+def _research_trigger_catalog(
+    trigger_registry,
+    read_model: DashboardReadModel,
+    research_set_registry=None,
+) -> tuple[dict[str, object], ...] | tuple:
     if trigger_registry is None:
         return read_model.list_trigger_catalog()
     try:
-        return tuple(research_trigger_payload(trigger_registry.list_trigger_versions())["triggers"])
+        return tuple(
+            research_trigger_payload(
+                trigger_registry.list_trigger_versions(),
+                research_sets=_list_research_sets_safe(research_set_registry),
+            )["triggers"]
+        )
     except Exception as exc:
         raise DashboardRegistryUnavailable("PostgreSQL trigger registry unavailable") from exc
 
@@ -895,13 +945,18 @@ def _research_trigger_detail_from_inputs(
     read_model: DashboardReadModel,
     trigger_id: str | None,
     version: str | None,
+    research_set_registry=None,
 ):
     if not trigger_id:
         return None
     if trigger_registry is None:
         return read_model.get_trigger_detail(trigger_id, version)
     try:
-        return research_trigger_detail_payload(trigger_registry.get_rule(trigger_id, version))
+        return research_trigger_detail_payload(
+            trigger_registry.get_rule(trigger_id, version),
+            all_rules=trigger_registry.list_trigger_versions(),
+            research_sets=_list_research_sets_safe(research_set_registry),
+        )
     except Exception as exc:
         raise DashboardRegistryUnavailable("PostgreSQL trigger registry unavailable") from exc
 
@@ -910,7 +965,10 @@ def _research_triggers_payload(server: DashboardServer) -> dict[str, object]:
     if server.trigger_registry is None:
         return {"triggers": server.read_model.list_trigger_catalog(), "count": len(server.read_model.list_trigger_catalog())}
     try:
-        return research_trigger_payload(server.trigger_registry.list_trigger_versions())
+        return research_trigger_payload(
+            server.trigger_registry.list_trigger_versions(),
+            research_sets=_list_research_sets_safe(server.research_set_registry),
+        )
     except Exception as exc:
         raise DashboardRegistryUnavailable("PostgreSQL trigger registry unavailable") from exc
 
@@ -920,9 +978,74 @@ def _research_trigger_detail(server: DashboardServer, trigger_id: str, version: 
         detail = server.read_model.get_trigger_detail(trigger_id, version)
         return None if detail is None else detail
     try:
-        return research_trigger_detail_payload(server.trigger_registry.get_rule(trigger_id, version))
+        return research_trigger_detail_payload(
+            server.trigger_registry.get_rule(trigger_id, version),
+            all_rules=server.trigger_registry.list_trigger_versions(),
+            research_sets=_list_research_sets_safe(server.research_set_registry),
+        )
     except Exception as exc:
         raise DashboardRegistryUnavailable("PostgreSQL trigger registry unavailable") from exc
+
+
+def _research_set_catalog(research_set_registry, trigger_registry=None) -> tuple[dict[str, object], ...]:
+    if research_set_registry is None:
+        return ()
+    try:
+        triggers = (
+            research_trigger_payload(trigger_registry.list_trigger_versions())["triggers"]
+            if trigger_registry is not None
+            else ()
+        )
+        return tuple(
+            research_sets_payload(
+                research_set_registry.list_research_sets(),
+                trigger_lookup=trigger_lookup_from_payloads(triggers),
+            )["sets"]
+        )
+    except Exception as exc:
+        raise DashboardRegistryUnavailable("PostgreSQL Research Set registry unavailable") from exc
+
+
+def _research_sets_payload(server: DashboardServer) -> dict[str, object]:
+    if server.research_set_registry is None:
+        return {"sets": (), "count": 0}
+    try:
+        triggers = (
+            research_trigger_payload(server.trigger_registry.list_trigger_versions())["triggers"]
+            if server.trigger_registry is not None
+            else ()
+        )
+        return research_sets_payload(
+            server.research_set_registry.list_research_sets(),
+            trigger_lookup=trigger_lookup_from_payloads(triggers),
+        )
+    except Exception as exc:
+        raise DashboardRegistryUnavailable("PostgreSQL Research Set registry unavailable") from exc
+
+
+def _research_set_detail(server: DashboardServer, set_id: str, version: str):
+    if server.research_set_registry is None:
+        return None
+    try:
+        all_sets = server.research_set_registry.list_research_sets()
+        triggers = (
+            research_trigger_payload(server.trigger_registry.list_trigger_versions())["triggers"]
+            if server.trigger_registry is not None
+            else ()
+        )
+        return research_set_detail_payload(
+            server.research_set_registry.get_research_set(set_id, version),
+            all_sets=all_sets,
+            trigger_lookup=trigger_lookup_from_payloads(triggers),
+        )
+    except Exception as exc:
+        raise DashboardRegistryUnavailable("PostgreSQL Research Set registry unavailable") from exc
+
+
+def _list_research_sets_safe(research_set_registry) -> tuple:
+    if research_set_registry is None:
+        return ()
+    return tuple(research_set_registry.list_research_sets())
 
 
 def _selected_set_summary(read_model: DashboardReadModel, selected_set: str) -> SetSummaryView | None:
@@ -1138,6 +1261,7 @@ def create_server(
     backtest_instrument_provider=None,
     research_backtest_handoff=None,
     trigger_registry=None,
+    research_set_registry=None,
 ) -> DashboardServer:
     if host not in ALLOWED_HOSTS:
         raise ValueError("dashboard host must be one of: 127.0.0.1, 0.0.0.0")
@@ -1195,6 +1319,7 @@ def create_server(
         research_config_registry=research_config_registry,
         research_run_store=shared_research_run_store,
         trigger_registry=trigger_registry,
+        research_set_registry=research_set_registry,
     )
     read_model.operator_control_token = server.operator_control_token
     read_model.operator_command_submit_enabled = authorizer.browser_commands_supported and (
@@ -1385,6 +1510,7 @@ def create_server_from_env(
     _require_explicit_dashboard_persistence(env)
     research_config_registry = _research_config_registry_from_env(env)
     trigger_registry = _trigger_registry_from_env(env)
+    research_set_registry = _research_set_registry_from_env(env)
     config, bootstrap = ensure_runtime_registry_for_env(env, version_registry=research_config_registry)
     host = env.get("TRIGGERTRADE_DASHBOARD_HOST", DEFAULT_HOST)
     port = int(env.get("TRIGGERTRADE_DASHBOARD_PORT", str(DEFAULT_PORT)))
@@ -1415,6 +1541,7 @@ def create_server_from_env(
         research_backtest_config=config,
         research_backtest_handoff=research_backtest_handoff,
         trigger_registry=trigger_registry,
+        research_set_registry=research_set_registry,
     )
     _require_production_postgres_configuration_path(
         env,
@@ -1513,6 +1640,14 @@ def _trigger_registry_from_env(env: dict[str, str]):
     return _PostgresTriggerRegistryClient(PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema))
 
 
+def _research_set_registry_from_env(env: dict[str, str]):
+    if not env.get("TRIGGERTRADE_POSTGRES_DSN"):
+        return None
+    settings = PostgresSettings.from_env(env)
+    apply_postgres_migrations(dsn=settings.dsn, schema=settings.schema)
+    return _PostgresResearchSetRegistryClient(PostgresConnectionFactory(dsn=settings.dsn, schema=settings.schema))
+
+
 class _PostgresTriggerRegistryClient:
     def __init__(self, factory: PostgresConnectionFactory) -> None:
         self._factory = factory
@@ -1524,6 +1659,19 @@ class _PostgresTriggerRegistryClient:
     def get_rule(self, rule_id: str, version: str | None = None):
         with self._factory.connect() as connection:
             return PostgresTriggerRegistry(connection).get_rule(rule_id, version)
+
+
+class _PostgresResearchSetRegistryClient:
+    def __init__(self, factory: PostgresConnectionFactory) -> None:
+        self._factory = factory
+
+    def list_research_sets(self):
+        with self._factory.connect() as connection:
+            return PostgresResearchSetRegistry(connection).list_research_sets()
+
+    def get_research_set(self, set_id: str, version: str):
+        with self._factory.connect() as connection:
+            return PostgresResearchSetRegistry(connection).get_research_set(set_id, version)
 
 
 def _research_demo_handoff_from_env(env: dict[str, str]):
