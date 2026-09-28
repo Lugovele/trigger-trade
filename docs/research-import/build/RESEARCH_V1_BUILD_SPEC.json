@@ -1,0 +1,3707 @@
+{
+  "allocation_profiles": [
+    {
+      "allocation_profile_id": "ALLOC-R-V1-FIXED-10X10",
+      "dynamic_allocation": false,
+      "model": "STATIC_FIRST_WAVE_EQUAL_ALLOCATION",
+      "per_asset_allocation_pct": {
+        "AVAX": "10",
+        "BNB": "10",
+        "BTC": "10",
+        "DOGE": "10",
+        "ETH": "10",
+        "LINK": "10",
+        "PEPE": "10",
+        "SOL": "10",
+        "SUI": "10",
+        "XRP": "10"
+      },
+      "redistribution": "NONE",
+      "segment_allocation_pct": {
+        "DIVERSIFIERS": "20",
+        "HIGH_VOLATILITY_HIGH_BETA": "60",
+        "MAJORS": "20"
+      },
+      "total_allocation_pct": "100",
+      "universe_id": "UNIVERSE-CORE-V1"
+    }
+  ],
+  "build_time_immutable_fields": [
+    "hypothesis_id",
+    "set_version_id",
+    "rules_version_id",
+    "universe_id",
+    "allocation_profile_id",
+    "run_profiles",
+    "result_scopes",
+    "compare_order",
+    "evidence_export_profile"
+  ],
+  "compare_profiles": [
+    {
+      "compare_order": [
+        "ACTIVE",
+        "DEMO_7D",
+        "BACKTEST_7D",
+        "BACKTEST_30D",
+        "BACKTEST_90D"
+      ],
+      "compare_profile_id": "COMPARE-R-V1-ORDER"
+    }
+  ],
+  "evidence_export_profiles": [
+    {
+      "evidence_export_profile_id": "EVIDENCE-R-V1-R2",
+      "export_root": "RESEARCH_RECORD",
+      "intrabar_resolution_statuses": [
+        "FACTUAL_ORDER_RESOLVED",
+        "MODEL_ORDER_INVARIANT",
+        "UNRESOLVED_INTRABAR"
+      ],
+      "must_preserve": [
+        "attempts",
+        "failures",
+        "metrics",
+        "triggers",
+        "Set",
+        "Position",
+        "Portfolio",
+        "Lifecycle",
+        "financials",
+        "comparisons",
+        "decisions"
+      ],
+      "secrets_policy": "NO_SECRETS"
+    }
+  ],
+  "launch_time_fields": [
+    "exact_start_datetime",
+    "exact_backtest_window",
+    "exchange_instrument_binding",
+    "test_or_live_account_selection",
+    "execution_environment",
+    "operator_entered_limits_not_part_of_immutable_research_definition"
+  ],
+  "provenance": {
+    "authority_order": [
+      "frozen TriggerTrade methodology v1.2.15",
+      "certified formula/state-rule specifications",
+      "corrected/final Research V1 documentation",
+      "approved/imported Trigger artifacts",
+      "approved/imported Set artifacts",
+      "corrected Rules artifacts",
+      "conformant backend representations"
+    ],
+    "created_from": [
+      "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_HYPOTHESES_FINAL_30.md",
+      "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\WEB_RESEARCH_CONFIGURATION_MODEL.md",
+      "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_V1_EXECUTION_AND_REPORTING_PROFILE.md",
+      "docs\\research-import\\sets\\RESEARCH_V1_SETS.json",
+      "docs\\research-import\\sets\\RESEARCH_V1_SET_IMPORT_MAP.md",
+      "docs\\research-import\\sets\\RESEARCH_V1_SET_VALIDATION_REPORT.md",
+      "docs\\research-import\\rules\\RESEARCH_V1_RULES.json",
+      "docs\\research-import\\rules\\RESEARCH_V1_RULES_CATALOG.md",
+      "docs\\research-import\\rules\\RESEARCH_V1_RULES_RECONCILIATION_REPORT.md"
+    ],
+    "source_conflicts": [],
+    "unresolved_build_spec_mappings": []
+  },
+  "research_definitions": [
+    {
+      "allocation_profile_id": "ALLOC-R-V1-FIXED-10X10",
+      "applicable_coins": [
+        "BTC",
+        "ETH",
+        "SOL",
+        "XRP",
+        "DOGE",
+        "SUI",
+        "PEPE",
+        "AVAX",
+        "LINK",
+        "BNB"
+      ],
+      "candidate_id": "C-001",
+      "compare_order": [
+        "ACTIVE",
+        "DEMO_7D",
+        "BACKTEST_7D",
+        "BACKTEST_30D",
+        "BACKTEST_90D"
+      ],
+      "description": "Does requiring a 1.00% rather than 0.50% canonical 1m displacement improve outcomes conditional on the unchanged Research V1 execution profile?",
+      "direction_scope": {
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "standard_direction_model": "F-005_CLASSIFIER_DIRECTION_FOR_NON_BTC_UNLESS_SET_BINDING_OVERRIDES",
+        "values": [
+          "LONG",
+          "SHORT"
+        ]
+      },
+      "evidence_export_profile": "EVIDENCE-R-V1-R2",
+      "excluded_coins": [],
+      "hypothesis_class": "SET_LAYER",
+      "hypothesis_id": "R-001",
+      "notes": [
+        "Trigger composition is intentionally not duplicated here; the referenced immutable Set version owns trigger membership and ordering."
+      ],
+      "primary_axis": "AX-01",
+      "provenance": {
+        "methodology_baseline": "v1.2.15",
+        "profile_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R2",
+        "research_revision": "R3",
+        "rules_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
+        "set_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3"
+      },
+      "research_id": "R-001",
+      "result_scopes": [
+        "OVERALL",
+        "BY_SEGMENT",
+        "BY_COIN",
+        "BY_DIRECTION"
+      ],
+      "rules_version_bindings": {
+        "baseline": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-001",
+          "rules_version_id": "TRV-R-POS-001-PR-201"
+        },
+        "binding_model": "ARM_TRADING_RULES_VERSION",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-001",
+          "rules_version_id": "TRV-R-POS-001-PR-201"
+        }
+      },
+      "rules_version_id": "TRV-R-POS-001-PR-201",
+      "run_profiles": [
+        "BACKTEST_90D",
+        "BACKTEST_30D",
+        "BACKTEST_7D",
+        "DEMO_7D"
+      ],
+      "segment_scope": [
+        "MAJORS",
+        "HIGH_VOLATILITY_HIGH_BETA",
+        "DIVERSIFIERS"
+      ],
+      "set_version_bindings": {
+        "baseline": {
+          "btc_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+          "btc_set_version_id": "SET-R-BTC-001-V1",
+          "non_btc_set_version_id": "SET-R-001-V1"
+        },
+        "binding_model": "SYMBOL_SET_BINDING",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "btc_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+          "btc_set_version_id": "SET-R-BTC-001-V2",
+          "non_btc_set_version_id": "SET-R-001-V2"
+        }
+      },
+      "set_version_id": "SET-R-001-V2",
+      "source_refs": [
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_HYPOTHESES_FINAL_30.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\WEB_RESEARCH_CONFIGURATION_MODEL.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_V1_EXECUTION_AND_REPORTING_PROFILE.md",
+        "docs\\research-import\\sets\\RESEARCH_V1_SETS.json",
+        "docs\\research-import\\rules\\RESEARCH_V1_RULES.json"
+      ],
+      "special_applicability": {
+        "allocation_redistribution": "NONE",
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "btc_result_scope_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+        "btc_universe_membership": "INCLUDED_IN_UNIVERSE_AND_ALLOCATION"
+      },
+      "status": "FINAL_RESEARCH_V1",
+      "title": "Displacement magnitude selectivity",
+      "universe_id": "UNIVERSE-CORE-V1"
+    },
+    {
+      "allocation_profile_id": "ALLOC-R-V1-FIXED-10X10",
+      "applicable_coins": [
+        "BTC",
+        "ETH",
+        "SOL",
+        "XRP",
+        "DOGE",
+        "SUI",
+        "PEPE",
+        "AVAX",
+        "LINK",
+        "BNB"
+      ],
+      "candidate_id": "C-003",
+      "compare_order": [
+        "ACTIVE",
+        "DEMO_7D",
+        "BACKTEST_7D",
+        "BACKTEST_30D",
+        "BACKTEST_90D"
+      ],
+      "description": "Does adding the fixed F-002 volume-surge predicate improve selection over displacement plus direction alone?",
+      "direction_scope": {
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "standard_direction_model": "F-005_CLASSIFIER_DIRECTION_FOR_NON_BTC_UNLESS_SET_BINDING_OVERRIDES",
+        "values": [
+          "LONG",
+          "SHORT"
+        ]
+      },
+      "evidence_export_profile": "EVIDENCE-R-V1-R2",
+      "excluded_coins": [],
+      "hypothesis_class": "SET_LAYER",
+      "hypothesis_id": "R-002",
+      "notes": [
+        "Trigger composition is intentionally not duplicated here; the referenced immutable Set version owns trigger membership and ordering."
+      ],
+      "primary_axis": "AX-02",
+      "provenance": {
+        "methodology_baseline": "v1.2.15",
+        "profile_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R2",
+        "research_revision": "R3",
+        "rules_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
+        "set_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3"
+      },
+      "research_id": "R-002",
+      "result_scopes": [
+        "OVERALL",
+        "BY_SEGMENT",
+        "BY_COIN",
+        "BY_DIRECTION"
+      ],
+      "rules_version_bindings": {
+        "baseline": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-001",
+          "rules_version_id": "TRV-R-POS-001-PR-201"
+        },
+        "binding_model": "ARM_TRADING_RULES_VERSION",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-001",
+          "rules_version_id": "TRV-R-POS-001-PR-201"
+        }
+      },
+      "rules_version_id": "TRV-R-POS-001-PR-201",
+      "run_profiles": [
+        "BACKTEST_90D",
+        "BACKTEST_30D",
+        "BACKTEST_7D",
+        "DEMO_7D"
+      ],
+      "segment_scope": [
+        "MAJORS",
+        "HIGH_VOLATILITY_HIGH_BETA",
+        "DIVERSIFIERS"
+      ],
+      "set_version_bindings": {
+        "baseline": {
+          "btc_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+          "btc_set_version_id": "SET-R-BTC-001-V1",
+          "non_btc_set_version_id": "SET-R-001-V1"
+        },
+        "binding_model": "SYMBOL_SET_BINDING",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "btc_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+          "btc_set_version_id": "SET-R-BTC-003-V2",
+          "non_btc_set_version_id": "SET-R-003-V2"
+        }
+      },
+      "set_version_id": "SET-R-003-V2",
+      "source_refs": [
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_HYPOTHESES_FINAL_30.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\WEB_RESEARCH_CONFIGURATION_MODEL.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_V1_EXECUTION_AND_REPORTING_PROFILE.md",
+        "docs\\research-import\\sets\\RESEARCH_V1_SETS.json",
+        "docs\\research-import\\rules\\RESEARCH_V1_RULES.json"
+      ],
+      "special_applicability": {
+        "allocation_redistribution": "NONE",
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "btc_result_scope_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+        "btc_universe_membership": "INCLUDED_IN_UNIVERSE_AND_ALLOCATION"
+      },
+      "status": "FINAL_RESEARCH_V1",
+      "title": "Participation confirmation",
+      "universe_id": "UNIVERSE-CORE-V1"
+    },
+    {
+      "allocation_profile_id": "ALLOC-R-V1-FIXED-10X10",
+      "applicable_coins": [
+        "BTC",
+        "ETH",
+        "SOL",
+        "XRP",
+        "DOGE",
+        "SUI",
+        "PEPE",
+        "AVAX",
+        "LINK",
+        "BNB"
+      ],
+      "candidate_id": "C-007",
+      "compare_order": [
+        "ACTIVE",
+        "DEMO_7D",
+        "BACKTEST_7D",
+        "BACKTEST_30D",
+        "BACKTEST_90D"
+      ],
+      "description": "Does an additional DE>=0.50 confirmation improve selection beyond the unchanged DE>=0.30 hard predicate?",
+      "direction_scope": {
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "standard_direction_model": "F-005_CLASSIFIER_DIRECTION_FOR_NON_BTC_UNLESS_SET_BINDING_OVERRIDES",
+        "values": [
+          "LONG",
+          "SHORT"
+        ]
+      },
+      "evidence_export_profile": "EVIDENCE-R-V1-R2",
+      "excluded_coins": [],
+      "hypothesis_class": "SET_LAYER",
+      "hypothesis_id": "R-003",
+      "notes": [
+        "Trigger composition is intentionally not duplicated here; the referenced immutable Set version owns trigger membership and ordering."
+      ],
+      "primary_axis": "AX-03",
+      "provenance": {
+        "methodology_baseline": "v1.2.15",
+        "profile_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R2",
+        "research_revision": "R3",
+        "rules_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
+        "set_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3"
+      },
+      "research_id": "R-003",
+      "result_scopes": [
+        "OVERALL",
+        "BY_SEGMENT",
+        "BY_COIN",
+        "BY_DIRECTION"
+      ],
+      "rules_version_bindings": {
+        "baseline": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-001",
+          "rules_version_id": "TRV-R-POS-001-PR-201"
+        },
+        "binding_model": "ARM_TRADING_RULES_VERSION",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-001",
+          "rules_version_id": "TRV-R-POS-001-PR-201"
+        }
+      },
+      "rules_version_id": "TRV-R-POS-001-PR-201",
+      "run_profiles": [
+        "BACKTEST_90D",
+        "BACKTEST_30D",
+        "BACKTEST_7D",
+        "DEMO_7D"
+      ],
+      "segment_scope": [
+        "MAJORS",
+        "HIGH_VOLATILITY_HIGH_BETA",
+        "DIVERSIFIERS"
+      ],
+      "set_version_bindings": {
+        "baseline": {
+          "btc_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+          "btc_set_version_id": "SET-R-BTC-001-V1",
+          "non_btc_set_version_id": "SET-R-001-V1"
+        },
+        "binding_model": "SYMBOL_SET_BINDING",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "btc_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+          "btc_set_version_id": "SET-R-BTC-007-V2",
+          "non_btc_set_version_id": "SET-R-007-V2"
+        }
+      },
+      "set_version_id": "SET-R-007-V2",
+      "source_refs": [
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_HYPOTHESES_FINAL_30.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\WEB_RESEARCH_CONFIGURATION_MODEL.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_V1_EXECUTION_AND_REPORTING_PROFILE.md",
+        "docs\\research-import\\sets\\RESEARCH_V1_SETS.json",
+        "docs\\research-import\\rules\\RESEARCH_V1_RULES.json"
+      ],
+      "special_applicability": {
+        "allocation_redistribution": "NONE",
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "btc_result_scope_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+        "btc_universe_membership": "INCLUDED_IN_UNIVERSE_AND_ALLOCATION"
+      },
+      "status": "FINAL_RESEARCH_V1",
+      "title": "Directional efficiency confirmation",
+      "universe_id": "UNIVERSE-CORE-V1"
+    },
+    {
+      "allocation_profile_id": "ALLOC-R-V1-FIXED-10X10",
+      "applicable_coins": [
+        "BTC",
+        "ETH",
+        "SOL",
+        "XRP",
+        "DOGE",
+        "SUI",
+        "PEPE",
+        "AVAX",
+        "LINK",
+        "BNB"
+      ],
+      "candidate_id": "C-008",
+      "compare_order": [
+        "ACTIVE",
+        "DEMO_7D",
+        "BACKTEST_7D",
+        "BACKTEST_30D",
+        "BACKTEST_90D"
+      ],
+      "description": "Does adding the preregistered ATR-percentile interval [30,85] improve selection inside the standard Research V1 execution profile?",
+      "direction_scope": {
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "standard_direction_model": "F-005_CLASSIFIER_DIRECTION_FOR_NON_BTC_UNLESS_SET_BINDING_OVERRIDES",
+        "values": [
+          "LONG",
+          "SHORT"
+        ]
+      },
+      "evidence_export_profile": "EVIDENCE-R-V1-R2",
+      "excluded_coins": [],
+      "hypothesis_class": "SET_LAYER",
+      "hypothesis_id": "R-004",
+      "notes": [
+        "Trigger composition is intentionally not duplicated here; the referenced immutable Set version owns trigger membership and ordering."
+      ],
+      "primary_axis": "AX-04",
+      "provenance": {
+        "methodology_baseline": "v1.2.15",
+        "profile_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R2",
+        "research_revision": "R3",
+        "rules_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
+        "set_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3"
+      },
+      "research_id": "R-004",
+      "result_scopes": [
+        "OVERALL",
+        "BY_SEGMENT",
+        "BY_COIN",
+        "BY_DIRECTION"
+      ],
+      "rules_version_bindings": {
+        "baseline": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-001",
+          "rules_version_id": "TRV-R-POS-001-PR-201"
+        },
+        "binding_model": "ARM_TRADING_RULES_VERSION",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-001",
+          "rules_version_id": "TRV-R-POS-001-PR-201"
+        }
+      },
+      "rules_version_id": "TRV-R-POS-001-PR-201",
+      "run_profiles": [
+        "BACKTEST_90D",
+        "BACKTEST_30D",
+        "BACKTEST_7D",
+        "DEMO_7D"
+      ],
+      "segment_scope": [
+        "MAJORS",
+        "HIGH_VOLATILITY_HIGH_BETA",
+        "DIVERSIFIERS"
+      ],
+      "set_version_bindings": {
+        "baseline": {
+          "btc_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+          "btc_set_version_id": "SET-R-BTC-001-V1",
+          "non_btc_set_version_id": "SET-R-001-V1"
+        },
+        "binding_model": "SYMBOL_SET_BINDING",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "btc_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+          "btc_set_version_id": "SET-R-BTC-008-V2",
+          "non_btc_set_version_id": "SET-R-008-V2"
+        }
+      },
+      "set_version_id": "SET-R-008-V2",
+      "source_refs": [
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_HYPOTHESES_FINAL_30.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\WEB_RESEARCH_CONFIGURATION_MODEL.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_V1_EXECUTION_AND_REPORTING_PROFILE.md",
+        "docs\\research-import\\sets\\RESEARCH_V1_SETS.json",
+        "docs\\research-import\\rules\\RESEARCH_V1_RULES.json"
+      ],
+      "special_applicability": {
+        "allocation_redistribution": "NONE",
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "btc_result_scope_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+        "btc_universe_membership": "INCLUDED_IN_UNIVERSE_AND_ALLOCATION"
+      },
+      "status": "FINAL_RESEARCH_V1",
+      "title": "Central volatility band",
+      "universe_id": "UNIVERSE-CORE-V1"
+    },
+    {
+      "allocation_profile_id": "ALLOC-R-V1-FIXED-10X10",
+      "applicable_coins": [
+        "BTC",
+        "ETH",
+        "SOL",
+        "XRP",
+        "DOGE",
+        "SUI",
+        "PEPE",
+        "AVAX",
+        "LINK",
+        "BNB"
+      ],
+      "candidate_id": "C-009",
+      "compare_order": [
+        "ACTIVE",
+        "DEMO_7D",
+        "BACKTEST_7D",
+        "BACKTEST_30D",
+        "BACKTEST_90D"
+      ],
+      "description": "Does requiring the 1h swing-sequence state to agree with classifier direction improve selection?",
+      "direction_scope": {
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "standard_direction_model": "F-005_CLASSIFIER_DIRECTION_FOR_NON_BTC_UNLESS_SET_BINDING_OVERRIDES",
+        "values": [
+          "LONG",
+          "SHORT"
+        ]
+      },
+      "evidence_export_profile": "EVIDENCE-R-V1-R2",
+      "excluded_coins": [],
+      "hypothesis_class": "SET_LAYER",
+      "hypothesis_id": "R-005",
+      "notes": [
+        "Trigger composition is intentionally not duplicated here; the referenced immutable Set version owns trigger membership and ordering."
+      ],
+      "primary_axis": "AX-05",
+      "provenance": {
+        "methodology_baseline": "v1.2.15",
+        "profile_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R2",
+        "research_revision": "R3",
+        "rules_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
+        "set_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3"
+      },
+      "research_id": "R-005",
+      "result_scopes": [
+        "OVERALL",
+        "BY_SEGMENT",
+        "BY_COIN",
+        "BY_DIRECTION"
+      ],
+      "rules_version_bindings": {
+        "baseline": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-001",
+          "rules_version_id": "TRV-R-POS-001-PR-201"
+        },
+        "binding_model": "ARM_TRADING_RULES_VERSION",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-001",
+          "rules_version_id": "TRV-R-POS-001-PR-201"
+        }
+      },
+      "rules_version_id": "TRV-R-POS-001-PR-201",
+      "run_profiles": [
+        "BACKTEST_90D",
+        "BACKTEST_30D",
+        "BACKTEST_7D",
+        "DEMO_7D"
+      ],
+      "segment_scope": [
+        "MAJORS",
+        "HIGH_VOLATILITY_HIGH_BETA",
+        "DIVERSIFIERS"
+      ],
+      "set_version_bindings": {
+        "baseline": {
+          "btc_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+          "btc_set_version_id": "SET-R-BTC-001-V1",
+          "non_btc_set_version_id": "SET-R-001-V1"
+        },
+        "binding_model": "SYMBOL_SET_BINDING",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "btc_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+          "btc_set_version_id": "SET-R-BTC-009-V2",
+          "non_btc_set_version_id": "SET-R-009-V2"
+        }
+      },
+      "set_version_id": "SET-R-009-V2",
+      "source_refs": [
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_HYPOTHESES_FINAL_30.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\WEB_RESEARCH_CONFIGURATION_MODEL.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_V1_EXECUTION_AND_REPORTING_PROFILE.md",
+        "docs\\research-import\\sets\\RESEARCH_V1_SETS.json",
+        "docs\\research-import\\rules\\RESEARCH_V1_RULES.json"
+      ],
+      "special_applicability": {
+        "allocation_redistribution": "NONE",
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "btc_result_scope_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+        "btc_universe_membership": "INCLUDED_IN_UNIVERSE_AND_ALLOCATION"
+      },
+      "status": "FINAL_RESEARCH_V1",
+      "title": "Higher-timeframe structural agreement",
+      "universe_id": "UNIVERSE-CORE-V1"
+    },
+    {
+      "allocation_profile_id": "ALLOC-R-V1-FIXED-10X10",
+      "applicable_coins": [
+        "ETH",
+        "SOL",
+        "XRP",
+        "DOGE",
+        "SUI",
+        "PEPE",
+        "AVAX",
+        "LINK",
+        "BNB"
+      ],
+      "candidate_id": "C-010",
+      "compare_order": [
+        "ACTIVE",
+        "DEMO_7D",
+        "BACKTEST_7D",
+        "BACKTEST_30D",
+        "BACKTEST_90D"
+      ],
+      "description": "Does requiring raw 15m asset-versus-BTC relative return to agree with direction improve selection?",
+      "direction_scope": {
+        "btc_direction_binding_id": "NOT_APPLICABLE",
+        "standard_direction_model": "F-005_CLASSIFIER_DIRECTION_FOR_NON_BTC_UNLESS_SET_BINDING_OVERRIDES",
+        "values": [
+          "LONG",
+          "SHORT"
+        ]
+      },
+      "evidence_export_profile": "EVIDENCE-R-V1-R2",
+      "excluded_coins": [
+        "BTC"
+      ],
+      "hypothesis_class": "SET_LAYER",
+      "hypothesis_id": "R-006",
+      "notes": [
+        "Trigger composition is intentionally not duplicated here; the referenced immutable Set version owns trigger membership and ordering.",
+        "BTC remains in UNIVERSE-CORE-V1 with 10% allocation, but this hypothesis has BTC result scope NOT_APPLICABLE and no redistribution."
+      ],
+      "primary_axis": "AX-06",
+      "provenance": {
+        "methodology_baseline": "v1.2.15",
+        "profile_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R2",
+        "research_revision": "R3",
+        "rules_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
+        "set_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3"
+      },
+      "research_id": "R-006",
+      "result_scopes": [
+        "OVERALL",
+        "BY_SEGMENT",
+        "BY_COIN",
+        "BY_DIRECTION"
+      ],
+      "rules_version_bindings": {
+        "baseline": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-001",
+          "rules_version_id": "TRV-R-POS-001-PR-201"
+        },
+        "binding_model": "ARM_TRADING_RULES_VERSION",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-001",
+          "rules_version_id": "TRV-R-POS-001-PR-201"
+        }
+      },
+      "rules_version_id": "TRV-R-POS-001-PR-201",
+      "run_profiles": [
+        "BACKTEST_90D",
+        "BACKTEST_30D",
+        "BACKTEST_7D",
+        "DEMO_7D"
+      ],
+      "segment_scope": [
+        "MAJORS",
+        "HIGH_VOLATILITY_HIGH_BETA",
+        "DIVERSIFIERS"
+      ],
+      "set_version_bindings": {
+        "baseline": {
+          "btc_applicability": "NOT_APPLICABLE",
+          "btc_set_version_id": null,
+          "non_btc_set_version_id": "SET-R-001-V1"
+        },
+        "binding_model": "SYMBOL_SET_BINDING",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "btc_applicability": "NOT_APPLICABLE",
+          "btc_set_version_id": null,
+          "non_btc_set_version_id": "SET-R-010-V2"
+        }
+      },
+      "set_version_id": "SET-R-010-V2",
+      "source_refs": [
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_HYPOTHESES_FINAL_30.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\WEB_RESEARCH_CONFIGURATION_MODEL.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_V1_EXECUTION_AND_REPORTING_PROFILE.md",
+        "docs\\research-import\\sets\\RESEARCH_V1_SETS.json",
+        "docs\\research-import\\rules\\RESEARCH_V1_RULES.json"
+      ],
+      "special_applicability": {
+        "allocation_redistribution": "NONE",
+        "btc_direction_binding_id": "NOT_APPLICABLE",
+        "btc_not_applicable_reason": "SOURCE_LOGIC_NOT_MEANINGFUL_FOR_BTC",
+        "btc_result_scope_applicability": "NOT_APPLICABLE",
+        "btc_universe_membership": "INCLUDED_IN_UNIVERSE_AND_ALLOCATION"
+      },
+      "status": "FINAL_RESEARCH_V1",
+      "title": "Raw relative-return agreement",
+      "universe_id": "UNIVERSE-CORE-V1"
+    },
+    {
+      "allocation_profile_id": "ALLOC-R-V1-FIXED-10X10",
+      "applicable_coins": [
+        "BTC",
+        "ETH",
+        "SOL",
+        "XRP",
+        "DOGE",
+        "SUI",
+        "PEPE",
+        "AVAX",
+        "LINK",
+        "BNB"
+      ],
+      "candidate_id": "C-011",
+      "compare_order": [
+        "ACTIVE",
+        "DEMO_7D",
+        "BACKTEST_7D",
+        "BACKTEST_30D",
+        "BACKTEST_90D"
+      ],
+      "description": "Does requiring signed 5m aggressive-volume imbalance to agree with direction improve selection?",
+      "direction_scope": {
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "standard_direction_model": "F-005_CLASSIFIER_DIRECTION_FOR_NON_BTC_UNLESS_SET_BINDING_OVERRIDES",
+        "values": [
+          "LONG",
+          "SHORT"
+        ]
+      },
+      "evidence_export_profile": "EVIDENCE-R-V1-R2",
+      "excluded_coins": [],
+      "hypothesis_class": "SET_LAYER",
+      "hypothesis_id": "R-007",
+      "notes": [
+        "Trigger composition is intentionally not duplicated here; the referenced immutable Set version owns trigger membership and ordering."
+      ],
+      "primary_axis": "AX-07",
+      "provenance": {
+        "methodology_baseline": "v1.2.15",
+        "profile_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R2",
+        "research_revision": "R3",
+        "rules_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
+        "set_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3"
+      },
+      "research_id": "R-007",
+      "result_scopes": [
+        "OVERALL",
+        "BY_SEGMENT",
+        "BY_COIN",
+        "BY_DIRECTION"
+      ],
+      "rules_version_bindings": {
+        "baseline": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-001",
+          "rules_version_id": "TRV-R-POS-001-PR-201"
+        },
+        "binding_model": "ARM_TRADING_RULES_VERSION",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-001",
+          "rules_version_id": "TRV-R-POS-001-PR-201"
+        }
+      },
+      "rules_version_id": "TRV-R-POS-001-PR-201",
+      "run_profiles": [
+        "BACKTEST_90D",
+        "BACKTEST_30D",
+        "BACKTEST_7D",
+        "DEMO_7D"
+      ],
+      "segment_scope": [
+        "MAJORS",
+        "HIGH_VOLATILITY_HIGH_BETA",
+        "DIVERSIFIERS"
+      ],
+      "set_version_bindings": {
+        "baseline": {
+          "btc_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+          "btc_set_version_id": "SET-R-BTC-001-V1",
+          "non_btc_set_version_id": "SET-R-001-V1"
+        },
+        "binding_model": "SYMBOL_SET_BINDING",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "btc_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+          "btc_set_version_id": "SET-R-BTC-011-V2",
+          "non_btc_set_version_id": "SET-R-011-V2"
+        }
+      },
+      "set_version_id": "SET-R-011-V2",
+      "source_refs": [
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_HYPOTHESES_FINAL_30.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\WEB_RESEARCH_CONFIGURATION_MODEL.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_V1_EXECUTION_AND_REPORTING_PROFILE.md",
+        "docs\\research-import\\sets\\RESEARCH_V1_SETS.json",
+        "docs\\research-import\\rules\\RESEARCH_V1_RULES.json"
+      ],
+      "special_applicability": {
+        "allocation_redistribution": "NONE",
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "btc_result_scope_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+        "btc_universe_membership": "INCLUDED_IN_UNIVERSE_AND_ALLOCATION"
+      },
+      "status": "FINAL_RESEARCH_V1",
+      "title": "Aggressive-flow agreement",
+      "universe_id": "UNIVERSE-CORE-V1"
+    },
+    {
+      "allocation_profile_id": "ALLOC-R-V1-FIXED-10X10",
+      "applicable_coins": [
+        "BTC",
+        "ETH",
+        "SOL",
+        "XRP",
+        "DOGE",
+        "SUI",
+        "PEPE",
+        "AVAX",
+        "LINK",
+        "BNB"
+      ],
+      "candidate_id": "C-016",
+      "compare_order": [
+        "ACTIVE",
+        "DEMO_7D",
+        "BACKTEST_7D",
+        "BACKTEST_30D",
+        "BACKTEST_90D"
+      ],
+      "description": "Does admitting only a newly true classifier-side predicate improve selection versus ongoing qualification?",
+      "direction_scope": {
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "standard_direction_model": "F-005_CLASSIFIER_DIRECTION_FOR_NON_BTC_UNLESS_SET_BINDING_OVERRIDES",
+        "values": [
+          "LONG",
+          "SHORT"
+        ]
+      },
+      "evidence_export_profile": "EVIDENCE-R-V1-R2",
+      "excluded_coins": [],
+      "hypothesis_class": "SET_LAYER",
+      "hypothesis_id": "R-008",
+      "notes": [
+        "Trigger composition is intentionally not duplicated here; the referenced immutable Set version owns trigger membership and ordering."
+      ],
+      "primary_axis": "AX-12",
+      "provenance": {
+        "methodology_baseline": "v1.2.15",
+        "profile_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R2",
+        "research_revision": "R3",
+        "rules_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
+        "set_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3"
+      },
+      "research_id": "R-008",
+      "result_scopes": [
+        "OVERALL",
+        "BY_SEGMENT",
+        "BY_COIN",
+        "BY_DIRECTION"
+      ],
+      "rules_version_bindings": {
+        "baseline": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-001",
+          "rules_version_id": "TRV-R-POS-001-PR-201"
+        },
+        "binding_model": "ARM_TRADING_RULES_VERSION",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-001",
+          "rules_version_id": "TRV-R-POS-001-PR-201"
+        }
+      },
+      "rules_version_id": "TRV-R-POS-001-PR-201",
+      "run_profiles": [
+        "BACKTEST_90D",
+        "BACKTEST_30D",
+        "BACKTEST_7D",
+        "DEMO_7D"
+      ],
+      "segment_scope": [
+        "MAJORS",
+        "HIGH_VOLATILITY_HIGH_BETA",
+        "DIVERSIFIERS"
+      ],
+      "set_version_bindings": {
+        "baseline": {
+          "btc_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+          "btc_set_version_id": "SET-R-BTC-001-V1",
+          "non_btc_set_version_id": "SET-R-001-V1"
+        },
+        "binding_model": "SYMBOL_SET_BINDING",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "btc_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+          "btc_set_version_id": "SET-R-BTC-016-V2",
+          "non_btc_set_version_id": "SET-R-016-V2"
+        }
+      },
+      "set_version_id": "SET-R-016-V2",
+      "source_refs": [
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_HYPOTHESES_FINAL_30.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\WEB_RESEARCH_CONFIGURATION_MODEL.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_V1_EXECUTION_AND_REPORTING_PROFILE.md",
+        "docs\\research-import\\sets\\RESEARCH_V1_SETS.json",
+        "docs\\research-import\\rules\\RESEARCH_V1_RULES.json"
+      ],
+      "special_applicability": {
+        "allocation_redistribution": "NONE",
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "btc_result_scope_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+        "btc_universe_membership": "INCLUDED_IN_UNIVERSE_AND_ALLOCATION"
+      },
+      "status": "FINAL_RESEARCH_V1",
+      "title": "New classifier episode",
+      "universe_id": "UNIVERSE-CORE-V1"
+    },
+    {
+      "allocation_profile_id": "ALLOC-R-V1-FIXED-10X10",
+      "applicable_coins": [
+        "BTC",
+        "ETH",
+        "SOL",
+        "XRP",
+        "DOGE",
+        "SUI",
+        "PEPE",
+        "AVAX",
+        "LINK",
+        "BNB"
+      ],
+      "candidate_id": "C-019",
+      "compare_order": [
+        "ACTIVE",
+        "DEMO_7D",
+        "BACKTEST_7D",
+        "BACKTEST_30D",
+        "BACKTEST_90D"
+      ],
+      "description": "Does allowing canonical displacement before participation outperform simultaneous coincidence?",
+      "direction_scope": {
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "standard_direction_model": "F-005_CLASSIFIER_DIRECTION_FOR_NON_BTC_UNLESS_SET_BINDING_OVERRIDES",
+        "values": [
+          "LONG",
+          "SHORT"
+        ]
+      },
+      "evidence_export_profile": "EVIDENCE-R-V1-R2",
+      "excluded_coins": [],
+      "hypothesis_class": "SET_LAYER",
+      "hypothesis_id": "R-009",
+      "notes": [
+        "Trigger composition is intentionally not duplicated here; the referenced immutable Set version owns trigger membership and ordering."
+      ],
+      "primary_axis": "AX-15",
+      "provenance": {
+        "methodology_baseline": "v1.2.15",
+        "profile_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R2",
+        "research_revision": "R3",
+        "rules_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
+        "set_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3"
+      },
+      "research_id": "R-009",
+      "result_scopes": [
+        "OVERALL",
+        "BY_SEGMENT",
+        "BY_COIN",
+        "BY_DIRECTION"
+      ],
+      "rules_version_bindings": {
+        "baseline": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-001",
+          "rules_version_id": "TRV-R-POS-001-PR-201"
+        },
+        "binding_model": "ARM_TRADING_RULES_VERSION",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-001",
+          "rules_version_id": "TRV-R-POS-001-PR-201"
+        }
+      },
+      "rules_version_id": "TRV-R-POS-001-PR-201",
+      "run_profiles": [
+        "BACKTEST_90D",
+        "BACKTEST_30D",
+        "BACKTEST_7D",
+        "DEMO_7D"
+      ],
+      "segment_scope": [
+        "MAJORS",
+        "HIGH_VOLATILITY_HIGH_BETA",
+        "DIVERSIFIERS"
+      ],
+      "set_version_bindings": {
+        "baseline": {
+          "btc_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+          "btc_set_version_id": "SET-R-BTC-019-V1",
+          "non_btc_set_version_id": "SET-R-019-V1"
+        },
+        "binding_model": "SYMBOL_SET_BINDING",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "btc_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+          "btc_set_version_id": "SET-R-BTC-019-V2",
+          "non_btc_set_version_id": "SET-R-019-V2"
+        }
+      },
+      "set_version_id": "SET-R-019-V2",
+      "source_refs": [
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_HYPOTHESES_FINAL_30.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\WEB_RESEARCH_CONFIGURATION_MODEL.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_V1_EXECUTION_AND_REPORTING_PROFILE.md",
+        "docs\\research-import\\sets\\RESEARCH_V1_SETS.json",
+        "docs\\research-import\\rules\\RESEARCH_V1_RULES.json"
+      ],
+      "special_applicability": {
+        "allocation_redistribution": "NONE",
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "btc_result_scope_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+        "btc_universe_membership": "INCLUDED_IN_UNIVERSE_AND_ALLOCATION"
+      },
+      "status": "FINAL_RESEARCH_V1",
+      "title": "Ordered price then participation",
+      "universe_id": "UNIVERSE-CORE-V1"
+    },
+    {
+      "allocation_profile_id": "ALLOC-R-V1-FIXED-10X10",
+      "applicable_coins": [
+        "BTC",
+        "ETH",
+        "SOL",
+        "XRP",
+        "DOGE",
+        "SUI",
+        "PEPE",
+        "AVAX",
+        "LINK",
+        "BNB"
+      ],
+      "candidate_id": "C-020",
+      "compare_order": [
+        "ACTIVE",
+        "DEMO_7D",
+        "BACKTEST_7D",
+        "BACKTEST_30D",
+        "BACKTEST_90D"
+      ],
+      "description": "Does requiring the classifier-side predicate to remain true throughout the price-to-volume formation improve selection?",
+      "direction_scope": {
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "standard_direction_model": "F-005_CLASSIFIER_DIRECTION_FOR_NON_BTC_UNLESS_SET_BINDING_OVERRIDES",
+        "values": [
+          "LONG",
+          "SHORT"
+        ]
+      },
+      "evidence_export_profile": "EVIDENCE-R-V1-R2",
+      "excluded_coins": [],
+      "hypothesis_class": "SET_LAYER",
+      "hypothesis_id": "R-010",
+      "notes": [
+        "Trigger composition is intentionally not duplicated here; the referenced immutable Set version owns trigger membership and ordering."
+      ],
+      "primary_axis": "AX-16",
+      "provenance": {
+        "methodology_baseline": "v1.2.15",
+        "profile_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R2",
+        "research_revision": "R3",
+        "rules_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
+        "set_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3"
+      },
+      "research_id": "R-010",
+      "result_scopes": [
+        "OVERALL",
+        "BY_SEGMENT",
+        "BY_COIN",
+        "BY_DIRECTION"
+      ],
+      "rules_version_bindings": {
+        "baseline": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-001",
+          "rules_version_id": "TRV-R-POS-001-PR-201"
+        },
+        "binding_model": "ARM_TRADING_RULES_VERSION",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-001",
+          "rules_version_id": "TRV-R-POS-001-PR-201"
+        }
+      },
+      "rules_version_id": "TRV-R-POS-001-PR-201",
+      "run_profiles": [
+        "BACKTEST_90D",
+        "BACKTEST_30D",
+        "BACKTEST_7D",
+        "DEMO_7D"
+      ],
+      "segment_scope": [
+        "MAJORS",
+        "HIGH_VOLATILITY_HIGH_BETA",
+        "DIVERSIFIERS"
+      ],
+      "set_version_bindings": {
+        "baseline": {
+          "btc_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+          "btc_set_version_id": "SET-R-BTC-020-V1",
+          "non_btc_set_version_id": "SET-R-020-V1"
+        },
+        "binding_model": "SYMBOL_SET_BINDING",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "btc_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+          "btc_set_version_id": "SET-R-BTC-020-V2",
+          "non_btc_set_version_id": "SET-R-020-V2"
+        }
+      },
+      "set_version_id": "SET-R-020-V2",
+      "source_refs": [
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_HYPOTHESES_FINAL_30.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\WEB_RESEARCH_CONFIGURATION_MODEL.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_V1_EXECUTION_AND_REPORTING_PROFILE.md",
+        "docs\\research-import\\sets\\RESEARCH_V1_SETS.json",
+        "docs\\research-import\\rules\\RESEARCH_V1_RULES.json"
+      ],
+      "special_applicability": {
+        "allocation_redistribution": "NONE",
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "btc_result_scope_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+        "btc_universe_membership": "INCLUDED_IN_UNIVERSE_AND_ALLOCATION"
+      },
+      "status": "FINAL_RESEARCH_V1",
+      "title": "Direction maintained through formation",
+      "universe_id": "UNIVERSE-CORE-V1"
+    },
+    {
+      "allocation_profile_id": "ALLOC-R-V1-FIXED-10X10",
+      "applicable_coins": [
+        "BTC",
+        "ETH",
+        "SOL",
+        "XRP",
+        "DOGE",
+        "SUI",
+        "PEPE",
+        "AVAX",
+        "LINK",
+        "BNB"
+      ],
+      "candidate_id": "C-021",
+      "compare_order": [
+        "ACTIVE",
+        "DEMO_7D",
+        "BACKTEST_7D",
+        "BACKTEST_30D",
+        "BACKTEST_90D"
+      ],
+      "description": "Does requiring both F-002 and TOD confirmation improve selection versus permitting either?",
+      "direction_scope": {
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "standard_direction_model": "F-005_CLASSIFIER_DIRECTION_FOR_NON_BTC_UNLESS_SET_BINDING_OVERRIDES",
+        "values": [
+          "LONG",
+          "SHORT"
+        ]
+      },
+      "evidence_export_profile": "EVIDENCE-R-V1-R2",
+      "excluded_coins": [],
+      "hypothesis_class": "SET_LAYER",
+      "hypothesis_id": "R-011",
+      "notes": [
+        "Trigger composition is intentionally not duplicated here; the referenced immutable Set version owns trigger membership and ordering."
+      ],
+      "primary_axis": "AX-17",
+      "provenance": {
+        "methodology_baseline": "v1.2.15",
+        "profile_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R2",
+        "research_revision": "R3",
+        "rules_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
+        "set_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3"
+      },
+      "research_id": "R-011",
+      "result_scopes": [
+        "OVERALL",
+        "BY_SEGMENT",
+        "BY_COIN",
+        "BY_DIRECTION"
+      ],
+      "rules_version_bindings": {
+        "baseline": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-001",
+          "rules_version_id": "TRV-R-POS-001-PR-201"
+        },
+        "binding_model": "ARM_TRADING_RULES_VERSION",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-001",
+          "rules_version_id": "TRV-R-POS-001-PR-201"
+        }
+      },
+      "rules_version_id": "TRV-R-POS-001-PR-201",
+      "run_profiles": [
+        "BACKTEST_90D",
+        "BACKTEST_30D",
+        "BACKTEST_7D",
+        "DEMO_7D"
+      ],
+      "segment_scope": [
+        "MAJORS",
+        "HIGH_VOLATILITY_HIGH_BETA",
+        "DIVERSIFIERS"
+      ],
+      "set_version_bindings": {
+        "baseline": {
+          "btc_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+          "btc_set_version_id": "SET-R-BTC-021-V1",
+          "non_btc_set_version_id": "SET-R-021-V1"
+        },
+        "binding_model": "SYMBOL_SET_BINDING",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "btc_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+          "btc_set_version_id": "SET-R-BTC-021-V2",
+          "non_btc_set_version_id": "SET-R-021-V2"
+        }
+      },
+      "set_version_id": "SET-R-021-V2",
+      "source_refs": [
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_HYPOTHESES_FINAL_30.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\WEB_RESEARCH_CONFIGURATION_MODEL.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_V1_EXECUTION_AND_REPORTING_PROFILE.md",
+        "docs\\research-import\\sets\\RESEARCH_V1_SETS.json",
+        "docs\\research-import\\rules\\RESEARCH_V1_RULES.json"
+      ],
+      "special_applicability": {
+        "allocation_redistribution": "NONE",
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "btc_result_scope_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+        "btc_universe_membership": "INCLUDED_IN_UNIVERSE_AND_ALLOCATION"
+      },
+      "status": "FINAL_RESEARCH_V1",
+      "title": "Participation conjunction versus disjunction",
+      "universe_id": "UNIVERSE-CORE-V1"
+    },
+    {
+      "allocation_profile_id": "ALLOC-R-V1-FIXED-10X10",
+      "applicable_coins": [
+        "BTC",
+        "ETH",
+        "SOL",
+        "XRP",
+        "DOGE",
+        "SUI",
+        "PEPE",
+        "AVAX",
+        "LINK",
+        "BNB"
+      ],
+      "candidate_id": "C-031",
+      "compare_order": [
+        "ACTIVE",
+        "DEMO_7D",
+        "BACKTEST_7D",
+        "BACKTEST_30D",
+        "BACKTEST_90D"
+      ],
+      "description": "Does a deeper minimum Entry improvement change results?",
+      "direction_scope": {
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "standard_direction_model": "F-005_CLASSIFIER_DIRECTION_FOR_NON_BTC_UNLESS_SET_BINDING_OVERRIDES",
+        "values": [
+          "LONG",
+          "SHORT"
+        ]
+      },
+      "evidence_export_profile": "EVIDENCE-R-V1-R2",
+      "excluded_coins": [],
+      "hypothesis_class": "POSITION_RULES",
+      "hypothesis_id": "R-012",
+      "notes": [
+        "Trigger composition is intentionally not duplicated here; the referenced immutable Set version owns trigger membership and ordering."
+      ],
+      "primary_axis": "AX-23",
+      "provenance": {
+        "methodology_baseline": "v1.2.15",
+        "profile_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R2",
+        "research_revision": "R3",
+        "rules_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
+        "set_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3"
+      },
+      "research_id": "R-012",
+      "result_scopes": [
+        "OVERALL",
+        "BY_SEGMENT",
+        "BY_COIN",
+        "BY_DIRECTION"
+      ],
+      "rules_version_bindings": {
+        "baseline": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-001",
+          "rules_version_id": "TRV-R-POS-001-PR-201"
+        },
+        "binding_model": "ARM_TRADING_RULES_VERSION",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-002",
+          "rules_version_id": "TRV-R-POS-002-PR-201"
+        }
+      },
+      "rules_version_id": "TRV-R-POS-002-PR-201",
+      "run_profiles": [
+        "BACKTEST_90D",
+        "BACKTEST_30D",
+        "BACKTEST_7D",
+        "DEMO_7D"
+      ],
+      "segment_scope": [
+        "MAJORS",
+        "HIGH_VOLATILITY_HIGH_BETA",
+        "DIVERSIFIERS"
+      ],
+      "set_version_bindings": {
+        "baseline": {
+          "btc_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+          "btc_set_version_id": "SET-R-BTC-001-V1",
+          "non_btc_set_version_id": "SET-R-001-V1"
+        },
+        "binding_model": "SYMBOL_SET_BINDING",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "btc_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+          "btc_set_version_id": "SET-R-BTC-001-V1",
+          "non_btc_set_version_id": "SET-R-001-V1"
+        }
+      },
+      "set_version_id": "SET-R-001-V1",
+      "source_refs": [
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_HYPOTHESES_FINAL_30.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\WEB_RESEARCH_CONFIGURATION_MODEL.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_V1_EXECUTION_AND_REPORTING_PROFILE.md",
+        "docs\\research-import\\sets\\RESEARCH_V1_SETS.json",
+        "docs\\research-import\\rules\\RESEARCH_V1_RULES.json"
+      ],
+      "special_applicability": {
+        "allocation_redistribution": "NONE",
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "btc_result_scope_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+        "btc_universe_membership": "INCLUDED_IN_UNIVERSE_AND_ALLOCATION"
+      },
+      "status": "FINAL_RESEARCH_V1",
+      "title": "Entry minimum improvement",
+      "universe_id": "UNIVERSE-CORE-V1"
+    },
+    {
+      "allocation_profile_id": "ALLOC-R-V1-FIXED-10X10",
+      "applicable_coins": [
+        "BTC",
+        "ETH",
+        "SOL",
+        "XRP",
+        "DOGE",
+        "SUI",
+        "PEPE",
+        "AVAX",
+        "LINK",
+        "BNB"
+      ],
+      "candidate_id": "C-032",
+      "compare_order": [
+        "ACTIVE",
+        "DEMO_7D",
+        "BACKTEST_7D",
+        "BACKTEST_30D",
+        "BACKTEST_90D"
+      ],
+      "description": "Does a wider Entry-deviation allowance improve results?",
+      "direction_scope": {
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "standard_direction_model": "F-005_CLASSIFIER_DIRECTION_FOR_NON_BTC_UNLESS_SET_BINDING_OVERRIDES",
+        "values": [
+          "LONG",
+          "SHORT"
+        ]
+      },
+      "evidence_export_profile": "EVIDENCE-R-V1-R2",
+      "excluded_coins": [],
+      "hypothesis_class": "POSITION_RULES",
+      "hypothesis_id": "R-013",
+      "notes": [
+        "Trigger composition is intentionally not duplicated here; the referenced immutable Set version owns trigger membership and ordering."
+      ],
+      "primary_axis": "AX-24",
+      "provenance": {
+        "methodology_baseline": "v1.2.15",
+        "profile_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R2",
+        "research_revision": "R3",
+        "rules_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
+        "set_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3"
+      },
+      "research_id": "R-013",
+      "result_scopes": [
+        "OVERALL",
+        "BY_SEGMENT",
+        "BY_COIN",
+        "BY_DIRECTION"
+      ],
+      "rules_version_bindings": {
+        "baseline": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-001",
+          "rules_version_id": "TRV-R-POS-001-PR-201"
+        },
+        "binding_model": "ARM_TRADING_RULES_VERSION",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-003",
+          "rules_version_id": "TRV-R-POS-003-PR-201"
+        }
+      },
+      "rules_version_id": "TRV-R-POS-003-PR-201",
+      "run_profiles": [
+        "BACKTEST_90D",
+        "BACKTEST_30D",
+        "BACKTEST_7D",
+        "DEMO_7D"
+      ],
+      "segment_scope": [
+        "MAJORS",
+        "HIGH_VOLATILITY_HIGH_BETA",
+        "DIVERSIFIERS"
+      ],
+      "set_version_bindings": {
+        "baseline": {
+          "btc_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+          "btc_set_version_id": "SET-R-BTC-001-V1",
+          "non_btc_set_version_id": "SET-R-001-V1"
+        },
+        "binding_model": "SYMBOL_SET_BINDING",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "btc_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+          "btc_set_version_id": "SET-R-BTC-001-V1",
+          "non_btc_set_version_id": "SET-R-001-V1"
+        }
+      },
+      "set_version_id": "SET-R-001-V1",
+      "source_refs": [
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_HYPOTHESES_FINAL_30.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\WEB_RESEARCH_CONFIGURATION_MODEL.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_V1_EXECUTION_AND_REPORTING_PROFILE.md",
+        "docs\\research-import\\sets\\RESEARCH_V1_SETS.json",
+        "docs\\research-import\\rules\\RESEARCH_V1_RULES.json"
+      ],
+      "special_applicability": {
+        "allocation_redistribution": "NONE",
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "btc_result_scope_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+        "btc_universe_membership": "INCLUDED_IN_UNIVERSE_AND_ALLOCATION"
+      },
+      "status": "FINAL_RESEARCH_V1",
+      "title": "Entry maximum deviation",
+      "universe_id": "UNIVERSE-CORE-V1"
+    },
+    {
+      "allocation_profile_id": "ALLOC-R-V1-FIXED-10X10",
+      "applicable_coins": [
+        "BTC",
+        "ETH",
+        "SOL",
+        "XRP",
+        "DOGE",
+        "SUI",
+        "PEPE",
+        "AVAX",
+        "LINK",
+        "BNB"
+      ],
+      "candidate_id": "C-034",
+      "compare_order": [
+        "ACTIVE",
+        "DEMO_7D",
+        "BACKTEST_7D",
+        "BACKTEST_30D",
+        "BACKTEST_90D"
+      ],
+      "description": "Does fixed 1% Stop dispatch improve results relative to Dynamic Stop?",
+      "direction_scope": {
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "standard_direction_model": "F-005_CLASSIFIER_DIRECTION_FOR_NON_BTC_UNLESS_SET_BINDING_OVERRIDES",
+        "values": [
+          "LONG",
+          "SHORT"
+        ]
+      },
+      "evidence_export_profile": "EVIDENCE-R-V1-R2",
+      "excluded_coins": [],
+      "hypothesis_class": "POSITION_RULES",
+      "hypothesis_id": "R-014",
+      "notes": [
+        "Trigger composition is intentionally not duplicated here; the referenced immutable Set version owns trigger membership and ordering."
+      ],
+      "primary_axis": "AX-25",
+      "provenance": {
+        "methodology_baseline": "v1.2.15",
+        "profile_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R2",
+        "research_revision": "R3",
+        "rules_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
+        "set_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3"
+      },
+      "research_id": "R-014",
+      "result_scopes": [
+        "OVERALL",
+        "BY_SEGMENT",
+        "BY_COIN",
+        "BY_DIRECTION"
+      ],
+      "rules_version_bindings": {
+        "baseline": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-001",
+          "rules_version_id": "TRV-R-POS-001-PR-201"
+        },
+        "binding_model": "ARM_TRADING_RULES_VERSION",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-005",
+          "rules_version_id": "TRV-R-POS-005-PR-201"
+        }
+      },
+      "rules_version_id": "TRV-R-POS-005-PR-201",
+      "run_profiles": [
+        "BACKTEST_90D",
+        "BACKTEST_30D",
+        "BACKTEST_7D",
+        "DEMO_7D"
+      ],
+      "segment_scope": [
+        "MAJORS",
+        "HIGH_VOLATILITY_HIGH_BETA",
+        "DIVERSIFIERS"
+      ],
+      "set_version_bindings": {
+        "baseline": {
+          "btc_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+          "btc_set_version_id": "SET-R-BTC-001-V1",
+          "non_btc_set_version_id": "SET-R-001-V1"
+        },
+        "binding_model": "SYMBOL_SET_BINDING",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "btc_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+          "btc_set_version_id": "SET-R-BTC-001-V1",
+          "non_btc_set_version_id": "SET-R-001-V1"
+        }
+      },
+      "set_version_id": "SET-R-001-V1",
+      "source_refs": [
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_HYPOTHESES_FINAL_30.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\WEB_RESEARCH_CONFIGURATION_MODEL.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_V1_EXECUTION_AND_REPORTING_PROFILE.md",
+        "docs\\research-import\\sets\\RESEARCH_V1_SETS.json",
+        "docs\\research-import\\rules\\RESEARCH_V1_RULES.json"
+      ],
+      "special_applicability": {
+        "allocation_redistribution": "NONE",
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "btc_result_scope_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+        "btc_universe_membership": "INCLUDED_IN_UNIVERSE_AND_ALLOCATION"
+      },
+      "status": "FINAL_RESEARCH_V1",
+      "title": "Dynamic versus fixed Stop dispatch",
+      "universe_id": "UNIVERSE-CORE-V1"
+    },
+    {
+      "allocation_profile_id": "ALLOC-R-V1-FIXED-10X10",
+      "applicable_coins": [
+        "BTC",
+        "ETH",
+        "SOL",
+        "XRP",
+        "DOGE",
+        "SUI",
+        "PEPE",
+        "AVAX",
+        "LINK",
+        "BNB"
+      ],
+      "candidate_id": "C-035",
+      "compare_order": [
+        "ACTIVE",
+        "DEMO_7D",
+        "BACKTEST_7D",
+        "BACKTEST_30D",
+        "BACKTEST_90D"
+      ],
+      "description": "Does a larger structural Stop buffer improve results?",
+      "direction_scope": {
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "standard_direction_model": "F-005_CLASSIFIER_DIRECTION_FOR_NON_BTC_UNLESS_SET_BINDING_OVERRIDES",
+        "values": [
+          "LONG",
+          "SHORT"
+        ]
+      },
+      "evidence_export_profile": "EVIDENCE-R-V1-R2",
+      "excluded_coins": [],
+      "hypothesis_class": "POSITION_RULES",
+      "hypothesis_id": "R-015",
+      "notes": [
+        "Trigger composition is intentionally not duplicated here; the referenced immutable Set version owns trigger membership and ordering."
+      ],
+      "primary_axis": "AX-26",
+      "provenance": {
+        "methodology_baseline": "v1.2.15",
+        "profile_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R2",
+        "research_revision": "R3",
+        "rules_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
+        "set_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3"
+      },
+      "research_id": "R-015",
+      "result_scopes": [
+        "OVERALL",
+        "BY_SEGMENT",
+        "BY_COIN",
+        "BY_DIRECTION"
+      ],
+      "rules_version_bindings": {
+        "baseline": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-001",
+          "rules_version_id": "TRV-R-POS-001-PR-201"
+        },
+        "binding_model": "ARM_TRADING_RULES_VERSION",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-006",
+          "rules_version_id": "TRV-R-POS-006-PR-201"
+        }
+      },
+      "rules_version_id": "TRV-R-POS-006-PR-201",
+      "run_profiles": [
+        "BACKTEST_90D",
+        "BACKTEST_30D",
+        "BACKTEST_7D",
+        "DEMO_7D"
+      ],
+      "segment_scope": [
+        "MAJORS",
+        "HIGH_VOLATILITY_HIGH_BETA",
+        "DIVERSIFIERS"
+      ],
+      "set_version_bindings": {
+        "baseline": {
+          "btc_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+          "btc_set_version_id": "SET-R-BTC-001-V1",
+          "non_btc_set_version_id": "SET-R-001-V1"
+        },
+        "binding_model": "SYMBOL_SET_BINDING",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "btc_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+          "btc_set_version_id": "SET-R-BTC-001-V1",
+          "non_btc_set_version_id": "SET-R-001-V1"
+        }
+      },
+      "set_version_id": "SET-R-001-V1",
+      "source_refs": [
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_HYPOTHESES_FINAL_30.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\WEB_RESEARCH_CONFIGURATION_MODEL.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_V1_EXECUTION_AND_REPORTING_PROFILE.md",
+        "docs\\research-import\\sets\\RESEARCH_V1_SETS.json",
+        "docs\\research-import\\rules\\RESEARCH_V1_RULES.json"
+      ],
+      "special_applicability": {
+        "allocation_redistribution": "NONE",
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "btc_result_scope_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+        "btc_universe_membership": "INCLUDED_IN_UNIVERSE_AND_ALLOCATION"
+      },
+      "status": "FINAL_RESEARCH_V1",
+      "title": "Dynamic Stop buffer",
+      "universe_id": "UNIVERSE-CORE-V1"
+    },
+    {
+      "allocation_profile_id": "ALLOC-R-V1-FIXED-10X10",
+      "applicable_coins": [
+        "BTC",
+        "ETH",
+        "SOL",
+        "XRP",
+        "DOGE",
+        "SUI",
+        "PEPE",
+        "AVAX",
+        "LINK",
+        "BNB"
+      ],
+      "candidate_id": "C-037",
+      "compare_order": [
+        "ACTIVE",
+        "DEMO_7D",
+        "BACKTEST_7D",
+        "BACKTEST_30D",
+        "BACKTEST_90D"
+      ],
+      "description": "Does a tighter maximum Stop-risk limit improve results?",
+      "direction_scope": {
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "standard_direction_model": "F-005_CLASSIFIER_DIRECTION_FOR_NON_BTC_UNLESS_SET_BINDING_OVERRIDES",
+        "values": [
+          "LONG",
+          "SHORT"
+        ]
+      },
+      "evidence_export_profile": "EVIDENCE-R-V1-R2",
+      "excluded_coins": [],
+      "hypothesis_class": "POSITION_RULES",
+      "hypothesis_id": "R-016",
+      "notes": [
+        "Trigger composition is intentionally not duplicated here; the referenced immutable Set version owns trigger membership and ordering."
+      ],
+      "primary_axis": "AX-28",
+      "provenance": {
+        "methodology_baseline": "v1.2.15",
+        "profile_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R2",
+        "research_revision": "R3",
+        "rules_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
+        "set_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3"
+      },
+      "research_id": "R-016",
+      "result_scopes": [
+        "OVERALL",
+        "BY_SEGMENT",
+        "BY_COIN",
+        "BY_DIRECTION"
+      ],
+      "rules_version_bindings": {
+        "baseline": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-001",
+          "rules_version_id": "TRV-R-POS-001-PR-201"
+        },
+        "binding_model": "ARM_TRADING_RULES_VERSION",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-008",
+          "rules_version_id": "TRV-R-POS-008-PR-201"
+        }
+      },
+      "rules_version_id": "TRV-R-POS-008-PR-201",
+      "run_profiles": [
+        "BACKTEST_90D",
+        "BACKTEST_30D",
+        "BACKTEST_7D",
+        "DEMO_7D"
+      ],
+      "segment_scope": [
+        "MAJORS",
+        "HIGH_VOLATILITY_HIGH_BETA",
+        "DIVERSIFIERS"
+      ],
+      "set_version_bindings": {
+        "baseline": {
+          "btc_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+          "btc_set_version_id": "SET-R-BTC-001-V1",
+          "non_btc_set_version_id": "SET-R-001-V1"
+        },
+        "binding_model": "SYMBOL_SET_BINDING",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "btc_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+          "btc_set_version_id": "SET-R-BTC-001-V1",
+          "non_btc_set_version_id": "SET-R-001-V1"
+        }
+      },
+      "set_version_id": "SET-R-001-V1",
+      "source_refs": [
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_HYPOTHESES_FINAL_30.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\WEB_RESEARCH_CONFIGURATION_MODEL.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_V1_EXECUTION_AND_REPORTING_PROFILE.md",
+        "docs\\research-import\\sets\\RESEARCH_V1_SETS.json",
+        "docs\\research-import\\rules\\RESEARCH_V1_RULES.json"
+      ],
+      "special_applicability": {
+        "allocation_redistribution": "NONE",
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "btc_result_scope_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+        "btc_universe_membership": "INCLUDED_IN_UNIVERSE_AND_ALLOCATION"
+      },
+      "status": "FINAL_RESEARCH_V1",
+      "title": "Dynamic Stop maximum risk",
+      "universe_id": "UNIVERSE-CORE-V1"
+    },
+    {
+      "allocation_profile_id": "ALLOC-R-V1-FIXED-10X10",
+      "applicable_coins": [
+        "BTC",
+        "ETH",
+        "SOL",
+        "XRP",
+        "DOGE",
+        "SUI",
+        "PEPE",
+        "AVAX",
+        "LINK",
+        "BNB"
+      ],
+      "candidate_id": "C-039",
+      "compare_order": [
+        "ACTIVE",
+        "DEMO_7D",
+        "BACKTEST_7D",
+        "BACKTEST_30D",
+        "BACKTEST_90D"
+      ],
+      "description": "Does a larger minimum target distance improve results?",
+      "direction_scope": {
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "standard_direction_model": "F-005_CLASSIFIER_DIRECTION_FOR_NON_BTC_UNLESS_SET_BINDING_OVERRIDES",
+        "values": [
+          "LONG",
+          "SHORT"
+        ]
+      },
+      "evidence_export_profile": "EVIDENCE-R-V1-R2",
+      "excluded_coins": [],
+      "hypothesis_class": "POSITION_RULES",
+      "hypothesis_id": "R-017",
+      "notes": [
+        "Trigger composition is intentionally not duplicated here; the referenced immutable Set version owns trigger membership and ordering."
+      ],
+      "primary_axis": "AX-30",
+      "provenance": {
+        "methodology_baseline": "v1.2.15",
+        "profile_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R2",
+        "research_revision": "R3",
+        "rules_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
+        "set_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3"
+      },
+      "research_id": "R-017",
+      "result_scopes": [
+        "OVERALL",
+        "BY_SEGMENT",
+        "BY_COIN",
+        "BY_DIRECTION"
+      ],
+      "rules_version_bindings": {
+        "baseline": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-001",
+          "rules_version_id": "TRV-R-POS-001-PR-201"
+        },
+        "binding_model": "ARM_TRADING_RULES_VERSION",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-010",
+          "rules_version_id": "TRV-R-POS-010-PR-201"
+        }
+      },
+      "rules_version_id": "TRV-R-POS-010-PR-201",
+      "run_profiles": [
+        "BACKTEST_90D",
+        "BACKTEST_30D",
+        "BACKTEST_7D",
+        "DEMO_7D"
+      ],
+      "segment_scope": [
+        "MAJORS",
+        "HIGH_VOLATILITY_HIGH_BETA",
+        "DIVERSIFIERS"
+      ],
+      "set_version_bindings": {
+        "baseline": {
+          "btc_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+          "btc_set_version_id": "SET-R-BTC-001-V1",
+          "non_btc_set_version_id": "SET-R-001-V1"
+        },
+        "binding_model": "SYMBOL_SET_BINDING",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "btc_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+          "btc_set_version_id": "SET-R-BTC-001-V1",
+          "non_btc_set_version_id": "SET-R-001-V1"
+        }
+      },
+      "set_version_id": "SET-R-001-V1",
+      "source_refs": [
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_HYPOTHESES_FINAL_30.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\WEB_RESEARCH_CONFIGURATION_MODEL.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_V1_EXECUTION_AND_REPORTING_PROFILE.md",
+        "docs\\research-import\\sets\\RESEARCH_V1_SETS.json",
+        "docs\\research-import\\rules\\RESEARCH_V1_RULES.json"
+      ],
+      "special_applicability": {
+        "allocation_redistribution": "NONE",
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "btc_result_scope_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+        "btc_universe_membership": "INCLUDED_IN_UNIVERSE_AND_ALLOCATION"
+      },
+      "status": "FINAL_RESEARCH_V1",
+      "title": "Dynamic TP minimum distance",
+      "universe_id": "UNIVERSE-CORE-V1"
+    },
+    {
+      "allocation_profile_id": "ALLOC-R-V1-FIXED-10X10",
+      "applicable_coins": [
+        "BTC",
+        "ETH",
+        "SOL",
+        "XRP",
+        "DOGE",
+        "SUI",
+        "PEPE",
+        "AVAX",
+        "LINK",
+        "BNB"
+      ],
+      "candidate_id": "C-040",
+      "compare_order": [
+        "ACTIVE",
+        "DEMO_7D",
+        "BACKTEST_7D",
+        "BACKTEST_30D",
+        "BACKTEST_90D"
+      ],
+      "description": "Does a tighter maximum target distance improve results?",
+      "direction_scope": {
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "standard_direction_model": "F-005_CLASSIFIER_DIRECTION_FOR_NON_BTC_UNLESS_SET_BINDING_OVERRIDES",
+        "values": [
+          "LONG",
+          "SHORT"
+        ]
+      },
+      "evidence_export_profile": "EVIDENCE-R-V1-R2",
+      "excluded_coins": [],
+      "hypothesis_class": "POSITION_RULES",
+      "hypothesis_id": "R-018",
+      "notes": [
+        "Trigger composition is intentionally not duplicated here; the referenced immutable Set version owns trigger membership and ordering."
+      ],
+      "primary_axis": "AX-31",
+      "provenance": {
+        "methodology_baseline": "v1.2.15",
+        "profile_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R2",
+        "research_revision": "R3",
+        "rules_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
+        "set_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3"
+      },
+      "research_id": "R-018",
+      "result_scopes": [
+        "OVERALL",
+        "BY_SEGMENT",
+        "BY_COIN",
+        "BY_DIRECTION"
+      ],
+      "rules_version_bindings": {
+        "baseline": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-001",
+          "rules_version_id": "TRV-R-POS-001-PR-201"
+        },
+        "binding_model": "ARM_TRADING_RULES_VERSION",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-011",
+          "rules_version_id": "TRV-R-POS-011-PR-201"
+        }
+      },
+      "rules_version_id": "TRV-R-POS-011-PR-201",
+      "run_profiles": [
+        "BACKTEST_90D",
+        "BACKTEST_30D",
+        "BACKTEST_7D",
+        "DEMO_7D"
+      ],
+      "segment_scope": [
+        "MAJORS",
+        "HIGH_VOLATILITY_HIGH_BETA",
+        "DIVERSIFIERS"
+      ],
+      "set_version_bindings": {
+        "baseline": {
+          "btc_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+          "btc_set_version_id": "SET-R-BTC-001-V1",
+          "non_btc_set_version_id": "SET-R-001-V1"
+        },
+        "binding_model": "SYMBOL_SET_BINDING",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "btc_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+          "btc_set_version_id": "SET-R-BTC-001-V1",
+          "non_btc_set_version_id": "SET-R-001-V1"
+        }
+      },
+      "set_version_id": "SET-R-001-V1",
+      "source_refs": [
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_HYPOTHESES_FINAL_30.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\WEB_RESEARCH_CONFIGURATION_MODEL.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_V1_EXECUTION_AND_REPORTING_PROFILE.md",
+        "docs\\research-import\\sets\\RESEARCH_V1_SETS.json",
+        "docs\\research-import\\rules\\RESEARCH_V1_RULES.json"
+      ],
+      "special_applicability": {
+        "allocation_redistribution": "NONE",
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "btc_result_scope_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+        "btc_universe_membership": "INCLUDED_IN_UNIVERSE_AND_ALLOCATION"
+      },
+      "status": "FINAL_RESEARCH_V1",
+      "title": "Dynamic TP maximum distance",
+      "universe_id": "UNIVERSE-CORE-V1"
+    },
+    {
+      "allocation_profile_id": "ALLOC-R-V1-FIXED-10X10",
+      "applicable_coins": [
+        "BTC",
+        "ETH",
+        "SOL",
+        "XRP",
+        "DOGE",
+        "SUI",
+        "PEPE",
+        "AVAX",
+        "LINK",
+        "BNB"
+      ],
+      "candidate_id": "C-041",
+      "compare_order": [
+        "ACTIVE",
+        "DEMO_7D",
+        "BACKTEST_7D",
+        "BACKTEST_30D",
+        "BACKTEST_90D"
+      ],
+      "description": "Does enabling minimum gross R:R=2 improve selection?",
+      "direction_scope": {
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "standard_direction_model": "F-005_CLASSIFIER_DIRECTION_FOR_NON_BTC_UNLESS_SET_BINDING_OVERRIDES",
+        "values": [
+          "LONG",
+          "SHORT"
+        ]
+      },
+      "evidence_export_profile": "EVIDENCE-R-V1-R2",
+      "excluded_coins": [],
+      "hypothesis_class": "POSITION_RULES",
+      "hypothesis_id": "R-019",
+      "notes": [
+        "Trigger composition is intentionally not duplicated here; the referenced immutable Set version owns trigger membership and ordering."
+      ],
+      "primary_axis": "AX-32",
+      "provenance": {
+        "methodology_baseline": "v1.2.15",
+        "profile_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R2",
+        "research_revision": "R3",
+        "rules_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
+        "set_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3"
+      },
+      "research_id": "R-019",
+      "result_scopes": [
+        "OVERALL",
+        "BY_SEGMENT",
+        "BY_COIN",
+        "BY_DIRECTION"
+      ],
+      "rules_version_bindings": {
+        "baseline": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-001",
+          "rules_version_id": "TRV-R-POS-001-PR-201"
+        },
+        "binding_model": "ARM_TRADING_RULES_VERSION",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-012",
+          "rules_version_id": "TRV-R-POS-012-PR-201"
+        }
+      },
+      "rules_version_id": "TRV-R-POS-012-PR-201",
+      "run_profiles": [
+        "BACKTEST_90D",
+        "BACKTEST_30D",
+        "BACKTEST_7D",
+        "DEMO_7D"
+      ],
+      "segment_scope": [
+        "MAJORS",
+        "HIGH_VOLATILITY_HIGH_BETA",
+        "DIVERSIFIERS"
+      ],
+      "set_version_bindings": {
+        "baseline": {
+          "btc_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+          "btc_set_version_id": "SET-R-BTC-001-V1",
+          "non_btc_set_version_id": "SET-R-001-V1"
+        },
+        "binding_model": "SYMBOL_SET_BINDING",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "btc_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+          "btc_set_version_id": "SET-R-BTC-001-V1",
+          "non_btc_set_version_id": "SET-R-001-V1"
+        }
+      },
+      "set_version_id": "SET-R-001-V1",
+      "source_refs": [
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_HYPOTHESES_FINAL_30.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\WEB_RESEARCH_CONFIGURATION_MODEL.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_V1_EXECUTION_AND_REPORTING_PROFILE.md",
+        "docs\\research-import\\sets\\RESEARCH_V1_SETS.json",
+        "docs\\research-import\\rules\\RESEARCH_V1_RULES.json"
+      ],
+      "special_applicability": {
+        "allocation_redistribution": "NONE",
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "btc_result_scope_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+        "btc_universe_membership": "INCLUDED_IN_UNIVERSE_AND_ALLOCATION"
+      },
+      "status": "FINAL_RESEARCH_V1",
+      "title": "Structural reward-to-risk gate",
+      "universe_id": "UNIVERSE-CORE-V1"
+    },
+    {
+      "allocation_profile_id": "ALLOC-R-V1-FIXED-10X10",
+      "applicable_coins": [
+        "BTC",
+        "ETH",
+        "SOL",
+        "XRP",
+        "DOGE",
+        "SUI",
+        "PEPE",
+        "AVAX",
+        "LINK",
+        "BNB"
+      ],
+      "candidate_id": "C-042",
+      "compare_order": [
+        "ACTIVE",
+        "DEMO_7D",
+        "BACKTEST_7D",
+        "BACKTEST_30D",
+        "BACKTEST_90D"
+      ],
+      "description": "Does enabling minimum planned net edge of 1% of actual notional improve selection?",
+      "direction_scope": {
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "standard_direction_model": "F-005_CLASSIFIER_DIRECTION_FOR_NON_BTC_UNLESS_SET_BINDING_OVERRIDES",
+        "values": [
+          "LONG",
+          "SHORT"
+        ]
+      },
+      "evidence_export_profile": "EVIDENCE-R-V1-R2",
+      "excluded_coins": [],
+      "hypothesis_class": "POSITION_RULES",
+      "hypothesis_id": "R-020",
+      "notes": [
+        "Trigger composition is intentionally not duplicated here; the referenced immutable Set version owns trigger membership and ordering."
+      ],
+      "primary_axis": "AX-33",
+      "provenance": {
+        "methodology_baseline": "v1.2.15",
+        "profile_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R2",
+        "research_revision": "R3",
+        "rules_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
+        "set_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3"
+      },
+      "research_id": "R-020",
+      "result_scopes": [
+        "OVERALL",
+        "BY_SEGMENT",
+        "BY_COIN",
+        "BY_DIRECTION"
+      ],
+      "rules_version_bindings": {
+        "baseline": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-001",
+          "rules_version_id": "TRV-R-POS-001-PR-201"
+        },
+        "binding_model": "ARM_TRADING_RULES_VERSION",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-013",
+          "rules_version_id": "TRV-R-POS-013-PR-201"
+        }
+      },
+      "rules_version_id": "TRV-R-POS-013-PR-201",
+      "run_profiles": [
+        "BACKTEST_90D",
+        "BACKTEST_30D",
+        "BACKTEST_7D",
+        "DEMO_7D"
+      ],
+      "segment_scope": [
+        "MAJORS",
+        "HIGH_VOLATILITY_HIGH_BETA",
+        "DIVERSIFIERS"
+      ],
+      "set_version_bindings": {
+        "baseline": {
+          "btc_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+          "btc_set_version_id": "SET-R-BTC-001-V1",
+          "non_btc_set_version_id": "SET-R-001-V1"
+        },
+        "binding_model": "SYMBOL_SET_BINDING",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "btc_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+          "btc_set_version_id": "SET-R-BTC-001-V1",
+          "non_btc_set_version_id": "SET-R-001-V1"
+        }
+      },
+      "set_version_id": "SET-R-001-V1",
+      "source_refs": [
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_HYPOTHESES_FINAL_30.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\WEB_RESEARCH_CONFIGURATION_MODEL.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_V1_EXECUTION_AND_REPORTING_PROFILE.md",
+        "docs\\research-import\\sets\\RESEARCH_V1_SETS.json",
+        "docs\\research-import\\rules\\RESEARCH_V1_RULES.json"
+      ],
+      "special_applicability": {
+        "allocation_redistribution": "NONE",
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "btc_result_scope_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+        "btc_universe_membership": "INCLUDED_IN_UNIVERSE_AND_ALLOCATION"
+      },
+      "status": "FINAL_RESEARCH_V1",
+      "title": "Planned net-edge gate",
+      "universe_id": "UNIVERSE-CORE-V1"
+    },
+    {
+      "allocation_profile_id": "ALLOC-R-V1-FIXED-10X10",
+      "applicable_coins": [
+        "BTC",
+        "ETH",
+        "SOL",
+        "XRP",
+        "DOGE",
+        "SUI",
+        "PEPE",
+        "AVAX",
+        "LINK",
+        "BNB"
+      ],
+      "candidate_id": "C-043",
+      "compare_order": [
+        "ACTIVE",
+        "DEMO_7D",
+        "BACKTEST_7D",
+        "BACKTEST_30D",
+        "BACKTEST_90D"
+      ],
+      "description": "Does leverage 2 rather than 1 change results under identical own-capital policy?",
+      "direction_scope": {
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "standard_direction_model": "F-005_CLASSIFIER_DIRECTION_FOR_NON_BTC_UNLESS_SET_BINDING_OVERRIDES",
+        "values": [
+          "LONG",
+          "SHORT"
+        ]
+      },
+      "evidence_export_profile": "EVIDENCE-R-V1-R2",
+      "excluded_coins": [],
+      "hypothesis_class": "POSITION_RULES",
+      "hypothesis_id": "R-021",
+      "notes": [
+        "Trigger composition is intentionally not duplicated here; the referenced immutable Set version owns trigger membership and ordering."
+      ],
+      "primary_axis": "AX-34",
+      "provenance": {
+        "methodology_baseline": "v1.2.15",
+        "profile_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R2",
+        "research_revision": "R3",
+        "rules_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
+        "set_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3"
+      },
+      "research_id": "R-021",
+      "result_scopes": [
+        "OVERALL",
+        "BY_SEGMENT",
+        "BY_COIN",
+        "BY_DIRECTION"
+      ],
+      "rules_version_bindings": {
+        "baseline": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-001",
+          "rules_version_id": "TRV-R-POS-001-PR-201"
+        },
+        "binding_model": "ARM_TRADING_RULES_VERSION",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-014",
+          "rules_version_id": "TRV-R-POS-014-PR-201"
+        }
+      },
+      "rules_version_id": "TRV-R-POS-014-PR-201",
+      "run_profiles": [
+        "BACKTEST_90D",
+        "BACKTEST_30D",
+        "BACKTEST_7D",
+        "DEMO_7D"
+      ],
+      "segment_scope": [
+        "MAJORS",
+        "HIGH_VOLATILITY_HIGH_BETA",
+        "DIVERSIFIERS"
+      ],
+      "set_version_bindings": {
+        "baseline": {
+          "btc_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+          "btc_set_version_id": "SET-R-BTC-001-V1",
+          "non_btc_set_version_id": "SET-R-001-V1"
+        },
+        "binding_model": "SYMBOL_SET_BINDING",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "btc_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+          "btc_set_version_id": "SET-R-BTC-001-V1",
+          "non_btc_set_version_id": "SET-R-001-V1"
+        }
+      },
+      "set_version_id": "SET-R-001-V1",
+      "source_refs": [
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_HYPOTHESES_FINAL_30.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\WEB_RESEARCH_CONFIGURATION_MODEL.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_V1_EXECUTION_AND_REPORTING_PROFILE.md",
+        "docs\\research-import\\sets\\RESEARCH_V1_SETS.json",
+        "docs\\research-import\\rules\\RESEARCH_V1_RULES.json"
+      ],
+      "special_applicability": {
+        "allocation_redistribution": "NONE",
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "btc_result_scope_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+        "btc_universe_membership": "INCLUDED_IN_UNIVERSE_AND_ALLOCATION"
+      },
+      "status": "FINAL_RESEARCH_V1",
+      "title": "Leverage in exact construction",
+      "universe_id": "UNIVERSE-CORE-V1"
+    },
+    {
+      "allocation_profile_id": "ALLOC-R-V1-FIXED-10X10",
+      "applicable_coins": [
+        "BTC",
+        "ETH",
+        "SOL",
+        "XRP",
+        "DOGE",
+        "SUI",
+        "PEPE",
+        "AVAX",
+        "LINK",
+        "BNB"
+      ],
+      "candidate_id": "C-012",
+      "compare_order": [
+        "ACTIVE",
+        "DEMO_7D",
+        "BACKTEST_7D",
+        "BACKTEST_30D",
+        "BACKTEST_90D"
+      ],
+      "description": "Does stronger positive-side BTC context improve selection beyond non-contradiction?",
+      "direction_scope": {
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "standard_direction_model": "F-005_CLASSIFIER_DIRECTION_FOR_NON_BTC_UNLESS_SET_BINDING_OVERRIDES",
+        "values": [
+          "LONG",
+          "SHORT"
+        ]
+      },
+      "evidence_export_profile": "EVIDENCE-R-V1-R2",
+      "excluded_coins": [],
+      "hypothesis_class": "SET_LAYER",
+      "hypothesis_id": "R-022",
+      "notes": [
+        "Trigger composition is intentionally not duplicated here; the referenced immutable Set version owns trigger membership and ordering.",
+        "R3 replacement hypothesis; prior R2 candidate remains historical/conditional only."
+      ],
+      "primary_axis": "AX-08",
+      "provenance": {
+        "methodology_baseline": "v1.2.15",
+        "profile_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R2",
+        "research_revision": "R3",
+        "rules_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
+        "set_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3"
+      },
+      "research_id": "R-022",
+      "result_scopes": [
+        "OVERALL",
+        "BY_SEGMENT",
+        "BY_COIN",
+        "BY_DIRECTION"
+      ],
+      "rules_version_bindings": {
+        "baseline": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-001",
+          "rules_version_id": "TRV-R-POS-001-PR-201"
+        },
+        "binding_model": "ARM_TRADING_RULES_VERSION",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-001",
+          "rules_version_id": "TRV-R-POS-001-PR-201"
+        }
+      },
+      "rules_version_id": "TRV-R-POS-001-PR-201",
+      "run_profiles": [
+        "BACKTEST_90D",
+        "BACKTEST_30D",
+        "BACKTEST_7D",
+        "DEMO_7D"
+      ],
+      "segment_scope": [
+        "MAJORS",
+        "HIGH_VOLATILITY_HIGH_BETA",
+        "DIVERSIFIERS"
+      ],
+      "set_version_bindings": {
+        "baseline": {
+          "btc_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+          "btc_set_version_id": "SET-R-BTC-001-V1",
+          "non_btc_set_version_id": "SET-R-001-V1"
+        },
+        "binding_model": "SYMBOL_SET_BINDING",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "btc_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+          "btc_set_version_id": "SET-R-BTC-012-V2",
+          "non_btc_set_version_id": "SET-R-012-V2"
+        }
+      },
+      "set_version_id": "SET-R-012-V2",
+      "source_refs": [
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_HYPOTHESES_FINAL_30.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\WEB_RESEARCH_CONFIGURATION_MODEL.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_V1_EXECUTION_AND_REPORTING_PROFILE.md",
+        "docs\\research-import\\sets\\RESEARCH_V1_SETS.json",
+        "docs\\research-import\\rules\\RESEARCH_V1_RULES.json"
+      ],
+      "special_applicability": {
+        "allocation_redistribution": "NONE",
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "btc_result_scope_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+        "btc_universe_membership": "INCLUDED_IN_UNIVERSE_AND_ALLOCATION"
+      },
+      "status": "FINAL_RESEARCH_V1",
+      "title": "BTC contextual agreement",
+      "universe_id": "UNIVERSE-CORE-V1"
+    },
+    {
+      "allocation_profile_id": "ALLOC-R-V1-FIXED-10X10",
+      "applicable_coins": [
+        "BTC",
+        "ETH",
+        "SOL",
+        "XRP",
+        "DOGE",
+        "SUI",
+        "PEPE",
+        "AVAX",
+        "LINK",
+        "BNB"
+      ],
+      "candidate_id": "C-036",
+      "compare_order": [
+        "ACTIVE",
+        "DEMO_7D",
+        "BACKTEST_7D",
+        "BACKTEST_30D",
+        "BACKTEST_90D"
+      ],
+      "description": "Does a larger minimum risk-distance floor improve results?",
+      "direction_scope": {
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "standard_direction_model": "F-005_CLASSIFIER_DIRECTION_FOR_NON_BTC_UNLESS_SET_BINDING_OVERRIDES",
+        "values": [
+          "LONG",
+          "SHORT"
+        ]
+      },
+      "evidence_export_profile": "EVIDENCE-R-V1-R2",
+      "excluded_coins": [],
+      "hypothesis_class": "POSITION_RULES",
+      "hypothesis_id": "R-023",
+      "notes": [
+        "Trigger composition is intentionally not duplicated here; the referenced immutable Set version owns trigger membership and ordering."
+      ],
+      "primary_axis": "AX-27",
+      "provenance": {
+        "methodology_baseline": "v1.2.15",
+        "profile_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R2",
+        "research_revision": "R3",
+        "rules_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
+        "set_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3"
+      },
+      "research_id": "R-023",
+      "result_scopes": [
+        "OVERALL",
+        "BY_SEGMENT",
+        "BY_COIN",
+        "BY_DIRECTION"
+      ],
+      "rules_version_bindings": {
+        "baseline": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-001",
+          "rules_version_id": "TRV-R-POS-001-PR-201"
+        },
+        "binding_model": "ARM_TRADING_RULES_VERSION",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-007",
+          "rules_version_id": "TRV-R-POS-007-PR-201"
+        }
+      },
+      "rules_version_id": "TRV-R-POS-007-PR-201",
+      "run_profiles": [
+        "BACKTEST_90D",
+        "BACKTEST_30D",
+        "BACKTEST_7D",
+        "DEMO_7D"
+      ],
+      "segment_scope": [
+        "MAJORS",
+        "HIGH_VOLATILITY_HIGH_BETA",
+        "DIVERSIFIERS"
+      ],
+      "set_version_bindings": {
+        "baseline": {
+          "btc_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+          "btc_set_version_id": "SET-R-BTC-001-V1",
+          "non_btc_set_version_id": "SET-R-001-V1"
+        },
+        "binding_model": "SYMBOL_SET_BINDING",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "btc_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+          "btc_set_version_id": "SET-R-BTC-001-V1",
+          "non_btc_set_version_id": "SET-R-001-V1"
+        }
+      },
+      "set_version_id": "SET-R-001-V1",
+      "source_refs": [
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_HYPOTHESES_FINAL_30.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\WEB_RESEARCH_CONFIGURATION_MODEL.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_V1_EXECUTION_AND_REPORTING_PROFILE.md",
+        "docs\\research-import\\sets\\RESEARCH_V1_SETS.json",
+        "docs\\research-import\\rules\\RESEARCH_V1_RULES.json"
+      ],
+      "special_applicability": {
+        "allocation_redistribution": "NONE",
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "btc_result_scope_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+        "btc_universe_membership": "INCLUDED_IN_UNIVERSE_AND_ALLOCATION"
+      },
+      "status": "FINAL_RESEARCH_V1",
+      "title": "Dynamic Stop minimum risk",
+      "universe_id": "UNIVERSE-CORE-V1"
+    },
+    {
+      "allocation_profile_id": "ALLOC-R-V1-FIXED-10X10",
+      "applicable_coins": [
+        "BTC",
+        "ETH",
+        "SOL",
+        "XRP",
+        "DOGE",
+        "SUI",
+        "PEPE",
+        "AVAX",
+        "LINK",
+        "BNB"
+      ],
+      "candidate_id": "C-051",
+      "compare_order": [
+        "ACTIVE",
+        "DEMO_7D",
+        "BACKTEST_7D",
+        "BACKTEST_30D",
+        "BACKTEST_90D"
+      ],
+      "description": "Does reducing global slots from six to three improve portfolio results?",
+      "direction_scope": {
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "standard_direction_model": "F-005_CLASSIFIER_DIRECTION_FOR_NON_BTC_UNLESS_SET_BINDING_OVERRIDES",
+        "values": [
+          "LONG",
+          "SHORT"
+        ]
+      },
+      "evidence_export_profile": "EVIDENCE-R-V1-R2",
+      "excluded_coins": [],
+      "hypothesis_class": "PORTFOLIO_RULES",
+      "hypothesis_id": "R-024",
+      "notes": [
+        "Trigger composition is intentionally not duplicated here; the referenced immutable Set version owns trigger membership and ordering."
+      ],
+      "primary_axis": "AX-37",
+      "provenance": {
+        "methodology_baseline": "v1.2.15",
+        "profile_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R2",
+        "research_revision": "R3",
+        "rules_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
+        "set_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3"
+      },
+      "research_id": "R-024",
+      "result_scopes": [
+        "OVERALL",
+        "BY_SEGMENT",
+        "BY_COIN",
+        "BY_DIRECTION"
+      ],
+      "rules_version_bindings": {
+        "baseline": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-001",
+          "rules_version_id": "TRV-R-POS-001-PR-201"
+        },
+        "binding_model": "ARM_TRADING_RULES_VERSION",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "portfolio_component_id": "PR-R-204",
+          "position_component_id": "POS-R-001",
+          "rules_version_id": "TRV-R-POS-001-PR-204"
+        }
+      },
+      "rules_version_id": "TRV-R-POS-001-PR-204",
+      "run_profiles": [
+        "BACKTEST_90D",
+        "BACKTEST_30D",
+        "BACKTEST_7D",
+        "DEMO_7D"
+      ],
+      "segment_scope": [
+        "MAJORS",
+        "HIGH_VOLATILITY_HIGH_BETA",
+        "DIVERSIFIERS"
+      ],
+      "set_version_bindings": {
+        "baseline": {
+          "btc_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+          "btc_set_version_id": "SET-R-BTC-001-V1",
+          "non_btc_set_version_id": "SET-R-001-V1"
+        },
+        "binding_model": "SYMBOL_SET_BINDING",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "btc_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+          "btc_set_version_id": "SET-R-BTC-001-V1",
+          "non_btc_set_version_id": "SET-R-001-V1"
+        }
+      },
+      "set_version_id": "SET-R-001-V1",
+      "source_refs": [
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_HYPOTHESES_FINAL_30.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\WEB_RESEARCH_CONFIGURATION_MODEL.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_V1_EXECUTION_AND_REPORTING_PROFILE.md",
+        "docs\\research-import\\sets\\RESEARCH_V1_SETS.json",
+        "docs\\research-import\\rules\\RESEARCH_V1_RULES.json"
+      ],
+      "special_applicability": {
+        "allocation_redistribution": "NONE",
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "btc_result_scope_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+        "btc_universe_membership": "INCLUDED_IN_UNIVERSE_AND_ALLOCATION"
+      },
+      "status": "FINAL_RESEARCH_V1",
+      "title": "Global slot pressure",
+      "universe_id": "UNIVERSE-CORE-V1"
+    },
+    {
+      "allocation_profile_id": "ALLOC-R-V1-FIXED-10X10",
+      "applicable_coins": [
+        "BTC",
+        "ETH",
+        "SOL",
+        "XRP",
+        "DOGE",
+        "SUI",
+        "PEPE",
+        "AVAX",
+        "LINK",
+        "BNB"
+      ],
+      "candidate_id": "C-052",
+      "compare_order": [
+        "ACTIVE",
+        "DEMO_7D",
+        "BACKTEST_7D",
+        "BACKTEST_30D",
+        "BACKTEST_90D"
+      ],
+      "description": "Does increasing per-coin slots improve results under the coupled sizing rule?",
+      "direction_scope": {
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "standard_direction_model": "F-005_CLASSIFIER_DIRECTION_FOR_NON_BTC_UNLESS_SET_BINDING_OVERRIDES",
+        "values": [
+          "LONG",
+          "SHORT"
+        ]
+      },
+      "evidence_export_profile": "EVIDENCE-R-V1-R2",
+      "excluded_coins": [],
+      "hypothesis_class": "PORTFOLIO_RULES",
+      "hypothesis_id": "R-025",
+      "notes": [
+        "Trigger composition is intentionally not duplicated here; the referenced immutable Set version owns trigger membership and ordering."
+      ],
+      "primary_axis": "AX-38",
+      "provenance": {
+        "methodology_baseline": "v1.2.15",
+        "profile_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R2",
+        "research_revision": "R3",
+        "rules_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
+        "set_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3"
+      },
+      "research_id": "R-025",
+      "result_scopes": [
+        "OVERALL",
+        "BY_SEGMENT",
+        "BY_COIN",
+        "BY_DIRECTION"
+      ],
+      "rules_version_bindings": {
+        "baseline": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-001",
+          "rules_version_id": "TRV-R-POS-001-PR-201"
+        },
+        "binding_model": "ARM_TRADING_RULES_VERSION",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "portfolio_component_id": "PR-R-205",
+          "position_component_id": "POS-R-001",
+          "rules_version_id": "TRV-R-POS-001-PR-205"
+        }
+      },
+      "rules_version_id": "TRV-R-POS-001-PR-205",
+      "run_profiles": [
+        "BACKTEST_90D",
+        "BACKTEST_30D",
+        "BACKTEST_7D",
+        "DEMO_7D"
+      ],
+      "segment_scope": [
+        "MAJORS",
+        "HIGH_VOLATILITY_HIGH_BETA",
+        "DIVERSIFIERS"
+      ],
+      "set_version_bindings": {
+        "baseline": {
+          "btc_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+          "btc_set_version_id": "SET-R-BTC-001-V1",
+          "non_btc_set_version_id": "SET-R-001-V1"
+        },
+        "binding_model": "SYMBOL_SET_BINDING",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "btc_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+          "btc_set_version_id": "SET-R-BTC-001-V1",
+          "non_btc_set_version_id": "SET-R-001-V1"
+        }
+      },
+      "set_version_id": "SET-R-001-V1",
+      "source_refs": [
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_HYPOTHESES_FINAL_30.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\WEB_RESEARCH_CONFIGURATION_MODEL.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_V1_EXECUTION_AND_REPORTING_PROFILE.md",
+        "docs\\research-import\\sets\\RESEARCH_V1_SETS.json",
+        "docs\\research-import\\rules\\RESEARCH_V1_RULES.json"
+      ],
+      "special_applicability": {
+        "allocation_redistribution": "NONE",
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "btc_result_scope_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+        "btc_universe_membership": "INCLUDED_IN_UNIVERSE_AND_ALLOCATION"
+      },
+      "status": "FINAL_RESEARCH_V1",
+      "title": "Per-coin slots and grant division",
+      "universe_id": "UNIVERSE-CORE-V1"
+    },
+    {
+      "allocation_profile_id": "ALLOC-R-V1-FIXED-10X10",
+      "applicable_coins": [
+        "BTC",
+        "ETH",
+        "SOL",
+        "XRP",
+        "DOGE",
+        "SUI",
+        "PEPE",
+        "AVAX",
+        "LINK",
+        "BNB"
+      ],
+      "candidate_id": "C-015",
+      "compare_order": [
+        "ACTIVE",
+        "DEMO_7D",
+        "BACKTEST_7D",
+        "BACKTEST_30D",
+        "BACKTEST_90D"
+      ],
+      "description": "Does requiring the 5m local VNM z-score to agree with direction improve selection?",
+      "direction_scope": {
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "standard_direction_model": "F-005_CLASSIFIER_DIRECTION_FOR_NON_BTC_UNLESS_SET_BINDING_OVERRIDES",
+        "values": [
+          "LONG",
+          "SHORT"
+        ]
+      },
+      "evidence_export_profile": "EVIDENCE-R-V1-R2",
+      "excluded_coins": [],
+      "hypothesis_class": "SET_LAYER",
+      "hypothesis_id": "R-026",
+      "notes": [
+        "Trigger composition is intentionally not duplicated here; the referenced immutable Set version owns trigger membership and ordering.",
+        "R3 replacement hypothesis; prior R2 candidate remains historical/conditional only."
+      ],
+      "primary_axis": "AX-11",
+      "provenance": {
+        "methodology_baseline": "v1.2.15",
+        "profile_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R2",
+        "research_revision": "R3",
+        "rules_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
+        "set_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3"
+      },
+      "research_id": "R-026",
+      "result_scopes": [
+        "OVERALL",
+        "BY_SEGMENT",
+        "BY_COIN",
+        "BY_DIRECTION"
+      ],
+      "rules_version_bindings": {
+        "baseline": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-001",
+          "rules_version_id": "TRV-R-POS-001-PR-201"
+        },
+        "binding_model": "ARM_TRADING_RULES_VERSION",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-001",
+          "rules_version_id": "TRV-R-POS-001-PR-201"
+        }
+      },
+      "rules_version_id": "TRV-R-POS-001-PR-201",
+      "run_profiles": [
+        "BACKTEST_90D",
+        "BACKTEST_30D",
+        "BACKTEST_7D",
+        "DEMO_7D"
+      ],
+      "segment_scope": [
+        "MAJORS",
+        "HIGH_VOLATILITY_HIGH_BETA",
+        "DIVERSIFIERS"
+      ],
+      "set_version_bindings": {
+        "baseline": {
+          "btc_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+          "btc_set_version_id": "SET-R-BTC-001-V1",
+          "non_btc_set_version_id": "SET-R-001-V1"
+        },
+        "binding_model": "SYMBOL_SET_BINDING",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "btc_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+          "btc_set_version_id": "SET-R-BTC-015-V2",
+          "non_btc_set_version_id": "SET-R-015-V2"
+        }
+      },
+      "set_version_id": "SET-R-015-V2",
+      "source_refs": [
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_HYPOTHESES_FINAL_30.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\WEB_RESEARCH_CONFIGURATION_MODEL.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_V1_EXECUTION_AND_REPORTING_PROFILE.md",
+        "docs\\research-import\\sets\\RESEARCH_V1_SETS.json",
+        "docs\\research-import\\rules\\RESEARCH_V1_RULES.json"
+      ],
+      "special_applicability": {
+        "allocation_redistribution": "NONE",
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "btc_result_scope_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+        "btc_universe_membership": "INCLUDED_IN_UNIVERSE_AND_ALLOCATION"
+      },
+      "status": "FINAL_RESEARCH_V1",
+      "title": "Local-momentum agreement",
+      "universe_id": "UNIVERSE-CORE-V1"
+    },
+    {
+      "allocation_profile_id": "ALLOC-R-V1-FIXED-10X10",
+      "applicable_coins": [
+        "BTC",
+        "ETH",
+        "SOL",
+        "XRP",
+        "DOGE",
+        "SUI",
+        "PEPE",
+        "AVAX",
+        "LINK",
+        "BNB"
+      ],
+      "candidate_id": "C-054",
+      "compare_order": [
+        "ACTIVE",
+        "DEMO_7D",
+        "BACKTEST_7D",
+        "BACKTEST_30D",
+        "BACKTEST_90D"
+      ],
+      "description": "Does a longer acceptance-based per-symbol cooldown improve results?",
+      "direction_scope": {
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "standard_direction_model": "F-005_CLASSIFIER_DIRECTION_FOR_NON_BTC_UNLESS_SET_BINDING_OVERRIDES",
+        "values": [
+          "LONG",
+          "SHORT"
+        ]
+      },
+      "evidence_export_profile": "EVIDENCE-R-V1-R2",
+      "excluded_coins": [],
+      "hypothesis_class": "PORTFOLIO_RULES",
+      "hypothesis_id": "R-027",
+      "notes": [
+        "Trigger composition is intentionally not duplicated here; the referenced immutable Set version owns trigger membership and ordering."
+      ],
+      "primary_axis": "AX-40",
+      "provenance": {
+        "methodology_baseline": "v1.2.15",
+        "profile_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R2",
+        "research_revision": "R3",
+        "rules_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
+        "set_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3"
+      },
+      "research_id": "R-027",
+      "result_scopes": [
+        "OVERALL",
+        "BY_SEGMENT",
+        "BY_COIN",
+        "BY_DIRECTION"
+      ],
+      "rules_version_bindings": {
+        "baseline": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-001",
+          "rules_version_id": "TRV-R-POS-001-PR-201"
+        },
+        "binding_model": "ARM_TRADING_RULES_VERSION",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "portfolio_component_id": "PR-R-207",
+          "position_component_id": "POS-R-001",
+          "rules_version_id": "TRV-R-POS-001-PR-207"
+        }
+      },
+      "rules_version_id": "TRV-R-POS-001-PR-207",
+      "run_profiles": [
+        "BACKTEST_90D",
+        "BACKTEST_30D",
+        "BACKTEST_7D",
+        "DEMO_7D"
+      ],
+      "segment_scope": [
+        "MAJORS",
+        "HIGH_VOLATILITY_HIGH_BETA",
+        "DIVERSIFIERS"
+      ],
+      "set_version_bindings": {
+        "baseline": {
+          "btc_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+          "btc_set_version_id": "SET-R-BTC-001-V1",
+          "non_btc_set_version_id": "SET-R-001-V1"
+        },
+        "binding_model": "SYMBOL_SET_BINDING",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "btc_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+          "btc_set_version_id": "SET-R-BTC-001-V1",
+          "non_btc_set_version_id": "SET-R-001-V1"
+        }
+      },
+      "set_version_id": "SET-R-001-V1",
+      "source_refs": [
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_HYPOTHESES_FINAL_30.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\WEB_RESEARCH_CONFIGURATION_MODEL.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_V1_EXECUTION_AND_REPORTING_PROFILE.md",
+        "docs\\research-import\\sets\\RESEARCH_V1_SETS.json",
+        "docs\\research-import\\rules\\RESEARCH_V1_RULES.json"
+      ],
+      "special_applicability": {
+        "allocation_redistribution": "NONE",
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "btc_result_scope_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+        "btc_universe_membership": "INCLUDED_IN_UNIVERSE_AND_ALLOCATION"
+      },
+      "status": "FINAL_RESEARCH_V1",
+      "title": "Acceptance-based cooldown",
+      "universe_id": "UNIVERSE-CORE-V1"
+    },
+    {
+      "allocation_profile_id": "ALLOC-R-V1-FIXED-10X10",
+      "applicable_coins": [
+        "BTC",
+        "ETH",
+        "SOL",
+        "XRP",
+        "DOGE",
+        "SUI",
+        "PEPE",
+        "AVAX",
+        "LINK",
+        "BNB"
+      ],
+      "candidate_id": "C-055",
+      "compare_order": [
+        "ACTIVE",
+        "DEMO_7D",
+        "BACKTEST_7D",
+        "BACKTEST_30D",
+        "BACKTEST_90D"
+      ],
+      "description": "Does enabling the 5% daily realized-loss latch improve results?",
+      "direction_scope": {
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "standard_direction_model": "F-005_CLASSIFIER_DIRECTION_FOR_NON_BTC_UNLESS_SET_BINDING_OVERRIDES",
+        "values": [
+          "LONG",
+          "SHORT"
+        ]
+      },
+      "evidence_export_profile": "EVIDENCE-R-V1-R2",
+      "excluded_coins": [],
+      "hypothesis_class": "PORTFOLIO_RULES",
+      "hypothesis_id": "R-028",
+      "notes": [
+        "Trigger composition is intentionally not duplicated here; the referenced immutable Set version owns trigger membership and ordering."
+      ],
+      "primary_axis": "AX-41",
+      "provenance": {
+        "methodology_baseline": "v1.2.15",
+        "profile_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R2",
+        "research_revision": "R3",
+        "rules_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
+        "set_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3"
+      },
+      "research_id": "R-028",
+      "result_scopes": [
+        "OVERALL",
+        "BY_SEGMENT",
+        "BY_COIN",
+        "BY_DIRECTION"
+      ],
+      "rules_version_bindings": {
+        "baseline": {
+          "portfolio_component_id": "PR-R-201",
+          "position_component_id": "POS-R-001",
+          "rules_version_id": "TRV-R-POS-001-PR-201"
+        },
+        "binding_model": "ARM_TRADING_RULES_VERSION",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "portfolio_component_id": "PR-R-208",
+          "position_component_id": "POS-R-001",
+          "rules_version_id": "TRV-R-POS-001-PR-208"
+        }
+      },
+      "rules_version_id": "TRV-R-POS-001-PR-208",
+      "run_profiles": [
+        "BACKTEST_90D",
+        "BACKTEST_30D",
+        "BACKTEST_7D",
+        "DEMO_7D"
+      ],
+      "segment_scope": [
+        "MAJORS",
+        "HIGH_VOLATILITY_HIGH_BETA",
+        "DIVERSIFIERS"
+      ],
+      "set_version_bindings": {
+        "baseline": {
+          "btc_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+          "btc_set_version_id": "SET-R-BTC-001-V1",
+          "non_btc_set_version_id": "SET-R-001-V1"
+        },
+        "binding_model": "SYMBOL_SET_BINDING",
+        "primary_arm": "VARIANT",
+        "variant": {
+          "btc_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+          "btc_set_version_id": "SET-R-BTC-001-V1",
+          "non_btc_set_version_id": "SET-R-001-V1"
+        }
+      },
+      "set_version_id": "SET-R-001-V1",
+      "source_refs": [
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_HYPOTHESES_FINAL_30.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\WEB_RESEARCH_CONFIGURATION_MODEL.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_V1_EXECUTION_AND_REPORTING_PROFILE.md",
+        "docs\\research-import\\sets\\RESEARCH_V1_SETS.json",
+        "docs\\research-import\\rules\\RESEARCH_V1_RULES.json"
+      ],
+      "special_applicability": {
+        "allocation_redistribution": "NONE",
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "btc_result_scope_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+        "btc_universe_membership": "INCLUDED_IN_UNIVERSE_AND_ALLOCATION"
+      },
+      "status": "FINAL_RESEARCH_V1",
+      "title": "Daily realized-loss latch",
+      "universe_id": "UNIVERSE-CORE-V1"
+    },
+    {
+      "allocation_profile_id": "ALLOC-R-V1-FIXED-10X10",
+      "applicable_coins": [
+        "BTC",
+        "ETH",
+        "SOL",
+        "XRP",
+        "DOGE",
+        "SUI",
+        "PEPE",
+        "AVAX",
+        "LINK",
+        "BNB"
+      ],
+      "candidate_id": "C-059",
+      "compare_order": [
+        "ACTIVE",
+        "DEMO_7D",
+        "BACKTEST_7D",
+        "BACKTEST_30D",
+        "BACKTEST_90D"
+      ],
+      "description": "Does the effect of requiring F-002 depend on cooldown being five versus fifteen minutes?",
+      "direction_scope": {
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "standard_direction_model": "F-005_CLASSIFIER_DIRECTION_FOR_NON_BTC_UNLESS_SET_BINDING_OVERRIDES",
+        "values": [
+          "LONG",
+          "SHORT"
+        ]
+      },
+      "evidence_export_profile": "EVIDENCE-R-V1-R2",
+      "excluded_coins": [],
+      "hypothesis_class": "CROSS_LAYER_INTERACTION",
+      "hypothesis_id": "R-029",
+      "notes": [
+        "Trigger composition is intentionally not duplicated here; the referenced immutable Set version owns trigger membership and ordering.",
+        "Cross-layer interaction is represented through explicit interaction cells; no additional run-profile multiplication is created."
+      ],
+      "primary_axis": "AX-42",
+      "provenance": {
+        "methodology_baseline": "v1.2.15",
+        "profile_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R2",
+        "research_revision": "R3",
+        "rules_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
+        "set_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3"
+      },
+      "research_id": "R-029",
+      "result_scopes": [
+        "OVERALL",
+        "BY_SEGMENT",
+        "BY_COIN",
+        "BY_DIRECTION"
+      ],
+      "rules_version_bindings": {
+        "binding_model": "INTERACTION_CELL_TRADING_RULES_VERSION",
+        "cells": {
+          "00": {
+            "portfolio_component_id": "PR-R-201",
+            "position_component_id": "POS-R-001",
+            "rules_version_id": "TRV-R-POS-001-PR-201"
+          },
+          "01": {
+            "portfolio_component_id": "PR-R-207",
+            "position_component_id": "POS-R-001",
+            "rules_version_id": "TRV-R-POS-001-PR-207"
+          },
+          "10": {
+            "portfolio_component_id": "PR-R-201",
+            "position_component_id": "POS-R-001",
+            "rules_version_id": "TRV-R-POS-001-PR-201"
+          },
+          "11": {
+            "portfolio_component_id": "PR-R-207",
+            "position_component_id": "POS-R-001",
+            "rules_version_id": "TRV-R-POS-001-PR-207"
+          }
+        },
+        "primary_arm": "11"
+      },
+      "rules_version_id": "TRV-R-POS-001-PR-207",
+      "run_profiles": [
+        "BACKTEST_90D",
+        "BACKTEST_30D",
+        "BACKTEST_7D",
+        "DEMO_7D"
+      ],
+      "segment_scope": [
+        "MAJORS",
+        "HIGH_VOLATILITY_HIGH_BETA",
+        "DIVERSIFIERS"
+      ],
+      "set_version_bindings": {
+        "binding_model": "INTERACTION_CELL_SYMBOL_SET_BINDING",
+        "cells": {
+          "00": {
+            "btc_set_version_id": "SET-R-BTC-001-V1",
+            "non_btc_set_version_id": "SET-R-001-V1"
+          },
+          "01": {
+            "btc_set_version_id": "SET-R-BTC-001-V1",
+            "non_btc_set_version_id": "SET-R-001-V1"
+          },
+          "10": {
+            "btc_set_version_id": "SET-R-BTC-003-V2",
+            "non_btc_set_version_id": "SET-R-003-V2"
+          },
+          "11": {
+            "btc_set_version_id": "SET-R-BTC-003-V2",
+            "non_btc_set_version_id": "SET-R-003-V2"
+          }
+        },
+        "primary_arm": "11"
+      },
+      "set_version_id": "SET-R-003-V2",
+      "source_refs": [
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_HYPOTHESES_FINAL_30.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\WEB_RESEARCH_CONFIGURATION_MODEL.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_V1_EXECUTION_AND_REPORTING_PROFILE.md",
+        "docs\\research-import\\sets\\RESEARCH_V1_SETS.json",
+        "docs\\research-import\\rules\\RESEARCH_V1_RULES.json"
+      ],
+      "special_applicability": {
+        "allocation_redistribution": "NONE",
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "btc_result_scope_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+        "btc_universe_membership": "INCLUDED_IN_UNIVERSE_AND_ALLOCATION"
+      },
+      "status": "FINAL_RESEARCH_V1",
+      "title": "Participation x cooldown interaction",
+      "universe_id": "UNIVERSE-CORE-V1"
+    },
+    {
+      "allocation_profile_id": "ALLOC-R-V1-FIXED-10X10",
+      "applicable_coins": [
+        "BTC",
+        "ETH",
+        "SOL",
+        "XRP",
+        "DOGE",
+        "SUI",
+        "PEPE",
+        "AVAX",
+        "LINK",
+        "BNB"
+      ],
+      "candidate_id": "C-060",
+      "compare_order": [
+        "ACTIVE",
+        "DEMO_7D",
+        "BACKTEST_7D",
+        "BACKTEST_30D",
+        "BACKTEST_90D"
+      ],
+      "description": "Does the effect of extending Entry maximum deviation depend on requiring a 0.50% versus 1.00% displacement threshold?",
+      "direction_scope": {
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "standard_direction_model": "F-005_CLASSIFIER_DIRECTION_FOR_NON_BTC_UNLESS_SET_BINDING_OVERRIDES",
+        "values": [
+          "LONG",
+          "SHORT"
+        ]
+      },
+      "evidence_export_profile": "EVIDENCE-R-V1-R2",
+      "excluded_coins": [],
+      "hypothesis_class": "CROSS_LAYER_INTERACTION",
+      "hypothesis_id": "R-030",
+      "notes": [
+        "Trigger composition is intentionally not duplicated here; the referenced immutable Set version owns trigger membership and ordering.",
+        "Cross-layer interaction is represented through explicit interaction cells; no additional run-profile multiplication is created."
+      ],
+      "primary_axis": "AX-43",
+      "provenance": {
+        "methodology_baseline": "v1.2.15",
+        "profile_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R2",
+        "research_revision": "R3",
+        "rules_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3",
+        "set_package_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R3"
+      },
+      "research_id": "R-030",
+      "result_scopes": [
+        "OVERALL",
+        "BY_SEGMENT",
+        "BY_COIN",
+        "BY_DIRECTION"
+      ],
+      "rules_version_bindings": {
+        "binding_model": "INTERACTION_CELL_TRADING_RULES_VERSION",
+        "cells": {
+          "00": {
+            "portfolio_component_id": "PR-R-201",
+            "position_component_id": "POS-R-001",
+            "rules_version_id": "TRV-R-POS-001-PR-201"
+          },
+          "01": {
+            "portfolio_component_id": "PR-R-201",
+            "position_component_id": "POS-R-001",
+            "rules_version_id": "TRV-R-POS-001-PR-201"
+          },
+          "10": {
+            "portfolio_component_id": "PR-R-201",
+            "position_component_id": "POS-R-003",
+            "rules_version_id": "TRV-R-POS-003-PR-201"
+          },
+          "11": {
+            "portfolio_component_id": "PR-R-201",
+            "position_component_id": "POS-R-003",
+            "rules_version_id": "TRV-R-POS-003-PR-201"
+          }
+        },
+        "primary_arm": "11"
+      },
+      "rules_version_id": "TRV-R-POS-003-PR-201",
+      "run_profiles": [
+        "BACKTEST_90D",
+        "BACKTEST_30D",
+        "BACKTEST_7D",
+        "DEMO_7D"
+      ],
+      "segment_scope": [
+        "MAJORS",
+        "HIGH_VOLATILITY_HIGH_BETA",
+        "DIVERSIFIERS"
+      ],
+      "set_version_bindings": {
+        "binding_model": "INTERACTION_CELL_SYMBOL_SET_BINDING",
+        "cells": {
+          "00": {
+            "btc_set_version_id": "SET-R-BTC-001-V1",
+            "non_btc_set_version_id": "SET-R-001-V1"
+          },
+          "01": {
+            "btc_set_version_id": "SET-R-BTC-001-V1",
+            "non_btc_set_version_id": "SET-R-001-V1"
+          },
+          "10": {
+            "btc_set_version_id": "SET-R-BTC-001-V2",
+            "non_btc_set_version_id": "SET-R-001-V2"
+          },
+          "11": {
+            "btc_set_version_id": "SET-R-BTC-001-V2",
+            "non_btc_set_version_id": "SET-R-001-V2"
+          }
+        },
+        "primary_arm": "11"
+      },
+      "set_version_id": "SET-R-001-V2",
+      "source_refs": [
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_HYPOTHESES_FINAL_30.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\WEB_RESEARCH_CONFIGURATION_MODEL.md",
+        "docs\\research-v1\\RESEARCH_V1_FOCUSED_CORRECTION_R3\\operative\\RESEARCH_V1_EXECUTION_AND_REPORTING_PROFILE.md",
+        "docs\\research-import\\sets\\RESEARCH_V1_SETS.json",
+        "docs\\research-import\\rules\\RESEARCH_V1_RULES.json"
+      ],
+      "special_applicability": {
+        "allocation_redistribution": "NONE",
+        "btc_direction_binding_id": "DB-R-BTC-001",
+        "btc_result_scope_applicability": "APPLICABLE_WITH_BTC_SPECIFIC_DIRECTION_BINDING",
+        "btc_universe_membership": "INCLUDED_IN_UNIVERSE_AND_ALLOCATION"
+      },
+      "status": "FINAL_RESEARCH_V1",
+      "title": "Displacement threshold x Entry depth",
+      "universe_id": "UNIVERSE-CORE-V1"
+    }
+  ],
+  "research_program": {
+    "decision_profile_id": "DEC-R-001",
+    "definition_granularity": "ONE_RESEARCH_DEFINITION_PER_FINAL_HYPOTHESIS",
+    "evidence_export_profile_id": "EVIDENCE-R-V1-R2",
+    "hypothesis_revision": "R3",
+    "intrabar_policy_ref": "FACTUAL_SEQUENCE_THEN_REFINEMENT_THEN_ORDER_INVARIANCE_OR_CENSOR_V1",
+    "methodology_baseline": "v1.2.15",
+    "production_import": "SEPARATE_CONTROLLED_ACTION_NOT_PART_OF_BUILD",
+    "profile_revision": "RESEARCH_V1_FOCUSED_CORRECTION_R2",
+    "program_id": "RESEARCH_V1_R3",
+    "reporting_profile_id": "REPORT-R-V1-R2",
+    "trigger_composition_owner": "REFERENCED_IMMUTABLE_SET_VERSION"
+  },
+  "result_scope_profiles": [
+    {
+      "result_scope_profile_id": "RESULT-R-V1-SCOPES",
+      "scopes": [
+        "OVERALL",
+        "BY_SEGMENT",
+        "BY_COIN",
+        "BY_DIRECTION"
+      ]
+    }
+  ],
+  "run_profiles": [
+    {
+      "launch_time_inputs": [
+        "endpoint",
+        "source_manifest",
+        "instrument_binding",
+        "initial_capital_state"
+      ],
+      "period": "90D",
+      "run_profile_id": "BACKTEST_90D",
+      "type": "BACKTEST",
+      "window_rule": "[endpoint - 90 * 86400 seconds, endpoint)"
+    },
+    {
+      "launch_time_inputs": [
+        "endpoint",
+        "source_manifest",
+        "instrument_binding",
+        "initial_capital_state"
+      ],
+      "period": "30D",
+      "run_profile_id": "BACKTEST_30D",
+      "type": "BACKTEST",
+      "window_rule": "[endpoint - 30 * 86400 seconds, endpoint)"
+    },
+    {
+      "launch_time_inputs": [
+        "endpoint",
+        "source_manifest",
+        "instrument_binding",
+        "initial_capital_state"
+      ],
+      "period": "7D",
+      "run_profile_id": "BACKTEST_7D",
+      "type": "BACKTEST",
+      "window_rule": "[endpoint - 7 * 86400 seconds, endpoint)"
+    },
+    {
+      "duration": "7D",
+      "launch_mode": "MANUAL",
+      "launch_time_inputs": [
+        "selected_start",
+        "execution_environment",
+        "instrument_binding",
+        "account_selection"
+      ],
+      "run_profile_id": "DEMO_7D",
+      "type": "DEMO",
+      "window_rule": "[selected_start, selected_start + 7 * 86400 seconds)"
+    }
+  ],
+  "schema_contract": {
+    "explicit_not_applicable_value": "NOT_APPLICABLE",
+    "no_trigger_duplication": true,
+    "null_policy": "Use null only when the authoritative source explicitly has no object reference for that field; otherwise use an exact immutable identifier or an empty array.",
+    "required_research_definition_fields": [
+      "research_id",
+      "hypothesis_id",
+      "title",
+      "description",
+      "status",
+      "set_version_id",
+      "rules_version_id",
+      "universe_id",
+      "allocation_profile_id",
+      "segment_scope",
+      "applicable_coins",
+      "excluded_coins",
+      "direction_scope",
+      "run_profiles",
+      "result_scopes",
+      "compare_order",
+      "evidence_export_profile",
+      "special_applicability",
+      "source_refs",
+      "provenance",
+      "notes"
+    ]
+  },
+  "schema_version": "research_v1_build_spec.v1",
+  "universe_profiles": [
+    {
+      "asset_count": 10,
+      "notes": [
+        "BTC remains a universe member even where a hypothesis-specific BTC result scope is NOT_APPLICABLE."
+      ],
+      "ordered_assets": [
+        {
+          "asset": "BTC",
+          "segment": "MAJORS"
+        },
+        {
+          "asset": "ETH",
+          "segment": "MAJORS"
+        },
+        {
+          "asset": "SOL",
+          "segment": "HIGH_VOLATILITY_HIGH_BETA"
+        },
+        {
+          "asset": "XRP",
+          "segment": "HIGH_VOLATILITY_HIGH_BETA"
+        },
+        {
+          "asset": "DOGE",
+          "segment": "HIGH_VOLATILITY_HIGH_BETA"
+        },
+        {
+          "asset": "SUI",
+          "segment": "HIGH_VOLATILITY_HIGH_BETA"
+        },
+        {
+          "asset": "PEPE",
+          "segment": "HIGH_VOLATILITY_HIGH_BETA"
+        },
+        {
+          "asset": "AVAX",
+          "segment": "HIGH_VOLATILITY_HIGH_BETA"
+        },
+        {
+          "asset": "LINK",
+          "segment": "DIVERSIFIERS"
+        },
+        {
+          "asset": "BNB",
+          "segment": "DIVERSIFIERS"
+        }
+      ],
+      "segment_order": [
+        "MAJORS",
+        "HIGH_VOLATILITY_HIGH_BETA",
+        "DIVERSIFIERS"
+      ],
+      "universe_id": "UNIVERSE-CORE-V1"
+    }
+  ],
+  "validation_invariants": {
+    "allocation_total_pct": "100",
+    "compare_order_exact": [
+      "ACTIVE",
+      "DEMO_7D",
+      "BACKTEST_7D",
+      "BACKTEST_30D",
+      "BACKTEST_90D"
+    ],
+    "no_latest_references": true,
+    "no_trigger_membership_duplication_in_research_definitions": true,
+    "no_unversioned_rules_references": true,
+    "no_unversioned_set_references": true,
+    "production_writes_allowed_by_builder": false,
+    "research_definitions_expected": 30,
+    "result_scopes_exact": [
+      "OVERALL",
+      "BY_SEGMENT",
+      "BY_COIN",
+      "BY_DIRECTION"
+    ],
+    "run_profiles_exact": [
+      "BACKTEST_90D",
+      "BACKTEST_30D",
+      "BACKTEST_7D",
+      "DEMO_7D"
+    ],
+    "universe_assets_exact": [
+      "BTC",
+      "ETH",
+      "SOL",
+      "XRP",
+      "DOGE",
+      "SUI",
+      "PEPE",
+      "AVAX",
+      "LINK",
+      "BNB"
+    ]
+  },
+  "validation_summary": {
+    "all_binding_rules_references_resolved": "16/16",
+    "all_binding_set_references_resolved": "33/33",
+    "allocation_total_pct": "100",
+    "btc_special_cases_valid": true,
+    "compare_order_valid": true,
+    "latest_references": 0,
+    "no_trigger_duplication_inside_research_definitions": true,
+    "research_definitions": "30/30",
+    "result_scopes_valid": true,
+    "rules_references_resolved": "30/30",
+    "run_profiles_valid": true,
+    "set_references_resolved": "30/30",
+    "unique_hypothesis_ids": "30/30",
+    "unique_research_ids": "30/30",
+    "universe_coins": "10/10",
+    "unresolved_build_spec_mappings": 0,
+    "unversioned_references": 0
+  }
+}
