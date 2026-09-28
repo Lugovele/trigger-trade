@@ -7,9 +7,15 @@ from types import SimpleNamespace
 
 from triggertrade.backtest import BacktestResult, BacktestStatus, ExactBacktestTriggerSetResolver
 from triggertrade.backtest.engine import BacktestEngineError
+from triggertrade.market_data import ContractCategory, FuturesInstrumentMetadata
 from triggertrade.persistence import ResearchBacktestRunRecord, ResearchBacktestStatus
+from triggertrade.research_v1_execution import RESEARCH_V1_ALLOCATION_BY_SYMBOL, ResearchV1SharedPortfolioState
 from triggertrade.research_pins import research_run_pin_payload
-from triggertrade.services.research_backtest_execution import CanonicalResearchBacktestExecutionExecutor
+from triggertrade.rules.trading import StopLossMode, TakeProfitMode
+from triggertrade.services.research_backtest_execution import (
+    CanonicalResearchBacktestExecutionExecutor,
+    _run_research_v1_certified_position_backtest,
+)
 from tests.unit.test_backtest_replay import _config, _instrument, _trade_candles
 from tests.unit.test_research_demo_execution import _research_record, _rules_version, _trigger_set
 
@@ -180,6 +186,102 @@ def test_canonical_research_backtest_executor_engine_errors_are_not_historical_f
     assert store.updates[-1]["metrics"] == {}
 
 
+def test_research_v1_certified_position_backtest_uses_dynamic_tp_stop_and_construction():
+    rules = replace(
+        _rules_version(),
+        rules_version_id="TRV-R-POS-001-PR-201",
+        draft=replace(
+            _rules_version().draft,
+            take_profit_mode=TakeProfitMode.DYNAMIC,
+            stop_loss_mode=StopLossMode.DYNAMIC,
+            stop_loss_pct=Decimal("0.20"),
+            minimum_risk_reward=Decimal("1"),
+            minimum_tranche_capital=Decimal("10"),
+            max_capital_in_positions_pct=Decimal("0.60"),
+            max_open_positions_enabled=True,
+            max_open_positions=6,
+            max_positions_per_coin_enabled=True,
+            max_positions_per_coin=2,
+        ),
+    )
+
+    result = _run_research_v1_certified_position_backtest(
+        trigger_set=_trigger_set(),
+        rules=rules,
+        plan=_backtest_plan(),
+        candles=_trade_candles(volume_spike=True),
+        instrument=_instrument_with_max_order_qty(),
+        portfolio_state=_research_v1_portfolio(),
+    )
+
+    evidence = result.research_v1_certified_position_evidence
+    evaluation = evidence["position_opportunity"]["position_opportunity_state"]["evaluation"]
+    construction = evidence["position_construction"]["position_construction_evaluation"]
+    order_spec = evidence["order_spec"]["order_spec"]
+
+    assert evidence["market_handoff"]["market_handoff"]["snapshot"]["direction"] == "LONG"
+    assert evaluation["entry"]["formula_id"] == "F-008"
+    assert evaluation["stop"]["formula_id"] in {"F-006", "F-007", "F-009"}
+    assert evaluation["take_profit"]["formula_id"] == "F-010"
+    assert evaluation["take_profit"]["status"] == "AVAILABLE"
+    assert "fixed" not in str(evaluation["take_profit"]).lower()
+    assert construction["status"] == "CONSTRUCTED"
+    assert order_spec["take_profit"]["mode"] == "DYNAMIC"
+    assert order_spec["stop_loss"]["mode"] == "DYNAMIC"
+    assert result.trades == 1
+    assert tuple(event["action"] for event in result.research_v1_portfolio_events) == ("RESERVE", "RELEASE")
+    assert result.research_v1_portfolio_events[1]["lifecycle_state"] == "CLOSED"
+
+
+def test_research_v1_certified_position_backtest_rejects_unavailable_f010_without_fixed_fallback(monkeypatch):
+    from triggertrade.services import research_backtest_execution as module
+
+    original_handoff = module._research_v1_handoff_facts
+
+    def no_target_handoff(**kwargs):
+        facts = original_handoff(**kwargs)
+        return replace(
+            facts,
+            reference_levels=tuple(level for level in facts.reference_levels if "target" not in level.level_id),
+        )
+
+    rules = replace(
+        _rules_version(),
+        rules_version_id="TRV-R-POS-001-PR-201",
+        draft=replace(
+            _rules_version().draft,
+            take_profit_mode=TakeProfitMode.DYNAMIC,
+            stop_loss_mode=StopLossMode.DYNAMIC,
+            stop_loss_pct=Decimal("0.20"),
+            minimum_risk_reward=Decimal("1"),
+            minimum_tranche_capital=Decimal("10"),
+            max_capital_in_positions_pct=Decimal("0.60"),
+            max_open_positions_enabled=True,
+            max_open_positions=6,
+            max_positions_per_coin_enabled=True,
+            max_positions_per_coin=2,
+        ),
+    )
+    monkeypatch.setattr(module, "_research_v1_handoff_facts", no_target_handoff)
+
+    result = _run_research_v1_certified_position_backtest(
+        trigger_set=_trigger_set(),
+        rules=rules,
+        plan=_backtest_plan(),
+        candles=_trade_candles(volume_spike=True),
+        instrument=_instrument_with_max_order_qty(),
+        portfolio_state=_research_v1_portfolio(),
+    )
+
+    evaluation = result.research_v1_certified_position_evidence["position_opportunity"]["position_opportunity_state"]["evaluation"]
+    assert evaluation["take_profit"]["formula_id"] == "F-010"
+    assert evaluation["take_profit"]["status"] == "UNAVAILABLE"
+    assert evaluation["take_profit"]["reason_code"] == "NO_ELIGIBLE_REFERENCE"
+    assert result.rejected_intents == 1
+    assert result.trades == 0
+    assert not hasattr(result, "research_v1_portfolio_events") or result.research_v1_portfolio_events == ()
+
+
 class _FakeHistoricalSource:
     def __init__(self, candles):
         self.candles = tuple(candles)
@@ -292,4 +394,41 @@ def _backtest_record(*, run_id="rbt-worker-1", status=ResearchBacktestStatus.RUN
         unavailable_reason="old_failure" if status is ResearchBacktestStatus.FAILED else None,
         pin_payload=pin_payload,
         pin_digest="pin-digest",
+    )
+
+
+def _backtest_plan():
+    from triggertrade.backtest import BacktestPlan
+
+    return BacktestPlan(
+        "BTCUSDT",
+        "linear",
+        "1m",
+        datetime(2026, 9, 5, 14, 1, tzinfo=UTC),
+        datetime(2026, 9, 5, 14, 14, tzinfo=UTC),
+    )
+
+
+def _instrument_with_max_order_qty():
+    return FuturesInstrumentMetadata(
+        "BTCUSDT",
+        ContractCategory.LINEAR,
+        "LinearPerpetual",
+        "USDT",
+        Decimal("0.001"),
+        Decimal("0.001"),
+        Decimal("0.001"),
+        Decimal("5"),
+        Decimal("100"),
+        maximum_order_quantity=Decimal("100"),
+    )
+
+
+def _research_v1_portfolio():
+    return ResearchV1SharedPortfolioState(
+        total_capital=Decimal("1000"),
+        max_capital_in_positions_pct=Decimal("0.60"),
+        allocation_by_symbol=RESEARCH_V1_ALLOCATION_BY_SYMBOL,
+        max_open_positions=6,
+        max_positions_per_coin=2,
     )

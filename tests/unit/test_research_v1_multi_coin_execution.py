@@ -507,9 +507,8 @@ def test_durable_backtest_worker_applies_shared_portfolio_events_and_enforces_gl
         def list_research_sets(self):
             return tuple(_research_v1_sets_by_version().values())
 
-    def fake_run_backtest(**kwargs):
-        trigger_set = kwargs["trigger_set_store"].get_set(kwargs["trigger_set_id"], kwargs["trigger_set_version"])
-        calls.append((kwargs["plan"].symbol, trigger_set.version))
+    def fake_certified_backtest(**kwargs):
+        calls.append((kwargs["plan"].symbol, kwargs["trigger_set"].version))
         amount = "51" if kwargs["plan"].symbol == "SOLUSDT" else "100"
         return _backtest_result(
             kwargs["plan"].symbol,
@@ -526,7 +525,7 @@ def test_durable_backtest_worker_applies_shared_portfolio_events_and_enforces_gl
     monkeypatch.setattr("triggertrade.services.research_backtest_execution.PostgresUnitOfWork", _FakeUnitOfWork)
     monkeypatch.setattr("triggertrade.services.research_backtest_execution.PostgresResearchConfigurationRegistry", FakeRegistry)
     monkeypatch.setattr("triggertrade.services.research_backtest_execution.PostgresResearchSetRegistry", FakeSetRegistry)
-    monkeypatch.setattr("triggertrade.services.research_backtest_execution.run_backtest", fake_run_backtest)
+    monkeypatch.setattr("triggertrade.services.research_backtest_execution._run_research_v1_certified_position_backtest", fake_certified_backtest)
     executor = CanonicalResearchBacktestExecutionExecutor(
         config=_config(Path(".tmp") / "research-v1-durable-backtest.db"),
         db_path=Path(".tmp") / "research-v1-durable-backtest.db",
@@ -576,7 +575,7 @@ def test_durable_backtest_worker_releases_only_from_closed_finality(monkeypatch)
             captured_metrics.update(kwargs["metrics"])
             return record
 
-    def fake_run_backtest(**kwargs):
+    def fake_certified_backtest(**kwargs):
         events = ()
         if kwargs["plan"].symbol == "BTCUSDT":
             events = (
@@ -600,7 +599,7 @@ def test_durable_backtest_worker_releases_only_from_closed_finality(monkeypatch)
     monkeypatch.setattr("triggertrade.services.research_backtest_execution.PostgresResearchConfigurationRegistry", FakeRegistry)
     monkeypatch.setattr("triggertrade.services.research_backtest_execution.PostgresResearchSetRegistry", FakeSetRegistry)
     monkeypatch.setattr("triggertrade.services.research_backtest_execution.PostgresResearchRunStore", FakeRunStore)
-    monkeypatch.setattr("triggertrade.services.research_backtest_execution.run_backtest", fake_run_backtest)
+    monkeypatch.setattr("triggertrade.services.research_backtest_execution._run_research_v1_certified_position_backtest", fake_certified_backtest)
     executor = CanonicalResearchBacktestExecutionExecutor(
         config=_config(Path(".tmp") / "research-v1-durable-release.db"),
         db_path=Path(".tmp") / "research-v1-durable-release.db",

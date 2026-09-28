@@ -1839,7 +1839,7 @@ def _backtest_block_reason(
     research_v1_execution: bool = False,
 ) -> str | None:
     draft = rules.draft
-    if draft.take_profit_mode is TakeProfitMode.DYNAMIC:
+    if draft.take_profit_mode is TakeProfitMode.DYNAMIC and not research_v1_execution:
         return "dynamic_take_profit_requires_unimplemented_research_backtest_runtime"
     if draft.daily_loss_limit_enabled:
         return "research_daily_loss_accounting_isolation_unavailable"
@@ -1859,7 +1859,7 @@ def _backtest_block_reason(
     if draft.max_positions_per_coin > draft.max_open_positions:
         return "research_backtest_position_per_coin_rules_unimplemented"
     configured_cap = config.futures_runtime.max_total_position_notional / Decimal("100")
-    if draft.max_capital_in_positions_pct != configured_cap:
+    if not research_v1_execution and draft.max_capital_in_positions_pct != configured_cap:
         return "research_backtest_aggregate_capital_rules_unimplemented"
     return None
 
