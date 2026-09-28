@@ -289,8 +289,7 @@ class PostgresResearchRunStore:
         )
         if before_insert is not None:
             before_insert(record)
-        else:
-            self._registry.put_research(record)
+        self._registry.put_research(record)
         self._put_mutable_state(_mutable_payload(record))
         stored = self.get_research(research_id)
         if stored is None:
@@ -793,20 +792,6 @@ class PostgresResearchConfigurationRegistryClient:
             return PostgresResearchConfigurationRegistry(uow.connection).list_trading_rules_versions()
 
     def create_research(self, **kwargs: Any) -> tuple[ResearchRecord, bool]:
-        before_insert = kwargs.pop("before_insert", None)
-        if before_insert is not None:
-            candidate = _candidate_research_from_create_kwargs(**kwargs)
-            existing = self.get_research(candidate.research_id)
-            if existing is not None:
-                return existing, False
-            before_insert(candidate)
-            with PostgresUnitOfWork(self._factory) as uow:
-                store = PostgresResearchRunStore(uow.connection)
-                store._put_mutable_state(_mutable_payload(candidate))
-                stored = store.get_research(candidate.research_id)
-                if stored is None:
-                    raise ResearchStoreError("research id not found after PostgreSQL create")
-                return stored, True
         with PostgresUnitOfWork(self._factory) as uow:
             return PostgresResearchRunStore(uow.connection).create_research(**kwargs)
 

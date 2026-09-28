@@ -40,10 +40,16 @@ from triggertrade.services.research import (
     ResearchServiceError,
     _backtest_block_reason,
 )
+from triggertrade.persistence import postgres_research_registry as postgres_registry
+from triggertrade.persistence.postgres_research_registry import (
+    PostgresResearchConfigurationRegistryClient,
+    PostgresResearchRunStore,
+)
 from triggertrade.trigger_sets import TriggerSetStatus
 from tests.unit.test_backtest_replay import _config, _instrument, _trade_candles
 from tests.unit.test_futures_performance_analytics import _fill as _accounting_fill
 from triggertrade.accounting import close_futures_trade
+from tests.unit.test_research_v1_multi_coin_execution import _fixed_research_v1_rule
 
 
 def test_research_persists_exact_set_and_rules_pins_and_survives_restart(tmp_path):
@@ -76,6 +82,116 @@ def test_research_persists_exact_set_and_rules_pins_and_survives_restart(tmp_pat
     assert restarted.pin_payload["config_pins"]["trigger_set"]["set_id"] == "triggertrade-futures-core"
     assert restarted.pin_payload["config_pins"]["trading_rules"]["rules_version_id"] == current.rules_version_id
     assert "MARKET_HANDOFF" in restarted.pin_payload["contract_versions"]
+
+
+def test_postgres_research_create_with_and_without_before_insert_persists_base_and_mutable_state(monkeypatch):
+    connection = _FakePostgresConnection()
+    _install_fake_postgres_research_stores(monkeypatch)
+    store = PostgresResearchRunStore(connection)
+    callback_calls = []
+
+    plain, plain_created = store.create_research(**_postgres_create_kwargs(set_version="v1"))
+    hooked, hooked_created = store.create_research(
+        **_postgres_create_kwargs(set_version="v2"),
+        before_insert=lambda record: callback_calls.append(record.research_id),
+    )
+    reloaded = store.get_research(hooked.research_id)
+    duplicate, duplicate_created = store.create_research(
+        **_postgres_create_kwargs(set_version="v2"),
+        before_insert=lambda record: callback_calls.append(f"duplicate:{record.research_id}"),
+    )
+
+    assert plain_created is True
+    assert store.get_research(plain.research_id) is not None
+    assert hooked_created is True
+    assert callback_calls == [hooked.research_id]
+    assert reloaded is not None
+    assert reloaded.research_id == hooked.research_id
+    assert reloaded.status is ResearchStatus.DRAFT
+    assert (postgres_registry.RESEARCH_RUN_OWNER, postgres_registry.RESEARCH_MUTABLE_STATE_TYPE, hooked.research_id) in connection.owner_state
+    assert duplicate.research_id == hooked.research_id
+    assert duplicate_created is False
+    assert callback_calls == [hooked.research_id]
+
+
+def test_postgres_research_before_insert_failure_leaves_no_partial_record(monkeypatch):
+    connection = _FakePostgresConnection()
+    _install_fake_postgres_research_stores(monkeypatch)
+    store = PostgresResearchRunStore(connection)
+
+    with pytest.raises(RuntimeError, match="callback failed"):
+        store.create_research(
+            **_postgres_create_kwargs(set_version="v-fail"),
+            before_insert=lambda _record: (_ for _ in ()).throw(RuntimeError("callback failed")),
+        )
+
+    assert store.list_research() == ()
+    assert connection.owner_state == {}
+
+
+def test_postgres_research_configuration_client_delegates_before_insert_create(monkeypatch):
+    connection = _FakePostgresConnection()
+    _install_fake_postgres_research_stores(monkeypatch)
+    monkeypatch.setattr(
+        postgres_registry,
+        "PostgresUnitOfWork",
+        lambda factory: _FakePostgresUnitOfWork(connection),
+    )
+    client = PostgresResearchConfigurationRegistryClient(object())
+    callback_calls = []
+
+    created, created_flag = client.create_research(
+        **_postgres_create_kwargs(set_version="v-client"),
+        before_insert=lambda record: callback_calls.append(record.research_id),
+    )
+    duplicate, duplicate_flag = client.create_research(
+        **_postgres_create_kwargs(set_version="v-client"),
+        before_insert=lambda record: callback_calls.append(f"duplicate:{record.research_id}"),
+    )
+
+    assert created_flag is True
+    assert client.get_research(created.research_id).research_id == created.research_id
+    assert duplicate.research_id == created.research_id
+    assert duplicate_flag is False
+    assert callback_calls == [created.research_id]
+
+
+def test_research_service_create_research_v1_works_with_postgres_before_insert_hook(monkeypatch):
+    connection = _FakePostgresConnection()
+    _install_fake_postgres_research_stores(monkeypatch)
+    monkeypatch.setattr(
+        postgres_registry,
+        "PostgresUnitOfWork",
+        lambda factory: _FakePostgresUnitOfWork(connection),
+    )
+    client = PostgresResearchConfigurationRegistryClient(object())
+    rules = _fixed_research_v1_rule("TRV-R-POS-001-PR-201")
+    client.put_trading_rules_version(rules)
+    service = ResearchService(
+        store=client,
+        trigger_set_store=SimpleNamespace(),
+        trading_rules_store=SimpleNamespace(get_version=lambda _rules_id: None),
+        config=_config(":memory:"),
+        research_config_registry=client,
+    )
+
+    created = service.create_research_v1(
+        research_id="R-001",
+        created_at="2026-09-28T00:00:00+00:00",
+        instrument_resolver=lambda symbol: SimpleNamespace(symbol=symbol),
+    )
+    reloaded = client.get_research(created.research_id)
+    duplicate = service.create_research_v1(
+        research_id="R-001",
+        created_at="2026-09-28T00:01:00+00:00",
+        instrument_resolver=lambda symbol: SimpleNamespace(symbol=symbol),
+    )
+
+    assert reloaded is not None
+    assert reloaded.pin_payload["config_pins"]["research_v1_execution"]["research_id"] == "R-001"
+    assert reloaded.status is ResearchStatus.DRAFT
+    assert duplicate.research_id == created.research_id
+    assert len(client.list_research()) == 1
 
 
 def test_research_pin_defaults_to_v1_2_15_and_preserves_explicit_historical_revision():
@@ -1226,6 +1342,126 @@ class _FakeResearchBacktestExecutionHandoff:
             durable=True,
             record=record,
         )
+
+
+class _FakePostgresConnection:
+    def __init__(self) -> None:
+        self.owner_state = {}
+
+
+class _FakePostgresUnitOfWork:
+    def __init__(self, connection: _FakePostgresConnection) -> None:
+        self.connection = connection
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> bool:
+        return False
+
+
+class _FakeOwnerStateStore:
+    def __init__(self, connection: _FakePostgresConnection) -> None:
+        self._connection = connection
+
+    def put_if_absent(self, *, owner, state_type, state_id, payload):
+        key = (str(owner), str(state_type), str(state_id))
+        digest = canonical_json_digest(payload)
+        existing = self._connection.owner_state.get(key)
+        if existing is not None:
+            if existing.payload_digest != digest:
+                raise postgres_registry.ResearchConfigurationRegistryError(
+                    "owner state identity already exists with different canonical content"
+                )
+            return existing, False
+        record = postgres_registry.OwnerStateRecord(
+            owner=key[0],
+            state_type=key[1],
+            state_id=key[2],
+            revision=1,
+            payload=dict(payload),
+            payload_digest=digest,
+        )
+        self._connection.owner_state[key] = record
+        return record, True
+
+    def get(self, *, owner, state_type, state_id):
+        return self._connection.owner_state.get((str(owner), str(state_type), str(state_id)))
+
+
+class _FakePostgresResearchConfigurationRegistry:
+    def __init__(self, connection: _FakePostgresConnection) -> None:
+        self._connection = connection
+        self._store = _FakeOwnerStateStore(connection)
+
+    def put_research(self, research):
+        record, created = self._store.put_if_absent(
+            owner=postgres_registry.RESEARCH_CONFIG_OWNER,
+            state_type=postgres_registry.RESEARCH_STATE_TYPE,
+            state_id=research.research_id,
+            payload=postgres_registry._research_payload(research),
+        )
+        return postgres_registry._research_from_owner(record), created
+
+    def get_research(self, research_id):
+        record = self._store.get(
+            owner=postgres_registry.RESEARCH_CONFIG_OWNER,
+            state_type=postgres_registry.RESEARCH_STATE_TYPE,
+            state_id=research_id,
+        )
+        return None if record is None else postgres_registry._research_from_owner(record)
+
+    def list_research(self):
+        records = self._records(postgres_registry.RESEARCH_STATE_TYPE)
+        return tuple(postgres_registry._research_from_owner(record) for record in records)
+
+    def put_trading_rules_version(self, rules):
+        record, created = self._store.put_if_absent(
+            owner=postgres_registry.RESEARCH_CONFIG_OWNER,
+            state_type=postgres_registry.TRADING_RULES_STATE_TYPE,
+            state_id=rules.rules_version_id,
+            payload=postgres_registry._rules_payload(rules),
+        )
+        return postgres_registry._rules_from_owner(record), created
+
+    def get_trading_rules_version(self, rules_version_id):
+        record = self._store.get(
+            owner=postgres_registry.RESEARCH_CONFIG_OWNER,
+            state_type=postgres_registry.TRADING_RULES_STATE_TYPE,
+            state_id=rules_version_id,
+        )
+        return None if record is None else postgres_registry._rules_from_owner(record)
+
+    def list_trading_rules_versions(self):
+        records = self._records(postgres_registry.TRADING_RULES_STATE_TYPE)
+        return tuple(postgres_registry._rules_from_owner(record) for record in records)
+
+    def _records(self, state_type):
+        return tuple(
+            record
+            for (owner, stored_type, _state_id), record in self._connection.owner_state.items()
+            if owner == postgres_registry.RESEARCH_CONFIG_OWNER and stored_type == state_type
+        )
+
+
+def _install_fake_postgres_research_stores(monkeypatch) -> None:
+    monkeypatch.setattr(postgres_registry, "OwnerStateStore", _FakeOwnerStateStore)
+    monkeypatch.setattr(
+        postgres_registry,
+        "PostgresResearchConfigurationRegistry",
+        _FakePostgresResearchConfigurationRegistry,
+    )
+
+
+def _postgres_create_kwargs(*, set_version: str) -> dict:
+    return {
+        "set_id": "triggertrade-futures-core",
+        "set_version": set_version,
+        "rules_version_id": "rules-v1",
+        "rules_display_version": "v1",
+        "created_source": "unit-test",
+        "created_at": "2026-09-28T00:00:00+00:00",
+    }
 
 
 def _safe_demo_isolation() -> ResearchDemoIsolation:
