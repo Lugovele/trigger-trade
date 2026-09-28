@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal, DivisionByZero, InvalidOperation
 from hashlib import sha256
 import json
-from typing import Any, Protocol
+from typing import Any, Mapping, Protocol
 
 from triggertrade.canonical_json import canonical_json_digest
 from triggertrade.config import AppConfig, BybitEnvironment, ConfigError, ExecutionVenue, Market
@@ -16,6 +16,7 @@ from triggertrade.persistence.daily_loss_store import DailyLossRecord
 from triggertrade.persistence.durable_messages import DurableMessageStore
 from triggertrade.persistence.message_store import MessageRecord, MessageSeverity
 from triggertrade.persistence.postgres_research_registry import PostgresResearchConfigurationRegistry
+from triggertrade.persistence.postgres_research_set_registry import PostgresResearchSetRegistry
 from triggertrade.persistence.postgres import (
     OwnerStateConflict,
     OwnerStateRecord,
@@ -28,6 +29,15 @@ from triggertrade.persistence.postgres import (
 from triggertrade.persistence.research_store import ResearchRecord
 from triggertrade.persistence.trigger_set_store import ActiveTradingPair, TriggerSetStoreError
 from triggertrade.rules import TradingRulesVersion
+from triggertrade.research_v1_execution import (
+    ResearchV1SharedPortfolioState,
+    apply_research_v1_portfolio_events,
+    is_research_v1_pin_payload,
+    research_set_to_trigger_set,
+    research_v1_definition_from_pin_payload,
+    resolve_research_v1_symbol_bindings,
+    run_research_v1_demo_orchestration,
+)
 from triggertrade.services.futures_runtime import FuturesDualLaneResult, FuturesDualLaneRuntime
 from triggertrade.trigger_sets import Lane, RuleDefinition, RuleStatus, RuleType, TriggerSetVersion
 from triggertrade.services.research import (
@@ -103,7 +113,7 @@ class CanonicalFuturesResearchDemoStateObserver:
             if getattr(position, "rules_version_id", None) in {None, record.rules_version_id}
             and str(getattr(position, "evidence_source", "")).upper() in {"ACTIVE", "EXCHANGE"}
         )
-        return {
+        payload = {
             "canonical_cycle": False,
             "cycle_mode": "canonical_futures_reconciliation_state",
             "reconciliation_before_resubmit": True,
@@ -119,6 +129,9 @@ class CanonicalFuturesResearchDemoStateObserver:
             "set_version": configuration.trigger_set.version,
             "rules_version_id": configuration.rules.rules_version_id,
         }
+        if hasattr(configuration, "research_v1_portfolio_state"):
+            payload["research_v1_portfolio_events"] = _research_v1_portfolio_events_from_positions(matching_positions)
+        return payload
 
 
 class CanonicalResearchDemoTradingCycleProvider:
@@ -222,7 +235,7 @@ class CanonicalResearchDemoTradingCycleProvider:
             not futures_execution_invoked
             or any(str(item["execution_status"]).upper() != "UNKNOWN" for item in active_payloads)
         )
-        return {
+        payload = {
             "canonical_cycle": True,
             "cycle_mode": "futures_dual_lane_runtime",
             "reconciliation_before_resubmit": reconciled_before_resubmit,
@@ -240,6 +253,9 @@ class CanonicalResearchDemoTradingCycleProvider:
             "runtime": _runtime_result_payload(result),
             "audit_events_recorded": trace_store.audit_events_recorded,
         }
+        if hasattr(configuration, "research_v1_portfolio_state"):
+            payload["research_v1_portfolio_events"] = _research_v1_portfolio_events_from_positions(matching_positions)
+        return payload
 
 
 class CanonicalResearchDemoExecutionExecutor:
@@ -266,6 +282,9 @@ class CanonicalResearchDemoExecutionExecutor:
             raise ConfigError("Research Demo executor requires canonical trading cycle dependency")
 
     def start_research_demo(self, record: ResearchDemoExecutionRecord) -> dict[str, Any]:
+        research = self._load_research(record.research_id)
+        if research is not None and is_research_v1_pin_payload(research.pin_payload):
+            return self._start_research_v1_demo(record, research)
         configuration = self._load_exact_configuration(record)
         cycle_result = self._trading_cycle.run_research_demo_cycle(record=record, configuration=configuration)
         if bool(cycle_result.get("resubmitted_without_reconciliation")):
@@ -330,6 +349,71 @@ class CanonicalResearchDemoExecutionExecutor:
             "result": result,
         }
 
+    def _start_research_v1_demo(self, record: ResearchDemoExecutionRecord, research: ResearchRecord) -> dict[str, Any]:
+        definition = research_v1_definition_from_pin_payload(research.pin_payload)
+        with PostgresUnitOfWork(self._factory) as uow:
+            registry = PostgresResearchConfigurationRegistry(uow.connection)
+            sets = PostgresResearchSetRegistry(uow.connection).list_research_sets()
+            rules = registry.get_trading_rules_version(definition.selected_binding.rules_version_id)
+        if rules is None:
+            raise PostgresPersistenceError("research_v1_demo_configuration_missing")
+        set_by_version = {item.set_version: item for item in sets}
+        portfolio = ResearchV1SharedPortfolioState(
+            total_capital=Decimal("1000"),
+            max_capital_in_positions_pct=rules.draft.max_capital_in_positions_pct,
+            allocation_by_symbol={coin.symbol.upper(): coin.max_allocation_pct for coin in rules.draft.coins if coin.enabled and coin.max_allocation_pct is not None},
+            max_open_positions=rules.draft.max_open_positions or 1,
+            max_positions_per_coin=rules.draft.max_positions_per_coin or 1,
+        )
+
+        def runner(binding, portfolio_state):
+            research_set = set_by_version[str(binding.set_version_id)]
+            trigger_set = research_set_to_trigger_set(research_set, symbol=binding.instrument_symbol)
+            configuration = type(
+                "ResearchV1DemoConfiguration",
+                (),
+                {
+                    "research": research,
+                    "trigger_set": trigger_set,
+                    "rules": rules,
+                    "research_v1_portfolio_state": portfolio_state,
+                },
+            )()
+            cycle = dict(self._trading_cycle.run_research_demo_cycle(record=record, configuration=configuration))
+            cycle.setdefault("symbol", binding.instrument_symbol)
+            cycle.setdefault("set_id", trigger_set.set_id)
+            cycle.setdefault("set_version", trigger_set.version)
+            cycle.setdefault("rules_version_id", rules.rules_version_id)
+            next_portfolio = apply_research_v1_portfolio_events(
+                portfolio_state,
+                _research_v1_portfolio_events_from_cycle(cycle),
+            )
+            return cycle, next_portfolio
+
+        result = run_research_v1_demo_orchestration(
+            definition,
+            available_sets=set_by_version,
+            portfolio=portfolio,
+            symbol_runner=runner,
+        )
+        return {
+            "terminal": False,
+            "execution_owner": "trading-worker",
+            "durable": True,
+            "canonical_execution": True,
+            "research_v1": True,
+            "configuration": {
+                "research_id": record.research_id,
+                "rules_version_id": definition.selected_binding.rules_version_id,
+                "selected_arm": definition.selected_arm,
+            },
+            "cycle": {
+                "symbol_results": tuple(dict(item) for item in result.symbol_results),
+                "not_applicable": tuple(item.symbol for item in result.not_applicable),
+                "portfolio": dict(result.portfolio_snapshot),
+            },
+        }
+
     def _load_exact_configuration(self, record: ResearchDemoExecutionRecord):
         with PostgresUnitOfWork(self._factory) as uow:
             return PostgresResearchConfigurationRegistry(uow.connection).get_research_demo_configuration(
@@ -338,6 +422,14 @@ class CanonicalResearchDemoExecutionExecutor:
                 set_version=record.set_version,
                 rules_version_id=record.rules_version_id,
             )
+
+    def _load_research(self, research_id: str) -> ResearchRecord | None:
+        with PostgresUnitOfWork(self._factory) as uow:
+            registry = PostgresResearchConfigurationRegistry(uow.connection)
+            get_research = getattr(registry, "get_research", None)
+            if get_research is None:
+                return None
+            return get_research(research_id)
 
     def _validate_demo_runtime(self) -> None:
         if self._config.live_trading_enabled:
@@ -392,6 +484,33 @@ class PostgresResearchDemoExecutionHandoff:
         return ResearchDemoExecutionHandoffResult(
             handoff_id=record.handoff_message_id,
             execution_owner=record.execution_owner,
+            durable=True,
+        )
+
+    def start_research_v1_demo(
+        self,
+        *,
+        research: ResearchRecord,
+        rules: TradingRulesVersion,
+        isolation: ResearchDemoIsolation,
+        started_at: str,
+        pin_payload: dict[str, Any],
+        demo_run_id: str,
+    ) -> ResearchDemoExecutionHandoffResult:
+        with PostgresUnitOfWork(self._factory) as uow:
+            PostgresResearchConfigurationRegistry(uow.connection).put_research(research)
+            PostgresResearchConfigurationRegistry(uow.connection).put_trading_rules_version(rules)
+            record = ResearchDemoExecutionStore(uow.connection).submit(
+                research=research,
+                rules=rules,
+                isolation=isolation,
+                started_at=started_at,
+                pin_payload=pin_payload,
+                demo_run_id=demo_run_id,
+            )
+        return ResearchDemoExecutionHandoffResult(
+            handoff_id=record.handoff_message_id,
+            execution_owner="trading-worker",
             durable=True,
         )
 
@@ -1427,6 +1546,51 @@ def _cycle_result_payload(result) -> dict[str, Any]:
         "execution_status": result.execution_status,
         "skipped_reason": result.skipped_reason,
     }
+
+
+def _research_v1_portfolio_events_from_cycle(cycle_result: Mapping[str, Any]) -> tuple[dict[str, Any], ...]:
+    raw = cycle_result.get("research_v1_portfolio_events")
+    if raw is None:
+        return ()
+    return tuple(dict(item) for item in raw)
+
+
+def _research_v1_portfolio_events_from_positions(positions: tuple[object, ...]) -> tuple[dict[str, Any], ...]:
+    events: list[dict[str, Any]] = []
+    for position in positions:
+        leverage = _positive_decimal(getattr(position, "leverage", None), field="position.leverage")
+        value = _nonnegative_decimal(getattr(position, "position_value", None), field="position.position_value")
+        amount = value / leverage
+        events.append(
+            {
+                "action": "RESERVE",
+                "symbol": str(getattr(position, "symbol", "")).upper(),
+                "actual_committed_capital": str(amount),
+                "canonical_source": "futures_position.position_value_over_leverage",
+                "position_id": getattr(position, "position_id", None),
+                "position_status": getattr(position, "status", None),
+            }
+        )
+    return tuple(events)
+
+
+def _positive_decimal(value: object, *, field: str) -> Decimal:
+    amount = _nonnegative_decimal(value, field=field)
+    if amount <= 0:
+        raise ConfigError(f"{field} must be positive")
+    return amount
+
+
+def _nonnegative_decimal(value: object, *, field: str) -> Decimal:
+    if value is None:
+        raise ConfigError(f"{field} is required")
+    try:
+        amount = Decimal(str(value))
+    except (InvalidOperation, ValueError) as exc:
+        raise ConfigError(f"{field} must be a decimal") from exc
+    if amount < 0:
+        raise ConfigError(f"{field} must be nonnegative")
+    return amount
 
 
 def _canonical_runtime_wait_state(result: FuturesDualLaneResult, active_payloads: tuple[dict[str, Any], ...]) -> bool:

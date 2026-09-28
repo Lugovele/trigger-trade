@@ -43,6 +43,12 @@ from triggertrade.persistence.research_store import (
 from triggertrade.rules.trading import TRADING_RULES_SCOPE_LIVE, draft_from_json
 from triggertrade.rules import DirectionMode, TakeProfitMode, TradingRulesVersion
 from triggertrade.research_pins import research_pin_payload, research_run_pin_payload
+from triggertrade.research_v1_execution import (
+    build_research_v1_execution_definition,
+    is_research_v1_pin_payload,
+    research_v1_backtest_allocation_supported,
+    research_v1_config_pin_payload,
+)
 from triggertrade.trigger_sets import TriggerSetStatus, TriggerSetVersion
 
 
@@ -212,6 +218,48 @@ class ResearchService:
         )
         return record
 
+    def create_research_v1(
+        self,
+        *,
+        research_id: str,
+        selected_arm: str | None = None,
+        created_source: str = "research_v1_build_spec",
+        created_at: str | None = None,
+        instrument_resolver: Callable[[str], object] | None = None,
+    ) -> ResearchRecord:
+        if instrument_resolver is None:
+            raise ResearchServiceError("Research V1 creation requires factual instrument resolution")
+        definition = build_research_v1_execution_definition(research_id, selected_arm=selected_arm)
+        rules = self._exact_rules_version(definition.selected_binding.rules_version_id)
+        compatibility = definition.selected_binding.non_btc.set_version_id or definition.selected_binding.btc.set_version_id
+        if compatibility is None:
+            raise ResearchServiceError("Research V1 definition has no executable Set binding")
+        set_id = "-".join(compatibility.split("-")[:-1])
+        pins = research_v1_config_pin_payload(
+            definition,
+            created_source=created_source,
+            instrument_resolver=instrument_resolver,
+        )
+        record, _created = self._store.create_research(
+            set_id=set_id,
+            set_version=compatibility,
+            rules_version_id=rules.rules_version_id,
+            rules_display_version=rules.version,
+            created_source=created_source,
+            pin_payload=pins,
+            created_at=created_at,
+            before_insert=self._persist_research_v1_configuration,
+        )
+        self._audit_research_event(
+            "RESEARCH_V1_CREATED",
+            record,
+            result="CREATED",
+            source_id=created_source,
+            created_at=record.created_at,
+            metadata={"rules_display_version": record.rules_display_version, "research_v1": True},
+        )
+        return record
+
     def run_backtest(
         self,
         *,
@@ -235,9 +283,54 @@ class ResearchService:
                     pin_payload=run_pins,
                     created_at=(created_at or datetime.now(UTC)).isoformat(),
                 )
+            if is_research_v1_pin_payload(research.pin_payload):
+                start_v1 = getattr(handoff, "start_research_v1_backtest", None)
+                if start_v1 is None:
+                    return self._blocked_backtest(
+                        research,
+                        plan=plan,
+                        reason="research_v1_backtest_handoff_unavailable",
+                        pin_payload=run_pins,
+                        created_at=(created_at or datetime.now(UTC)).isoformat(),
+                    )
+                rules = self._exact_rules_version(research.rules_version_id)
+                block_reason = _backtest_block_reason(rules, self._config, plan, research_v1_execution=True)
+                if block_reason is not None:
+                    return self._blocked_backtest(
+                        research,
+                        plan=plan,
+                        reason=block_reason,
+                        pin_payload=run_pins,
+                        created_at=(created_at or datetime.now(UTC)).isoformat(),
+                    )
+                now = (created_at or datetime.now(UTC)).isoformat()
+                result = start_v1(
+                    research=research,
+                    rules=rules,
+                    plan=plan,
+                    created_at=now,
+                    pin_payload=run_pins,
+                )
+                if result.execution_owner != "trading-worker" or not result.durable:
+                    return self._blocked_backtest(
+                        research,
+                        plan=plan,
+                        reason="historical_provider_unavailable",
+                        pin_payload=run_pins,
+                        created_at=now,
+                    )
+                self._audit_research_run_event(
+                    "BACKTEST_RUN_SUBMITTED",
+                    research,
+                    run_id=result.record.run_id,
+                    result=result.record.status.value,
+                    created_at=result.record.created_at,
+                    metadata={"handoff_id": result.handoff_id, "execution_owner": result.execution_owner, "research_v1": True},
+                )
+                return result.record
             trigger_set = self._exact_trigger_set(research.set_id, research.set_version)
             rules = self._exact_rules_version(research.rules_version_id)
-            block_reason = _backtest_block_reason(rules, self._config, plan)
+            block_reason = _backtest_block_reason(rules, self._config, plan, research_v1_execution=is_research_v1_pin_payload(research.pin_payload))
             if block_reason is not None:
                 return self._blocked_backtest(
                     research,
@@ -281,7 +374,7 @@ class ResearchService:
                 created_at=(created_at or datetime.now(UTC)).isoformat(),
             )
         rules = self._exact_rules_version(research.rules_version_id)
-        block_reason = _backtest_block_reason(rules, self._config, plan)
+        block_reason = _backtest_block_reason(rules, self._config, plan, research_v1_execution=is_research_v1_pin_payload(research.pin_payload))
         if block_reason is not None:
             return self._blocked_backtest(
                 research,
@@ -376,6 +469,66 @@ class ResearchService:
         existing_running = _latest_running_demo_run(self._store, research.research_id)
         if existing_running is not None:
             return existing_running
+        if is_research_v1_pin_payload(research.pin_payload):
+            rules = self._exact_rules_version(research.rules_version_id)
+            block_reason = self._demo_block_reason(rules)
+            if block_reason is not None:
+                return self._blocked_demo(research, reason=block_reason, created_at=created_at)
+            now = created_at or datetime.now(UTC).isoformat()
+            scope = self._demo_isolation.execution_scope_id or f"research:{research.research_id}"
+            run_pins = _demo_run_pins(
+                research,
+                status=ResearchDemoStatus.RUNNING,
+                started_at=now,
+                stopped_at=None,
+                execution_scope_id=scope,
+                account_scope=self._demo_isolation.account_scope or scope,
+                blocked_reason=None,
+                isolation=self._demo_isolation,
+            )
+            run_id = _demo_run_id(research.research_id, run_pins, now)
+            handoff = self._demo_execution_handoff
+            start_v1 = None if handoff is None else getattr(handoff, "start_research_v1_demo", None)
+            if handoff is None or not getattr(handoff, "canonical_worker_handoff", False) or start_v1 is None:
+                return self._blocked_demo(
+                    research,
+                    reason="research_v1_demo_canonical_execution_handoff_unavailable",
+                    created_at=created_at,
+                )
+            self._persist_research_v1_configuration(research)
+            handoff_result = start_v1(
+                research=research,
+                rules=rules,
+                isolation=self._demo_isolation,
+                started_at=now,
+                pin_payload=run_pins,
+                demo_run_id=run_id,
+            )
+            if handoff_result.execution_owner != "trading-worker" or not handoff_result.durable:
+                return self._blocked_demo(
+                    research,
+                    reason="research_v1_demo_canonical_execution_handoff_unavailable",
+                    created_at=created_at,
+                )
+            record = self._store.add_demo_run(
+                research_id=research.research_id,
+                run_id=run_id,
+                status=ResearchDemoStatus.RUNNING,
+                started_at=now,
+                execution_scope_id=scope,
+                account_scope=self._demo_isolation.account_scope or scope,
+                pin_payload=run_pins,
+                created_at=now,
+            )
+            self._audit_research_run_event(
+                "DEMO_RUN_STARTED",
+                research,
+                run_id=record.run_id,
+                result=record.status.value,
+                created_at=record.created_at,
+                metadata={"execution_scope_id": record.execution_scope_id, "account_scope": record.account_scope, "handoff_id": handoff_result.handoff_id, "execution_owner": handoff_result.execution_owner, "research_v1": True},
+            )
+            return record
         trigger_set = self._exact_trigger_set(research.set_id, research.set_version)
         rules = self._exact_rules_version(research.rules_version_id)
         block_reason = self._demo_block_reason(rules)
@@ -456,6 +609,13 @@ class ResearchService:
             trigger_set=trigger_set,
             rules=rules,
         )
+
+    def _persist_research_v1_configuration(self, research: ResearchRecord) -> None:
+        if self._research_config_registry is None:
+            return
+        put_research = getattr(self._research_config_registry, "put_research", None)
+        if put_research is not None:
+            put_research(research)
 
     def stop_demo_run(self, research_id: str, run_id: str, *, stopped_at: str | None = None) -> ResearchDemoRunRecord:
         record = self._store.stop_demo_run(research_id, run_id, stopped_at=stopped_at)
@@ -1671,7 +1831,13 @@ def _config_for_rules(config: AppConfig, rules: TradingRulesVersion) -> AppConfi
     return replace(config, futures_runtime=runtime)
 
 
-def _backtest_block_reason(rules: TradingRulesVersion, config: AppConfig, plan: BacktestPlan) -> str | None:
+def _backtest_block_reason(
+    rules: TradingRulesVersion,
+    config: AppConfig,
+    plan: BacktestPlan,
+    *,
+    research_v1_execution: bool = False,
+) -> str | None:
     draft = rules.draft
     if draft.take_profit_mode is TakeProfitMode.DYNAMIC:
         return "dynamic_take_profit_requires_unimplemented_research_backtest_runtime"
@@ -1682,7 +1848,9 @@ def _backtest_block_reason(rules: TradingRulesVersion, config: AppConfig, plan: 
     enabled = tuple(coin for coin in draft.coins if coin.enabled)
     if not any(coin.symbol == plan.symbol for coin in enabled):
         return "research_backtest_symbol_not_enabled_by_pinned_rules"
-    if any(coin.max_allocation_pct is not None for coin in enabled):
+    if any(coin.max_allocation_pct is not None for coin in enabled) and not (
+        research_v1_execution and research_v1_backtest_allocation_supported(rules, plan.symbol)
+    ):
         return "research_backtest_coin_allocation_rules_unimplemented"
     if not draft.max_positions_per_coin_enabled or draft.max_positions_per_coin is None or draft.max_positions_per_coin < 1:
         return "research_backtest_position_per_coin_rules_unimplemented"
