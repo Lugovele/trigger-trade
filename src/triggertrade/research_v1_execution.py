@@ -22,6 +22,7 @@ RESEARCH_V1_SCHEMA_VERSION = "research_v1_build_spec.v1"
 RESEARCH_V1_METHODOLOGY_BASELINE = "v1.2.15"
 RESEARCH_V1_ASSETS: tuple[str, ...] = ("BTC", "ETH", "SOL", "XRP", "DOGE", "SUI", "PEPE", "AVAX", "LINK", "BNB")
 RESEARCH_V1_SYMBOLS: tuple[str, ...] = tuple(f"{asset}USDT" for asset in RESEARCH_V1_ASSETS)
+RESEARCH_V1_INSTRUMENT_SYMBOL_OVERRIDES: Mapping[str, str] = {"PEPE": "1000PEPEUSDT"}
 RESEARCH_V1_ALLOCATION_PCT = Decimal("0.10")
 RESEARCH_V1_ALLOCATION_BY_SYMBOL: dict[str, Decimal] = {symbol: RESEARCH_V1_ALLOCATION_PCT for symbol in RESEARCH_V1_SYMBOLS}
 RESEARCH_V1_SEGMENTS: dict[str, tuple[str, ...]] = {
@@ -391,14 +392,15 @@ def resolve_research_v1_symbol_bindings(
     bindings: list[ResearchV1SymbolBinding] = []
     for asset in definition.ordered_assets:
         symbol = f"{asset}USDT"
-        instrument_symbol = symbol
+        expected_instrument_symbol = _research_v1_instrument_symbol(asset)
+        instrument_symbol = expected_instrument_symbol
         if instrument_resolver is not None:
             try:
-                instrument = instrument_resolver(symbol)
+                instrument = instrument_resolver(expected_instrument_symbol)
             except Exception as exc:
-                raise ResearchV1ExecutionError(f"Research V1 instrument is unavailable: {symbol}") from exc
-            instrument_symbol = str(getattr(instrument, "symbol", symbol)).upper()
-            if instrument_symbol != symbol:
+                raise ResearchV1ExecutionError(f"Research V1 instrument is unavailable: {expected_instrument_symbol}") from exc
+            instrument_symbol = str(getattr(instrument, "symbol", expected_instrument_symbol)).upper()
+            if instrument_symbol != expected_instrument_symbol:
                 raise ResearchV1ExecutionError(f"Research V1 instrument resolver returned mismatched symbol: {instrument_symbol}")
         allocation = definition.allocation_by_symbol.get(symbol)
         if allocation != RESEARCH_V1_ALLOCATION_PCT:
@@ -786,6 +788,11 @@ def _segment_for_asset(asset: str) -> str:
         if asset in assets:
             return segment
     raise ResearchV1ExecutionError(f"Research V1 asset has no segment: {asset}")
+
+
+def _research_v1_instrument_symbol(asset: str) -> str:
+    normalized = asset.upper()
+    return RESEARCH_V1_INSTRUMENT_SYMBOL_OVERRIDES.get(normalized, f"{normalized}USDT")
 
 
 def _set_map(available_sets: Mapping[str, ResearchSetVersion] | Sequence[ResearchSetVersion]) -> dict[str, ResearchSetVersion]:

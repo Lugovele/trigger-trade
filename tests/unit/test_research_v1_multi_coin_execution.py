@@ -175,6 +175,70 @@ def test_research_v1_symbol_resolver_binds_btc_and_non_btc_sets_exactly():
         )
 
 
+def test_research_v1_pepe_uses_factual_bybit_instrument_without_changing_logical_symbol():
+    definition = build_research_v1_execution_definition("R-001")
+    resolver_calls = []
+
+    def resolver(symbol):
+        resolver_calls.append(symbol)
+        return SimpleNamespace(symbol=symbol)
+
+    bindings = resolve_research_v1_symbol_bindings(
+        definition,
+        available_sets=_research_v1_sets_by_version(),
+        instrument_resolver=resolver,
+    )
+    by_asset = {binding.asset: binding for binding in bindings}
+
+    assert "PEPEUSDT" in RESEARCH_V1_SYMBOLS
+    assert "1000PEPEUSDT" not in RESEARCH_V1_SYMBOLS
+    assert by_asset["BTC"].symbol == "BTCUSDT"
+    assert by_asset["BTC"].instrument_symbol == "BTCUSDT"
+    assert by_asset["PEPE"].asset == "PEPE"
+    assert by_asset["PEPE"].symbol == "PEPEUSDT"
+    assert by_asset["PEPE"].instrument_symbol == "1000PEPEUSDT"
+    assert "1000PEPEUSDT" in resolver_calls
+    assert "PEPEUSDT" not in resolver_calls
+    assert by_asset["PEPE"].allocation_pct == Decimal("0.10")
+    assert definition.allocation_by_symbol["PEPEUSDT"] == Decimal("0.10")
+
+
+def test_research_v1_pepe_instrument_mismatch_fails_closed():
+    definition = build_research_v1_execution_definition("R-001")
+
+    def resolver(symbol):
+        if symbol == "1000PEPEUSDT":
+            return SimpleNamespace(symbol="PEPEUSDT")
+        return SimpleNamespace(symbol=symbol)
+
+    with pytest.raises(ResearchV1ExecutionError, match="mismatched symbol"):
+        resolve_research_v1_symbol_bindings(
+            definition,
+            available_sets=_research_v1_sets_by_version(),
+            instrument_resolver=resolver,
+        )
+
+
+def test_research_v1_pin_preserves_pepe_requested_symbol_and_instrument_symbol():
+    definition = build_research_v1_execution_definition("R-001")
+    payload = research_v1_config_pin_payload(
+        definition,
+        created_source="unit",
+        instrument_resolver=lambda symbol: SimpleNamespace(symbol=symbol),
+    )
+    config = payload["config_pins"]["research_v1_execution"]
+    pepe_binding = next(item for item in config["symbol_bindings"] if item["asset"] == "PEPE")
+    pepe_instrument = next(item for item in config["instrument_bindings"] if item["asset"] == "PEPE")
+
+    assert pepe_binding["symbol"] == "PEPEUSDT"
+    assert pepe_binding["instrument_symbol"] == "1000PEPEUSDT"
+    assert pepe_instrument == {
+        "asset": "PEPE",
+        "requested_symbol": "PEPEUSDT",
+        "instrument_symbol": "1000PEPEUSDT",
+    }
+
+
 def test_r006_preserves_btc_universe_allocation_but_skips_execution_as_not_applicable():
     definition = build_research_v1_execution_definition("R-006")
     bindings = resolve_research_v1_symbol_bindings(definition, available_sets=_research_v1_sets_by_version())
