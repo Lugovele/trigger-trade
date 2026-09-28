@@ -40,7 +40,13 @@ def test_research_trigger_projection_preserves_metric_and_config_semantics():
 
     simple = _by_id(triggers, "TR-R-BTC-006")
     directional = _by_id(triggers, "TR-R-004")
+    fresh_directional = _by_id(triggers, "TR-R-015")
+    theta_half = _by_id(triggers, "TR-R-001")
+    theta_full = _by_id(triggers, "TR-R-002")
+    false_half = _by_id(triggers, "TR-R-029")
+    false_full = _by_id(triggers, "TR-R-030")
     zero = _by_id(triggers, "TR-R-BTC-001")
+    fresh_btc = _by_id(triggers, "TR-R-BTC-003")
     btc_short = _by_id(triggers, "TR-R-BTC-002")
     unavailable = _by_id(triggers, "TR-R-001")
     contextual = _by_id(triggers, "TR-R-003")
@@ -50,8 +56,16 @@ def test_research_trigger_projection_preserves_metric_and_config_semantics():
     assert simple["formula"] == "F-004"
     assert directional["condition"] == "classifier_direction = LONG"
     assert "LONG" in directional["applicability"]
+    assert "CURRENT_STATE" in directional["evaluation_semantics"]
+    assert "FRESH_EVENT" in fresh_directional["evaluation_semantics"]
+    assert _parameter_value(theta_half, "theta_move_pct") == "0.50"
+    assert _parameter_value(theta_full, "theta_move_pct") == "1.00"
+    assert _parameter_value(false_half, "theta_move_pct") == "0.50"
+    assert _parameter_value(false_full, "theta_move_pct") == "1.00"
     assert zero["version"] == "1.0.1"
     assert zero["output"] == "LONG, ZERO, UNAVAILABLE"
+    assert "CURRENT_STATE" in zero["evaluation_semantics"]
+    assert "FRESH_EVENT" in fresh_btc["evaluation_semantics"]
     assert btc_short["version"] == "1.0.1"
     assert btc_short["output"] == "SHORT, ZERO, UNAVAILABLE"
     assert "ZERO" in zero["zero_none_unavailable"]
@@ -121,6 +135,8 @@ def test_research_set_projection_exposes_33_records_and_exact_btc_memberships():
     first = next(row for row in sets if row["version"] == "SET-R-001-V2")
     assert [member["position"] for member in first["trigger_members"]] == list(range(1, first["trigger_count"] + 1))
     assert first["version_state"] == "CURRENT"
+    assert first["direction"] == "CLASSIFIER SIDE"
+    assert "classifier side" in first["direction_semantics"]
 
 
 def test_research_trigger_api_is_read_only_and_returns_list_and_detail():
@@ -191,7 +207,12 @@ def test_dashboard_renders_research_trigger_list_and_detail_without_mutation_con
     assert '"condition": "ATR percentile >= 15"' in html
     assert '"metric_refs": ["ATR percentile"]' in html
     assert '"formula_refs": ["F-004"]' in html
-    assert "<th>Metric</th><th>Formula</th><th>Condition</th><th>Output</th><th>Applicability</th><th>Status</th><th>Version State</th>" in html
+    assert "<th>Metric</th><th>Formula</th><th>Condition</th><th>Parameters</th><th>Evaluation</th><th>Output</th><th>Applicability</th><th>Status</th><th>Version State</th>" in html
+    assert '"name": "theta_move_pct"' in html
+    assert '"value": "0.50"' in html
+    assert '"value": "1.00"' in html
+    assert "CURRENT_STATE" in html
+    assert "FRESH_EVENT" in html
     assert '"raw_definition": {' in html
     assert "/api/research/triggers" not in html
     assert "postJson(\"/api/research/triggers" not in html
@@ -260,6 +281,13 @@ def test_research_rules_route_is_not_a_configuration_destination():
 
 def _by_id(rows, trigger_id: str) -> dict[str, object]:
     return next(row for row in rows if row["trigger_id"] == trigger_id)
+
+
+def _parameter_value(row: dict[str, object], name: str) -> str | None:
+    for parameter in row["parameters"]:
+        if parameter["name"] == name:
+            return parameter["value"]
+    return None
 
 
 def _tmp_db_path() -> Path:

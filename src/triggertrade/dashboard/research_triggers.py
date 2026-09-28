@@ -104,6 +104,8 @@ def _trigger_payload(
         "formula_text": _formula_text(definition, fallback=condition),
         "output": ", ".join(output_states) if output_states else "TRUE / FALSE / UNAVAILABLE",
         "output_states": output_states,
+        "timeframe_context": str(definition.get("timeframe_context") or ""),
+        "evaluation_semantics": str(definition.get("freshness_semantics") or ""),
         "applicability": _applicability(definition),
         "scope": _applicability(definition),
         "direction_applicability": str(definition.get("direction_applicability") or ""),

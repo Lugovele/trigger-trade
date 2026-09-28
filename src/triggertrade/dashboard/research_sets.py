@@ -167,13 +167,15 @@ def _version_history(
 
 def _direction_label(direction_semantics: str) -> str:
     text = str(direction_semantics or "").upper()
+    if "CLASSIFIER SIDE" in text:
+        return "CLASSIFIER SIDE"
     if "LONG" in text and "SHORT" in text:
         return "LONG / SHORT"
     if "LONG" in text:
         return "LONG"
     if "SHORT" in text:
         return "SHORT"
-    return "NONE"
+    return str(direction_semantics or "").strip() or "UNSPECIFIED"
 
 
 def _version_key(version: str) -> tuple[int, ...]:
