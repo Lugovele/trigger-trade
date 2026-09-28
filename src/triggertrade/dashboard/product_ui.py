@@ -2204,10 +2204,11 @@ def _reference_backend_script(payload: str) -> str:
     qa(".config-view", desktop).forEach(node => node.classList.toggle("active", node.id === "config-" + view));
   };
   window.openResearchView = function(view, options={}){
-    const normalized = ["overview", "triggers", "sets"].includes(view) ? view : "overview";
+    const normalized = ["overview", "triggers", "sets", "rules"].includes(view) ? view : "overview";
     showPage("research", {preserveUrl:true});
     qa(".research-tab", desktop).forEach(node => node.classList.toggle("active", node.dataset.researchView === normalized));
     qa(".research-view", desktop).forEach(node => node.classList.toggle("active", node.id === "research-" + normalized));
+    if(normalized === "rules") renderResearchRules();
     if(!options.preserveUrl){
       history.replaceState(null, "", normalized === "overview" ? "/research" : "/research/" + normalized);
     }
@@ -2456,7 +2457,7 @@ def _reference_backend_script(payload: str) -> str:
           .map(s => ({set_id:s.set_id, set_version:s.version, set_status:s.status}));
     const versions = t?.version_history || [];
     const metricLinks = (t?.metric_links && t.metric_links.length ? t.metric_links : (t?.metric_refs || []).map(m => ({id:m,name:m}))).map(m => `<button class="reference-link" onclick="openConfig('metrics'); window.showMetric && window.showMetric('${h(m.id)}')">${h(m.id)}${m.name && m.name !== m.id ? " · " + h(m.name) : ""}</button>`).join("");
-    if(detail) detail.innerHTML = `<div class="details-header"><div class="details-id">Trigger ${h(id)} · Version ${h(version || t?.version || "—")} · ${h(t?.version_state || "CURRENT")}</div><div class="details-title">${h(t?.display_name || id || "Trigger")}</div><div class="details-meta"><span class="meta-pill">Research status: ${h(t?.status || triggerStatusLabel(t))}</span><span class="meta-pill">${h(t?.family || "Research Trigger")}</span><span class="meta-pill">Implementation: ${h(t?.implementation_key || "—")}</span><span class="meta-pill">Digest: ${h(t?.canonical_digest || "—")}</span></div></div><div class="details-section"><div class="section-title">Metric</div><div class="reference-links">${metricLinks || h(t?.metric || "Metric unavailable")}</div></div><div class="details-section"><div class="section-title">Formula</div><div class="body-text">${h(t?.formula || (t?.formula_refs || []).join(", ") || "—")}</div></div><div class="details-section"><div class="section-title">Condition</div><div class="formula" style="white-space:pre-line">${h(t?.formula_text || t?.condition || t?.what_it_checks || "Unavailable")}</div></div><div class="details-section"><div class="section-title">Operator / Threshold</div><div class="body-text">${h([t?.operator, t?.threshold].filter(Boolean).join(" ") || "—")}</div></div><div class="details-section"><div class="section-title">Output</div><div class="body-text">${h(t?.output || "Output unavailable")}</div></div><div class="details-section"><div class="section-title">Applicability / Scope</div><div class="body-text">${h(t?.applicability || t?.scope || "Scope unavailable")}</div></div><div class="details-section"><div class="section-title">Coin Applicability</div><div class="body-text">Coins: ${h((t?.coin_applicability || []).join(", ") || "ALL")}\\nExcluded: ${h((t?.excluded_coins || []).join(", ") || "—")}\\nDirection: ${h(t?.direction_applicability || "—")}</div></div><div class="details-section"><div class="section-title">What this Trigger means</div><div class="body-text">${h(t?.how_it_works || "Backend trigger detail unavailable.")}</div></div><div class="details-section"><div class="section-title">Unavailable, ZERO, and NONE handling</div><div class="body-text">${h([t?.unavailable_reason, t?.zero_none_unavailable].filter(Boolean).join("\\n") || "If required backend observations or metric inputs are unavailable, the Trigger result is unavailable; the frontend does not convert missing facts to zero or fabricate a signal.")}</div></div><div class="details-section"><div class="section-title">Raw immutable configuration</div><div class="formula" style="white-space:pre-line">${h(JSON.stringify(t?.raw_definition || {}, null, 2))}</div></div><div class="details-section"><div class="section-title">Used in Set Versions</div><div class="reference-links">${usedIn.length ? usedIn.map(s => `<button class="reference-link js-open-set" data-set-id="${h(s.set_id)}" data-set-version="${h(s.set_version)}">${h(s.set_id)} ${h(s.set_version)} · ${h(s.version_state || setStatusLabel(s.set_status))}</button>`).join("") : "—"}</div></div><div class="details-section"><div class="section-title">Version History</div><div class="version-list">${versions.length ? versions.map(v => `<button class="version-button js-open-trigger ${v.version === (version || t?.version) ? "selected" : ""}" data-trigger-id="${h(id)}" data-trigger-version="${h(v.version)}">${h(v.version)} · ${h(v.version_state || "")}</button>`).join("") : "—"}</div></div>`;
+    if(detail) detail.innerHTML = `<div class="details-header"><div><div class="details-id">Trigger ${h(id)} · Version ${h(version || t?.version || "—")} · ${h(t?.version_state || "CURRENT")}</div><div class="details-title">${h(t?.display_name || id || "Trigger")}</div><div class="details-meta"><span class="meta-pill">Research status: ${h(t?.status || triggerStatusLabel(t))}</span><span class="meta-pill">${h(t?.family || "Research Trigger")}</span><span class="meta-pill">Implementation: ${h(t?.implementation_key || "—")}</span><span class="meta-pill">Digest: ${h(t?.canonical_digest || "—")}</span></div></div><button class="btn" type="button" onclick="openResearchView('triggers')">Back to Triggers</button></div><div class="details-section"><div class="section-title">Metric</div><div class="reference-links">${metricLinks || h(t?.metric || "Metric unavailable")}</div></div><div class="details-section"><div class="section-title">Formula</div><div class="body-text">${h(t?.formula || (t?.formula_refs || []).join(", ") || "—")}</div></div><div class="details-section"><div class="section-title">Condition</div><div class="formula" style="white-space:pre-line">${h(t?.formula_text || t?.condition || t?.what_it_checks || "Unavailable")}</div></div><div class="details-section"><div class="section-title">Operator / Threshold</div><div class="body-text">${h([t?.operator, t?.threshold].filter(Boolean).join(" ") || "—")}</div></div><div class="details-section"><div class="section-title">Output</div><div class="body-text">${h(t?.output || "Output unavailable")}</div></div><div class="details-section"><div class="section-title">Applicability / Scope</div><div class="body-text">${h(t?.applicability || t?.scope || "Scope unavailable")}</div></div><div class="details-section"><div class="section-title">Coin Applicability</div><div class="body-text">Coins: ${h((t?.coin_applicability || []).join(", ") || "ALL")}\\nExcluded: ${h((t?.excluded_coins || []).join(", ") || "—")}\\nDirection: ${h(t?.direction_applicability || "—")}</div></div><div class="details-section"><div class="section-title">What this Trigger means</div><div class="body-text">${h(t?.how_it_works || "Backend trigger detail unavailable.")}</div></div><div class="details-section"><div class="section-title">Unavailable, ZERO, and NONE handling</div><div class="body-text">${h([t?.unavailable_reason, t?.zero_none_unavailable].filter(Boolean).join("\\n") || "If required backend observations or metric inputs are unavailable, the Trigger result is unavailable; the frontend does not convert missing facts to zero or fabricate a signal.")}</div></div><div class="details-section"><div class="section-title">Raw immutable configuration</div><div class="formula" style="white-space:pre-line">${h(JSON.stringify(t?.raw_definition || {}, null, 2))}</div></div><div class="details-section"><div class="section-title">Used in Set Versions</div><div class="reference-links">${usedIn.length ? usedIn.map(s => `<button class="reference-link js-open-set" data-set-id="${h(s.set_id)}" data-set-version="${h(s.set_version)}">${h(s.set_id)} ${h(s.set_version)} · ${h(s.version_state || setStatusLabel(s.set_status))}</button>`).join("") : "—"}</div></div><div class="details-section"><div class="section-title">Version History</div><div class="version-list">${versions.length ? versions.map(v => `<button class="version-button js-open-trigger ${v.version === (version || t?.version) ? "selected" : ""}" data-trigger-id="${h(id)}" data-trigger-version="${h(v.version)}">${h(v.version)} · ${h(v.version_state || "")}</button>`).join("") : "—"}</div></div>`;
   };
   function renderSets(){
     const allRows = state.registry.research_sets || state.registry.sets || [];
@@ -2475,7 +2476,7 @@ def _reference_backend_script(payload: str) -> str:
     const detail = q("#set-details", desktop) || q("#setDetail", desktop);
     const triggerLinks = members.map(t => `<button class="reference-link js-open-trigger" data-trigger-id="${h(t.trigger_id)}" data-trigger-version="${h(t.version)}">${h(t.trigger_id)} ${h(t.version)}</button>`).join(" ");
     const condition = members.map(t => `<div><span class="logic-trigger">${h(t.trigger_id)} ${h(t.version)}</span> ${h(t.role || "")} ${h(t.condition || "")}</div>`).join("");
-    if(detail) detail.innerHTML = `<div class="details-header"><div class="details-id">Set ${h(id)} · Version ${h(version)} · ${h(s?.version_state || "CURRENT")}</div><div class="details-title">${h(s?.display_name || s?.purpose || id || "Set")}</div><div class="details-meta"><span class="meta-pill">Research status: ${h(s?.status || "UNKNOWN")}</span><span class="meta-pill">Direction: ${h(s?.direction || "—")}</span><span class="meta-pill">Triggers: ${h(s?.trigger_count ?? members.length)}</span><span class="meta-pill">Digest: ${h(s?.canonical_digest || "—")}</span></div></div><div class="details-section"><div class="section-title">Hypothesis / Scope</div><div class="body-text">Hypothesis: ${h(s?.hypothesis || (s?.hypothesis_ids || []).join(", ") || "—")}\\nCoins: ${h(s?.coin_scope || (s?.coin_applicability || []).join(", ") || "ALL")}\\nExcluded: ${h((s?.excluded_coins || []).join(", ") || "—")}\\nSegment: ${h(s?.segment_applicability || "—")}</div></div><div class="details-section"><div class="section-title">Trigger Versions Used</div><div class="reference-links">${triggerLinks || "—"}</div></div><div class="details-section"><div class="section-title">Membership Order</div><div class="set-logic">${condition || "No trigger versions recorded"}</div></div><div class="details-section"><div class="section-title">Composition / Direction Semantics</div><div class="formula" style="white-space:pre-line">${h([s?.trigger_composition_logic || s?.composition, s?.direction_semantics].filter(Boolean).join("\\n\\n") || "—")}</div></div><div class="details-section"><div class="section-title">Raw immutable Set configuration</div><div class="formula" style="white-space:pre-line">${h(JSON.stringify(s?.raw_definition || {}, null, 2))}</div></div><div class="details-section"><div class="section-title">Version History</div><div class="version-list">${(s?.version_history || []).map(v => `<button class="version-button js-open-set ${v.version === (version || s?.version) ? "selected" : ""}" data-set-id="${h(id)}" data-set-version="${h(v.version)}">${h(v.version)} · ${h(v.version_state || "")}</button>`).join("") || "—"}</div></div>`;
+    if(detail) detail.innerHTML = `<div class="details-header"><div><div class="details-id">Set ${h(id)} · Version ${h(version)} · ${h(s?.version_state || "CURRENT")}</div><div class="details-title">${h(s?.display_name || s?.purpose || id || "Set")}</div><div class="details-meta"><span class="meta-pill">Research status: ${h(s?.status || "UNKNOWN")}</span><span class="meta-pill">Direction: ${h(s?.direction || "—")}</span><span class="meta-pill">Triggers: ${h(s?.trigger_count ?? members.length)}</span><span class="meta-pill">Digest: ${h(s?.canonical_digest || "—")}</span></div></div><button class="btn" type="button" onclick="openResearchView('sets')">Back to Sets</button></div><div class="details-section"><div class="section-title">Hypothesis / Scope</div><div class="body-text">Hypothesis: ${h(s?.hypothesis || (s?.hypothesis_ids || []).join(", ") || "—")}\\nCoins: ${h(s?.coin_scope || (s?.coin_applicability || []).join(", ") || "ALL")}\\nExcluded: ${h((s?.excluded_coins || []).join(", ") || "—")}\\nSegment: ${h(s?.segment_applicability || "—")}</div></div><div class="details-section"><div class="section-title">Trigger Versions Used</div><div class="reference-links">${triggerLinks || "—"}</div></div><div class="details-section"><div class="section-title">Membership Order</div><div class="set-logic">${condition || "No trigger versions recorded"}</div></div><div class="details-section"><div class="section-title">Composition / Direction Semantics</div><div class="formula" style="white-space:pre-line">${h([s?.trigger_composition_logic || s?.composition, s?.direction_semantics].filter(Boolean).join("\\n\\n") || "—")}</div></div><div class="details-section"><div class="section-title">Raw immutable Set configuration</div><div class="formula" style="white-space:pre-line">${h(JSON.stringify(s?.raw_definition || {}, null, 2))}</div></div><div class="details-section"><div class="section-title">Version History</div><div class="version-list">${(s?.version_history || []).map(v => `<button class="version-button js-open-set ${v.version === (version || s?.version) ? "selected" : ""}" data-set-id="${h(id)}" data-set-version="${h(v.version)}">${h(v.version)} · ${h(v.version_state || "")}</button>`).join("") || "—"}</div></div>`;
   };
   ["trigger-search","trigger-version-state-filter","trigger-formula-filter"].forEach(id => q("#"+id, desktop)?.addEventListener("input", renderTriggers));
   ["set-search","set-version-state-filter"].forEach(id => q("#"+id, desktop)?.addEventListener("input", renderSets));
@@ -2486,7 +2487,11 @@ def _reference_backend_script(payload: str) -> str:
     const c = state.rules.current;
     const body = q("#config-rules .rules-stack", desktop) || q("#rules-body", desktop) || q("#rulesBody", desktop);
     if(!body) return;
-    if(!c) return;
+    if(!c){
+      body.innerHTML = '<section class="rules-section"><div class="empty">Current Trading Rules version unavailable.</div></section>';
+      renderResearchRules();
+      return;
+    }
     if(coinDraftVersion !== c.rules_version_id){
       coinDraftVersion = c.rules_version_id;
       coinDraft = (c.coins || []).map(x => ({
@@ -2543,7 +2548,11 @@ def _reference_backend_script(payload: str) -> str:
     }
     const history = q(".history-panel", body);
     if(history){
-      history.innerHTML = '<div class="history-title">Version History</div>' + ((state.rules.history || []).map(v => `<div class="history-row"><button class="link">${h(v.display_version)}</button><span class="badge inactive">Inactive</span><div>${h(v.change_summary || "Previous configuration")}</div><div>${h(v.created_at || "—")}</div></div>`).join("") || '<div class="history-row"><button class="link">—</button><span class="badge inactive">Unavailable</span><div>No version history.</div><div>—</div></div>');
+      history.innerHTML = '<div class="history-title">Version History</div>' + ((state.rules.history || []).map(v => `<div class="history-row"><button class="link js-open-rules-version" type="button" data-rules-version="${h(rulesVersionIdentity(v))}">${h(rulesVersionLabel(v))}</button><span class="badge inactive">${h(rulesVersionState(v))}</span><div>${h(v.change_summary || "Previous configuration")}</div><div>${h(v.created_at || "—")}</div></div>`).join("") || '<div class="history-row"><button class="link" type="button">—</button><span class="badge inactive">Unavailable</span><div>No version history.</div><div>—</div></div>');
+      qa(".js-open-rules-version", history).forEach(button => button.onclick = () => {
+        openResearchView("rules");
+        window.showRulesVersion(button.dataset.rulesVersion || "");
+      });
     }
     const footer = q(".coins-footer", body);
     if(footer){
@@ -2568,7 +2577,49 @@ def _reference_backend_script(payload: str) -> str:
       qa(".mode-btn", button.closest(".mode-selector")).forEach(node => node.classList.toggle("active", node === button));
     }));
     q(".save-btn", body)?.addEventListener("click", window.saveRulesVersion);
+    renderResearchRules();
   }
+  function rulesVersionIdentity(record){
+    return String(record?.rules_version_id || record?.version || record?.display_version || "");
+  }
+  function rulesVersionLabel(record){
+    return String(record?.display_version || record?.rules_version_id || record?.version || "Rules version");
+  }
+  function rulesVersionState(record){
+    const currentId = rulesVersionIdentity(state.rules.current);
+    const id = rulesVersionIdentity(record);
+    if(!id) return "UNAVAILABLE";
+    return currentId && id === currentId ? "CURRENT" : "HISTORICAL";
+  }
+  function rulesRecords(){
+    const records = [];
+    if(state.rules.current) records.push(state.rules.current);
+    (state.rules.history || []).forEach(record => records.push(record));
+    return records;
+  }
+  function renderResearchRules(){
+    const body = q("#research-rules-body", desktop);
+    const detail = q("#research-rules-detail", desktop);
+    if(!body) return;
+    const records = rulesRecords();
+    const rows = records.map(record => `<tr><td><button class="link js-open-rules-version" type="button" data-rules-version="${h(rulesVersionIdentity(record))}">${h(rulesVersionLabel(record))}</button><div class="panel-meta">${h(rulesVersionIdentity(record))}</div></td><td>${badge(rulesVersionState(record))}</td><td>${h(record.status || record.rules_status || "PERSISTED")}</td><td>${h(record.change_summary || (rulesVersionState(record) === "CURRENT" ? "Current persisted Trading Rules version" : "Previous persisted Trading Rules version"))}</td><td>${h(record.created_at || "—")}</td></tr>`).join("");
+    body.innerHTML = records.length ? rows : '<tr><td colspan="5" class="empty">No persisted TradingRulesVersion records are available.</td></tr>';
+    qa(".js-open-rules-version", body).forEach(button => button.onclick = () => window.showRulesVersion(button.dataset.rulesVersion || ""));
+    if(detail && !detail.dataset.loaded){
+      detail.innerHTML = '<div class="details-header"><div><div class="details-id">Research Rules</div><div class="details-title">Persisted Trading Rules versions</div><div class="details-meta"><span class="meta-pill">Research Rules import pending</span><span class="meta-pill">Read-only</span></div></div></div><div class="details-section"><div class="section-title">Research Rules production state</div><div class="body-text">Research Rules are not imported to production in this task. This view shows only actual persisted TradingRulesVersion records returned by the existing Rules read model; it does not fabricate Research Rules from source artifacts.</div></div>';
+    }
+  }
+  window.showRulesVersion = function(identity){
+    const record = rulesRecords().find(item => rulesVersionIdentity(item) === identity);
+    const detail = q("#research-rules-detail", desktop);
+    if(!detail) return;
+    if(!record){
+      detail.innerHTML = `<div class="details-header"><div><div class="details-id">Rules version unavailable</div><div class="details-title">No persisted record selected</div></div><button class="btn" type="button" onclick="openResearchView('rules')">Back to Rules</button></div>`;
+      return;
+    }
+    detail.dataset.loaded = "1";
+    detail.innerHTML = `<div class="details-header"><div><div class="details-id">Rules ${h(rulesVersionIdentity(record))} · ${h(rulesVersionState(record))}</div><div class="details-title">${h(rulesVersionLabel(record))}</div><div class="details-meta"><span class="meta-pill">Status: ${h(record.status || record.rules_status || "PERSISTED")}</span><span class="meta-pill">Hash: ${h(record.config_hash || record.digest || "—")}</span></div></div><button class="btn" type="button" onclick="openResearchView('rules')">Back to Rules</button></div><div class="details-section"><div class="section-title">Change Summary</div><div class="body-text">${h(record.change_summary || "No change summary recorded.")}</div></div><div class="details-section"><div class="section-title">Position Rules</div><div class="formula" style="white-space:pre-line">${h(JSON.stringify(record.position_rules || {}, null, 2))}</div></div><div class="details-section"><div class="section-title">Portfolio Rules</div><div class="formula" style="white-space:pre-line">${h(JSON.stringify(record.portfolio_rules || {}, null, 2))}</div></div><div class="details-section"><div class="section-title">Coins</div><div class="body-text">${h((record.coins || []).map(coin => [coin.symbol, coin.enabled === false ? "disabled" : "enabled", coin.max_allocation_pct ? coin.max_allocation_pct + "%" : ""].filter(Boolean).join(" · ")).join("\\n") || "No coin allocation records.")}</div></div>`;
+  };
   function setRulesSaveState(message, tone="neutral"){
     const body = q("#config-rules .rules-stack", desktop) || q("#rules-body", desktop) || q("#rulesBody", desktop);
     const row = q(".rules-save", body);
@@ -2950,7 +3001,7 @@ def _reference_backend_script(payload: str) -> str:
     else if(state.registry.selected_set) window.showSet(state.registry.selected_set.set_id, state.registry.selected_set.version);
   }else if(initialPage === "research"){
     const parts = location.pathname.split("/").filter(Boolean);
-    openResearchView(parts[1] === "triggers" || parts[1] === "sets" ? parts[1] : "overview", {preserveUrl:true});
+    openResearchView(parts[1] === "triggers" || parts[1] === "sets" || parts[1] === "rules" ? parts[1] : "overview", {preserveUrl:true});
   }else{
     showPage(initialPage);
   }
@@ -3031,13 +3082,14 @@ def _remove_config_research_registry_panels(html_source: str) -> str:
 def _research_registry_panels() -> str:
     return (
         """
-  <nav class="research-nav"><div class="research-tabs"><button type="button" class="research-tab active" data-research-view="overview">Overview</button><button type="button" class="research-tab" data-research-view="triggers">Triggers</button><button type="button" class="research-tab" data-research-view="sets">Sets</button></div></nav>
+  <nav class="research-nav"><div class="research-tabs"><button type="button" class="research-tab active" data-research-view="overview">Overview</button><button type="button" class="research-tab" data-research-view="triggers">Triggers</button><button type="button" class="research-tab" data-research-view="sets">Sets</button><button type="button" class="research-tab" data-research-view="rules">Rules</button></div></nav>
   <section class="research-view active" id="research-overview">
 """
         + """
   </section>
   <section id="research-triggers" class="research-view"><div class="layout"><section class="panel"><div class="panel-header"><div><div class="panel-title">Research Triggers</div><div class="panel-meta">Immutable trigger versions from the Research registry</div></div><div class="toolbar"><input class="search" id="trigger-search" placeholder="Search trigger ID"><select id="trigger-version-state-filter"><option value="">Version State: All</option><option>CURRENT</option><option>HISTORICAL</option></select><select id="trigger-formula-filter"><option value="">Formula: All</option></select></div></div><div class="table-wrap"><table><thead><tr><th>Trigger</th><th>Version</th><th>Metric</th><th>Formula</th><th>Condition</th><th>Output</th><th>Applicability</th><th>Status</th><th>Version State</th></tr></thead><tbody id="triggers-body"></tbody></table></div></section><section class="panel" id="trigger-details"></section></div></section>
   <section id="research-sets" class="research-view"><div class="layout"><section class="panel"><div class="panel-header"><div><div class="panel-title">Research Sets</div><div class="panel-meta">Immutable Research Set versions from the Set registry</div></div><div class="toolbar"><input class="search" id="set-search" placeholder="Search Set or hypothesis"><select id="set-version-state-filter"><option value="">Version State: All</option><option>CURRENT</option><option>HISTORICAL</option></select></div></div><div class="table-wrap"><table><thead><tr><th>Set</th><th>Version</th><th>Hypothesis</th><th>Direction</th><th>Coin / Scope</th><th>Trigger Count</th><th>Status</th><th>Version State</th></tr></thead><tbody id="sets-body"></tbody></table></div></section><section class="panel" id="set-details"></section></div></section>
+  <section id="research-rules" class="research-view"><div class="layout"><section class="panel"><div class="panel-header"><div><div class="panel-title">Research Rules</div><div class="panel-meta">Read-only persisted TradingRulesVersion records. Research Rules import is pending.</div></div><button class="btn" type="button" onclick="openConfig('rules')">Open Trading Rules Editor</button></div><div class="details-section"><div class="section-title">Production Rules state</div><div class="body-text">Research Rules are not imported to production yet. This Research view exposes only actual persisted Rules versions already returned by the existing backend Rules read model.</div></div><div class="table-wrap"><table><thead><tr><th>Version</th><th>Version State</th><th>Status</th><th>Summary</th><th>Created</th></tr></thead><tbody id="research-rules-body"></tbody></table></div></section><section class="panel" id="research-rules-detail"></section></div></section>
 """
     )
 

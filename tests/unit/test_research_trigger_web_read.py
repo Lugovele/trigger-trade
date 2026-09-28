@@ -198,6 +198,57 @@ def test_dashboard_renders_research_trigger_list_and_detail_without_mutation_con
     assert "saveTrigger" not in html
 
 
+def test_research_page_exposes_trigger_set_rules_journeys_without_fake_research_rules():
+    registry = _FakeTriggerRegistry(_research_v1_rules())
+    set_registry = _FakeResearchSetRegistry(_research_v1_sets())
+    html = render_dashboard(
+        DashboardReadModel(_tmp_db_path()),
+        initial_page="research",
+        trigger_registry=registry,
+        research_set_registry=set_registry,
+    )
+
+    assert 'data-research-view="overview">Overview</button>' in html
+    assert 'data-research-view="triggers">Triggers</button>' in html
+    assert 'data-research-view="sets">Sets</button>' in html
+    assert 'data-research-view="rules">Rules</button>' in html
+    assert 'id="research-triggers"' in html
+    assert 'id="research-sets"' in html
+    assert 'id="research-rules"' in html
+    assert "Back to Triggers" in html
+    assert "Back to Sets" in html
+    assert "Back to Rules" in html
+    assert "Research Rules import is pending" in html
+    assert "does not fabricate Research Rules" in html
+    assert '"trigger_id": "TR-R-BTC-001"' in html
+    assert '"set_id": "SET-R-BTC-001"' in html
+    assert '"version": "SET-R-BTC-001-V1"' in html
+    assert "TRV-R-POS-" not in html
+    assert "TRV-R-PORT-" not in html
+
+
+def test_research_rules_route_renders_visible_rules_destination():
+    registry = _FakeTriggerRegistry(_research_v1_rules())
+    set_registry = _FakeResearchSetRegistry(_research_v1_sets())
+    server = create_server(port=0, db_path=_tmp_db_path(), trigger_registry=registry, research_set_registry=set_registry)
+    host, port = server.server_address
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        html = _text_request(host, port, "GET", "/research/rules")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+    assert 'data-research-view="rules">Rules</button>' in html
+    assert 'id="research-rules"' in html
+    assert "Research Rules import is pending" in html
+    assert 'parts[1] === "triggers" || parts[1] === "sets" || parts[1] === "rules"' in html
+    assert "TRV-R-POS-" not in html
+    assert "TRV-R-PORT-" not in html
+
+
 def _by_id(rows, trigger_id: str) -> dict[str, object]:
     return next(row for row in rows if row["trigger_id"] == trigger_id)
 
@@ -221,6 +272,14 @@ def _json_request(host, port, method: str, path: str, *, data: bytes | None = No
         body = exc.read().decode("utf-8")
         assert exc.code == expected
         return json.loads(body) if body.startswith("{") else body
+
+
+def _text_request(host, port, method: str, path: str, *, expected=HTTPStatus.OK) -> str:
+    request = Request(f"http://{host}:{port}{path}", method=method)
+    with urlopen(request, timeout=5) as response:
+        body = response.read().decode("utf-8")
+        assert response.status == expected
+        return body
 
 
 def _research_v1_rules() -> tuple[RuleDefinition, ...]:
