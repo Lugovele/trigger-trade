@@ -5,10 +5,12 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 import json
 from pathlib import Path
+import re
 
 import pytest
 
 from triggertrade.backtest.models import HistoricalCandle
+import triggertrade.research_v1_historical_triggers as historical_triggers
 from triggertrade.research_v1_execution import RESEARCH_V1_SYMBOLS
 from triggertrade.research_v1_historical_triggers import (
     HISTORICAL_READY_METRICS,
@@ -19,6 +21,14 @@ from triggertrade.research_v1_historical_triggers import (
     research_v1_trigger_metric_inventory,
 )
 from triggertrade.trigger_sets import RuleDefinition, RuleStatus, RuleType
+
+
+def test_aggregation_provenance_has_no_process_local_side_map_or_id_lookup():
+    source = Path("src/triggertrade/research_v1_historical_triggers.py").read_text(encoding="utf-8")
+
+    assert not hasattr(historical_triggers, "_AGGREGATED_CANDLE_CONSTITUENTS")
+    assert "_AGGREGATED_CANDLE_CONSTITUENTS" not in source
+    assert re.search(r"\bid\s*\(", source) is None
 
 
 def test_research_v1_trigger_inventory_is_source_derived_from_set_package():
@@ -221,6 +231,29 @@ def test_de_deterministic_replay_produces_same_evidence():
     )[0]
 
     assert first.metric_evidence_id == second.metric_evidence_id
+    assert first.evidence_id == second.evidence_id
+
+
+def test_de_independent_aggregation_rebuild_preserves_evidence_identity():
+    rule = _rule("TR-R-006")
+    candles = _one_minute_buckets_15m(tuple(str(100 + index) for index in range(9)))
+    rebuilt = tuple(replace(candle) for candle in candles)
+
+    first = produce_research_v1_historical_metric(
+        metric_ref="DE",
+        rule=rule,
+        candles=candles,
+        symbol="BTCUSDT",
+    )
+    second = produce_research_v1_historical_metric(
+        metric_ref="DE",
+        rule=rule,
+        candles=rebuilt,
+        symbol="BTCUSDT",
+    )
+
+    assert first.status == "AVAILABLE"
+    assert second.status == "AVAILABLE"
     assert first.evidence_id == second.evidence_id
 
 
@@ -448,6 +481,30 @@ def test_atr_percentile_same_rank_different_reference_population_changes_evidenc
     assert first.value == second.value == "100"
     assert first.evidence_id != second.evidence_id
     assert first.payload["atr_percentile"]["reference_population_digest"] != second.payload["atr_percentile"]["reference_population_digest"]
+
+
+def test_atr_percentile_independent_aggregation_rebuild_preserves_evidence_identity():
+    rule = _rule("TR-R-007")
+    candles = _flat_atr_source_minutes(days=15, extra_buckets=1)
+    rebuilt = tuple(replace(candle) for candle in candles)
+
+    first = produce_research_v1_historical_metric(
+        metric_ref="ATR percentile",
+        rule=rule,
+        candles=candles,
+        symbol="BTCUSDT",
+    )
+    second = produce_research_v1_historical_metric(
+        metric_ref="ATR percentile",
+        rule=rule,
+        candles=rebuilt,
+        symbol="BTCUSDT",
+    )
+
+    assert first.status == "AVAILABLE"
+    assert second.status == "AVAILABLE"
+    assert first.evidence_id == second.evidence_id
+    assert first.payload["atr_percentile"]["reference_population_digest"] == second.payload["atr_percentile"]["reference_population_digest"]
 
 
 def test_swing_sequence_state_remains_fail_closed_without_factual_tick_metadata():

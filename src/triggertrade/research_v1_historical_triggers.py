@@ -35,8 +35,6 @@ from triggertrade.triggers import DeclarativeMetricPredicateTrigger, Declarative
 
 RESEARCH_V1_HISTORICAL_TRIGGER_PRODUCER_VERSION = "research-v1-historical-trigger-producer-v1"
 
-_AGGREGATED_CANDLE_CONSTITUENTS: dict[int, tuple[str, ...]] = {}
-
 HISTORICAL_READY_METRICS = frozenset(
     {
         "F-001 trigger_result",
@@ -71,6 +69,61 @@ class ResearchV1HistoricalTriggerError(ValueError):
 
 class ResearchV1HistoricalTriggerInputUnavailable(ResearchV1HistoricalTriggerError):
     """Raised for unsupported or unavailable factual trigger inputs."""
+
+
+@dataclass(frozen=True)
+class AggregatedHistoricalCandle:
+    candle: HistoricalCandle
+    constituent_candle_ids: tuple[str, ...]
+    aggregation_provenance_digest: str
+
+    @property
+    def symbol(self) -> str:
+        return self.candle.symbol
+
+    @property
+    def category(self) -> str:
+        return self.candle.category
+
+    @property
+    def timeframe(self) -> str:
+        return self.candle.timeframe
+
+    @property
+    def open_time(self) -> datetime:
+        return self.candle.open_time
+
+    @property
+    def close_time(self) -> datetime:
+        return self.candle.close_time
+
+    @property
+    def open(self) -> Decimal:
+        return self.candle.open
+
+    @property
+    def high(self) -> Decimal:
+        return self.candle.high
+
+    @property
+    def low(self) -> Decimal:
+        return self.candle.low
+
+    @property
+    def close(self) -> Decimal:
+        return self.candle.close
+
+    @property
+    def volume(self) -> Decimal:
+        return self.candle.volume
+
+    @property
+    def turnover(self) -> Decimal:
+        return self.candle.turnover
+
+    @property
+    def completed(self) -> bool:
+        return self.candle.completed
 
 
 @dataclass(frozen=True)
@@ -484,7 +537,7 @@ def _eligible_candles(
     return selected
 
 
-def _aggregate_completed_candles(candles: Sequence[HistoricalCandle], *, timeframe: str) -> tuple[HistoricalCandle, ...]:
+def _aggregate_completed_candles(candles: Sequence[HistoricalCandle], *, timeframe: str) -> tuple[AggregatedHistoricalCandle, ...]:
     source = tuple(candles)
     if not source:
         return ()
@@ -494,7 +547,7 @@ def _aggregate_completed_candles(candles: Sequence[HistoricalCandle], *, timefra
     for candle in source:
         start = _bucket_start(candle.open_time, duration)
         buckets.setdefault(start, []).append(candle)
-    aggregated: list[HistoricalCandle] = []
+    aggregated: list[AggregatedHistoricalCandle] = []
     for bucket_start in sorted(buckets):
         bucket = tuple(sorted(buckets[bucket_start], key=lambda item: item.open_time))
         expected_open_times = tuple(bucket_start + timedelta(minutes=index) for index in range(per_bucket))
@@ -518,12 +571,25 @@ def _aggregate_completed_candles(candles: Sequence[HistoricalCandle], *, timefra
             turnover=sum((item.turnover for item in bucket), Decimal("0")),
             completed=True,
         )
-        _AGGREGATED_CANDLE_CONSTITUENTS[id(aggregated_candle)] = tuple(_candle_id(item) for item in bucket)
-        aggregated.append(aggregated_candle)
+        constituent_candle_ids = tuple(_candle_id(item) for item in bucket)
+        aggregation_digest = canonical_json_digest(
+            {
+                "timeframe": timeframe,
+                "aggregated_candle_id": _raw_candle_id(aggregated_candle),
+                "constituent_candle_ids": constituent_candle_ids,
+            }
+        )
+        aggregated.append(
+            AggregatedHistoricalCandle(
+                candle=aggregated_candle,
+                constituent_candle_ids=constituent_candle_ids,
+                aggregation_provenance_digest=aggregation_digest,
+            )
+        )
     return tuple(aggregated)
 
 
-def _atr_pct_series(candles: Sequence[HistoricalCandle]) -> tuple[tuple[HistoricalCandle, Any], ...]:
+def _atr_pct_series(candles: Sequence[AggregatedHistoricalCandle]) -> tuple[tuple[AggregatedHistoricalCandle, Any], ...]:
     ordered = tuple(candles)
     if len(ordered) < 15:
         return ()
@@ -531,7 +597,7 @@ def _atr_pct_series(candles: Sequence[HistoricalCandle]) -> tuple[tuple[Historic
     seed = wilder_atr_seed(seed_candles=seed_candles, predecessor_close=_decimal_text(ordered[0].close))
     if seed.status is not IndicatorStatus.AVAILABLE or seed.atr_work is None:
         return ()
-    series: list[tuple[HistoricalCandle, Any]] = [(ordered[14], seed)]
+    series: list[tuple[AggregatedHistoricalCandle, Any]] = [(ordered[14], seed)]
     prior_atr = seed.atr_work
     for index in range(15, len(ordered)):
         update = wilder_atr_update(
@@ -547,7 +613,7 @@ def _atr_pct_series(candles: Sequence[HistoricalCandle]) -> tuple[tuple[Historic
 
 
 def _eligible_atr_percentile_reference_population(
-    series: Sequence[tuple[HistoricalCandle, Any]],
+    series: Sequence[tuple[AggregatedHistoricalCandle, Any]],
     *,
     evaluation_at: datetime,
 ) -> dict[str, Any] | None:
@@ -593,7 +659,7 @@ def _eligible_atr_percentile_reference_population(
     }
 
 
-def _atr_observation_provenance(candle: HistoricalCandle, update: Any) -> dict[str, Any]:
+def _atr_observation_provenance(candle: AggregatedHistoricalCandle, update: Any) -> dict[str, Any]:
     payload = {
         "candle_id": _candle_id(candle),
         "opened_at": _iso(candle.open_time),
@@ -684,7 +750,7 @@ def _is_contiguous_one_minute_window(candles: Sequence[HistoricalCandle]) -> boo
     return _is_contiguous_window(candles, timedelta(minutes=1))
 
 
-def _is_contiguous_window(candles: Sequence[HistoricalCandle], duration: timedelta) -> bool:
+def _is_contiguous_window(candles: Sequence[Any], duration: timedelta) -> bool:
     if not candles:
         return False
     previous_close: datetime | None = None
@@ -714,7 +780,7 @@ def _bucket_start(value: datetime, duration: timedelta) -> datetime:
     return midnight + timedelta(minutes=bucket_minutes)
 
 
-def _set_candle(candle: HistoricalCandle) -> Candle:
+def _set_candle(candle: Any) -> Candle:
     return Candle(
         candle_id=_candle_id(candle),
         symbol=candle.symbol.upper(),
@@ -750,8 +816,18 @@ def _metric_ref(rule: RuleDefinition) -> str:
     return str(value)
 
 
-def _candle_id(candle: HistoricalCandle) -> str:
-    constituent_ids = _AGGREGATED_CANDLE_CONSTITUENTS.get(id(candle))
+def _candle_id(candle: HistoricalCandle | AggregatedHistoricalCandle) -> str:
+    if isinstance(candle, AggregatedHistoricalCandle):
+        basis = {
+            "aggregation_provenance_digest": candle.aggregation_provenance_digest,
+            "constituent_candle_ids": list(candle.constituent_candle_ids),
+            "candle_id": _raw_candle_id(candle.candle),
+        }
+        return f"hist-candle-{canonical_json_digest(basis)[:24]}"
+    return _raw_candle_id(candle)
+
+
+def _raw_candle_id(candle: HistoricalCandle) -> str:
     basis = {
         "symbol": candle.symbol.upper(),
         "category": candle.category,
@@ -765,8 +841,6 @@ def _candle_id(candle: HistoricalCandle) -> str:
         "volume": _decimal_text(candle.volume),
         "turnover": _decimal_text(candle.turnover),
     }
-    if constituent_ids is not None:
-        basis["aggregation_constituent_candle_ids"] = list(constituent_ids)
     return f"hist-candle-{canonical_json_digest(basis)[:24]}"
 
 
