@@ -508,6 +508,105 @@ def test_atr_percentile_independent_aggregation_rebuild_preserves_evidence_ident
     assert first.payload["atr_percentile"]["reference_population_digest"] == second.payload["atr_percentile"]["reference_population_digest"]
 
 
+def test_tod_rel_turnover_uses_same_clock_5m_turnover_median():
+    rule = _rule("TR-R-017")
+    candles = _same_clock_5m_turnover_minutes(
+        current_turnover="20",
+        prior_turnovers=tuple("10" for _ in range(14)),
+    )
+
+    observation = produce_research_v1_historical_metric(
+        metric_ref="TOD_REL_TURNOVER",
+        rule=rule,
+        candles=candles,
+        symbol="BTCUSDT",
+    )
+
+    assert observation.status == "AVAILABLE"
+    assert observation.value == "2"
+    assert observation.payload["tod_rel_turnover"]["reference_count"] == 14
+    assert observation.payload["tod_rel_turnover"]["turnover_basis"] == "quote_notional_turnover"
+
+
+def test_tod_rel_turnover_missing_same_clock_day_is_unavailable():
+    rule = _rule("TR-R-017")
+    candles = _same_clock_5m_turnover_minutes(
+        current_turnover="20",
+        prior_turnovers=tuple("10" for _ in range(15)),
+        missing_offsets={7},
+    )
+
+    observation = produce_research_v1_historical_metric(
+        metric_ref="TOD_REL_TURNOVER",
+        rule=rule,
+        candles=candles,
+        symbol="BTCUSDT",
+    )
+
+    assert observation.status == "UNAVAILABLE"
+    assert observation.reason_code == "research_v1_historical_tod_rel_turnover_unavailable:INSUFFICIENT_SAME_CLOCK_HISTORY"
+
+
+def test_tod_rel_turnover_replay_order_and_input_provenance_are_deterministic():
+    rule = _rule("TR-R-017")
+    candles = _same_clock_5m_turnover_minutes(
+        current_turnover="20",
+        prior_turnovers=tuple("10" for _ in range(14)),
+    )
+    changed = tuple(
+        replace(candle, volume=Decimal("0.4"), turnover=Decimal("4"))
+        if candle.open_time == datetime(2026, 9, 19, 12, 0, tzinfo=UTC)
+        else candle
+        for candle in candles
+    )
+
+    first = produce_research_v1_historical_metric(
+        metric_ref="TOD_REL_TURNOVER",
+        rule=rule,
+        candles=candles,
+        symbol="BTCUSDT",
+    )
+    reversed_order = produce_research_v1_historical_metric(
+        metric_ref="TOD_REL_TURNOVER",
+        rule=rule,
+        candles=tuple(reversed(candles)),
+        symbol="BTCUSDT",
+    )
+    changed_input = produce_research_v1_historical_metric(
+        metric_ref="TOD_REL_TURNOVER",
+        rule=rule,
+        candles=changed,
+        symbol="BTCUSDT",
+    )
+
+    assert first.evidence_digest == reversed_order.evidence_digest
+    assert first.evidence_digest != changed_input.evidence_digest
+
+
+def test_remaining_phase4_metrics_stay_fail_closed_without_factual_sources():
+    candles = _vnm_5m_source_minutes(days=16, extra_buckets=1)
+
+    for trigger_id, metric_ref in (
+        ("TR-R-004", "classifier_direction"),
+        ("TR-R-011", "RELATIVE_RETURN_15m"),
+        ("TR-R-013", "AGGRESSIVE_VOLUME_DELTA_PCT"),
+        ("TR-R-018", "BTC_CONTEXT_SCORE"),
+        ("TR-R-022", "VNM_5m_z"),
+    ):
+        with pytest.raises(
+            ResearchV1HistoricalTriggerInputUnavailable,
+            match=f"research_v1_historical_trigger_input_unavailable:{trigger_id}",
+        ):
+            evaluate_research_v1_historical_triggers(
+                rules=(_rule(trigger_id),),
+                candles=candles,
+                symbol="BTCUSDT",
+                trigger_set_id="SET-R-UNIT",
+                trigger_set_version="v1",
+            )
+        assert metric_readiness(metric_ref) == "IMPLEMENTATION_MISSING"
+
+
 def test_swing_sequence_state_requires_factual_tick_metadata():
     rule = _rule("TR-R-009")
     candles = _one_minute_buckets_1h(_bullish_swing_hourly_ohlc())
@@ -891,12 +990,11 @@ def test_deterministic_replay_produces_same_metric_and_trigger_evidence():
 
 
 def test_unsupported_required_metric_fails_closed_and_no_set_formation_occurs():
-    rule = _rule("TR-R-BTC-005")
     candles = tuple(_candle(index, close="100") for index in range(6))
 
-    unsupported_rule = _rule("TR-R-BTC-008")
+    unsupported_rule = _rule("TR-R-013")
 
-    with pytest.raises(ResearchV1HistoricalTriggerInputUnavailable, match="research_v1_historical_trigger_input_unavailable:TR-R-BTC-008"):
+    with pytest.raises(ResearchV1HistoricalTriggerInputUnavailable, match="research_v1_historical_trigger_input_unavailable:TR-R-013"):
         evaluate_research_v1_historical_triggers(
             rules=(unsupported_rule,),
             candles=candles,
@@ -907,8 +1005,10 @@ def test_unsupported_required_metric_fails_closed_and_no_set_formation_occurs():
 
     assert metric_readiness("DE") == "HISTORICAL_READY"
     assert metric_readiness("ATR percentile") == "HISTORICAL_READY"
-    assert metric_readiness("TOD_REL_TURNOVER") == "IMPLEMENTATION_MISSING"
-    assert "TOD_REL_TURNOVER" not in HISTORICAL_READY_METRICS
+    assert metric_readiness("TOD_REL_TURNOVER") == "HISTORICAL_READY"
+    assert "TOD_REL_TURNOVER" in HISTORICAL_READY_METRICS
+    assert metric_readiness("AGGRESSIVE_VOLUME_DELTA_PCT") == "IMPLEMENTATION_MISSING"
+    assert metric_readiness("VNM_5m_z") == "IMPLEMENTATION_MISSING"
 
 
 def _rule(trigger_id: str) -> RuleDefinition:
@@ -996,6 +1096,79 @@ def _flat_atr_source_minutes(*, days: int, extra_buckets: int) -> tuple[Historic
                 close=close_value,
                 volume=Decimal("1"),
                 turnover=close_value,
+                completed=True,
+            )
+        )
+    return tuple(candles)
+
+
+def _same_clock_5m_turnover_minutes(
+    *,
+    current_turnover: str,
+    prior_turnovers: tuple[str, ...],
+    missing_offsets: set[int] | None = None,
+) -> tuple[HistoricalCandle, ...]:
+    missing_offsets = missing_offsets or set()
+    current_start = datetime(2026, 9, 30, 12, 0, tzinfo=UTC)
+    candles: list[HistoricalCandle] = []
+    entries = [(0, current_turnover)] + [
+        (offset, turnover)
+        for offset, turnover in enumerate(prior_turnovers, start=1)
+        if offset not in missing_offsets
+    ]
+    for offset, turnover in entries:
+        bucket_start = current_start - timedelta(days=offset)
+        minute_turnover = Decimal(turnover) / Decimal("5")
+        close = Decimal("10")
+        volume = minute_turnover / close
+        for minute in range(5):
+            opened = bucket_start + timedelta(minutes=minute)
+            candles.append(
+                HistoricalCandle(
+                    symbol="BTCUSDT",
+                    category="linear",
+                    timeframe="1m",
+                    open_time=opened,
+                    close_time=opened + timedelta(minutes=1),
+                    open=close,
+                    high=close,
+                    low=close,
+                    close=close,
+                    volume=volume,
+                    turnover=minute_turnover,
+                    completed=True,
+                )
+            )
+    return tuple(candles)
+
+
+def _vnm_5m_source_minutes(*, days: int, extra_buckets: int) -> tuple[HistoricalCandle, ...]:
+    total_minutes = days * 24 * 60 + extra_buckets * 5
+    start = datetime(2026, 8, 1, 0, 0, tzinfo=UTC)
+    candles: list[HistoricalCandle] = []
+    for index in range(total_minutes):
+        opened = start + timedelta(minutes=index)
+        bucket = index // 5
+        minute = index % 5
+        trend = Decimal(bucket) / Decimal("200")
+        oscillation = Decimal((bucket % 17) - 8) / Decimal("100")
+        close = Decimal("100") + trend + oscillation + Decimal(minute) / Decimal("1000")
+        high = close + Decimal("1") + Decimal(bucket % 5) / Decimal("100")
+        low = close - Decimal("1") - Decimal(bucket % 3) / Decimal("100")
+        volume = Decimal("1") + Decimal(bucket % 7) / Decimal("10")
+        candles.append(
+            HistoricalCandle(
+                symbol="BTCUSDT",
+                category="linear",
+                timeframe="1m",
+                open_time=opened,
+                close_time=opened + timedelta(minutes=1),
+                open=close,
+                high=high,
+                low=low,
+                close=close,
+                volume=volume,
+                turnover=close * volume,
                 completed=True,
             )
         )

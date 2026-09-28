@@ -50,6 +50,7 @@ HISTORICAL_READY_METRICS = frozenset(
         "DE",
         "RETURN(asset,5m)",
         "SWING_SEQUENCE_STATE(asset,1h)",
+        "TOD_REL_TURNOVER",
     }
 )
 
@@ -63,7 +64,6 @@ IMPLEMENTATION_MISSING_METRICS = frozenset(
         "AGGRESSIVE_VOLUME_DELTA_PCT",
         "BTC_CONTEXT_SCORE",
         "RELATIVE_RETURN_15m",
-        "TOD_REL_TURNOVER",
         "VNM_5m_z",
         "classifier_direction",
     }
@@ -316,6 +316,8 @@ def _metric_observation(
         return _atr_percentile_observation(candles=candles)
     if metric_ref == "RETURN(asset,5m)":
         return _return_5m_observation(candles=candles)
+    if metric_ref == "TOD_REL_TURNOVER":
+        return _tod_rel_turnover_observation(candles=candles)
     if metric_ref == "SWING_SEQUENCE_STATE(asset,1h)":
         return _swing_sequence_observation(
             candles=candles,
@@ -536,6 +538,77 @@ def _atr_percentile_observation(*, candles: Sequence[HistoricalCandle]) -> Histo
                 "current_atr_pct_work": current_update.atr_pct_work,
                 "current_atr_update": current_update.to_payload(),
                 "value": percentile,
+            }
+        },
+    )
+
+
+def _tod_rel_turnover_observation(*, candles: Sequence[HistoricalCandle]) -> HistoricalMetricObservation:
+    five_minute = _aggregate_completed_candles(candles, timeframe="5m")
+    if not five_minute:
+        return _unavailable_observation(
+            "TOD_REL_TURNOVER",
+            candles,
+            reason_code="research_v1_historical_tod_rel_turnover_unavailable:INCOMPLETE_5M_BUCKET",
+        )
+    current = five_minute[-1]
+    reference = _eligible_same_clock_turnover_population(five_minute, current=current)
+    if reference is None:
+        return _observation(
+            metric_ref="TOD_REL_TURNOVER",
+            value="UNAVAILABLE",
+            status="UNAVAILABLE",
+            candles=(current,),
+            reason_code="research_v1_historical_tod_rel_turnover_unavailable:INSUFFICIENT_SAME_CLOCK_HISTORY",
+            payload={
+                "tod_rel_turnover": {
+                    "status": "UNAVAILABLE",
+                    "input_timeframe": "5m",
+                    "lookback_days": 30,
+                    "minimum_warmup_days": 14,
+                    "reason_code": "INSUFFICIENT_SAME_CLOCK_HISTORY",
+                }
+            },
+        )
+    try:
+        current_turnover = Fraction(current.turnover)
+        median_turnover = reference["median_turnover"]
+        if median_turnover <= 0:
+            raise NumericPolicyError("same-clock median turnover must be positive")
+        value = canonical_decimal_text(q36_working(exact_divide(current_turnover, median_turnover)).value)
+    except (ArithmeticError, NumericPolicyError, ValueError) as exc:
+        return _observation(
+            metric_ref="TOD_REL_TURNOVER",
+            value="UNAVAILABLE",
+            status="UNAVAILABLE",
+            candles=(current,),
+            reason_code=f"research_v1_historical_tod_rel_turnover_unavailable:{exc}",
+            payload={"tod_rel_turnover": {"status": "UNAVAILABLE", "reason_code": str(exc)}},
+        )
+    return _observation(
+        metric_ref="TOD_REL_TURNOVER",
+        value=value,
+        status="AVAILABLE",
+        candles=(current,),
+        reason_code=None,
+        payload={
+            "tod_rel_turnover": {
+                "status": "AVAILABLE",
+                "input_timeframe": "5m",
+                "timezone": "UTC",
+                "lookback_days": 30,
+                "minimum_warmup_days": 14,
+                "baseline_statistic": "median",
+                "same_clock_bucket": True,
+                "turnover_basis": "quote_notional_turnover",
+                "current_bucket_candle_id": _candle_id(current),
+                "current_bucket_start": _iso(current.open_time),
+                "current_bucket_end": _iso(current.close_time),
+                "reference_count": len(reference["observations"]),
+                "reference_population_digest": reference["population_digest"],
+                "reference_observations": reference["observations"],
+                "median_prior_same_clock_turnover": canonical_decimal_text(median_turnover),
+                "value": value,
             }
         },
     )
@@ -778,6 +851,59 @@ def _eligible_atr_percentile_reference_population(
     }
 
 
+def _eligible_same_clock_turnover_population(
+    candles: Sequence[AggregatedHistoricalCandle],
+    *,
+    current: AggregatedHistoricalCandle,
+) -> dict[str, Any] | None:
+    by_open = {candle.open_time.astimezone(UTC): candle for candle in candles}
+    earliest_open = candles[0].open_time.astimezone(UTC)
+    observations: list[dict[str, Any]] = []
+    turnovers: list[Fraction] = []
+    for offset in range(1, 31):
+        expected_open = current.open_time.astimezone(UTC) - timedelta(days=offset)
+        expected_close = current.close_time.astimezone(UTC) - timedelta(days=offset)
+        if expected_open < earliest_open:
+            continue
+        candle = by_open.get(expected_open)
+        if candle is None or candle.close_time.astimezone(UTC) != expected_close:
+            return None
+        payload = {
+            "candle_id": _candle_id(candle),
+            "bucket_start": _iso(candle.open_time),
+            "bucket_end": _iso(candle.close_time),
+            "turnover": _decimal_text(candle.turnover),
+        }
+        observations.append({**payload, "digest": canonical_json_digest(payload)})
+        turnovers.append(Fraction(candle.turnover))
+    if len(observations) < 14:
+        return None
+    median = _median_fraction(turnovers)
+    population_digest = canonical_json_digest(
+        {
+            "selection_rule": "same UTC clock 5m bucket on the thirty prior UTC dates",
+            "current_bucket_start": _iso(current.open_time),
+            "current_bucket_end": _iso(current.close_time),
+            "minimum_warmup_days": 14,
+            "baseline_statistic": "median",
+            "observations": tuple(reversed(observations)),
+        }
+    )
+    return {
+        "observations": tuple(reversed(observations)),
+        "population_digest": population_digest,
+        "median_turnover": median,
+    }
+
+
+def _median_fraction(values: Sequence[Fraction]) -> Fraction:
+    ordered = tuple(sorted(values))
+    midpoint = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[midpoint]
+    return exact_divide(ordered[midpoint - 1] + ordered[midpoint], 2)
+
+
 def _atr_observation_provenance(candle: AggregatedHistoricalCandle, update: Any) -> dict[str, Any]:
     payload = {
         "candle_id": _candle_id(candle),
@@ -995,6 +1121,7 @@ def _metric_source_timeframe(metric_ref: str) -> str:
         "DE",
         "ATR percentile",
         "SWING_SEQUENCE_STATE(asset,1h)",
+        "TOD_REL_TURNOVER",
     }:
         return "1m"
     raise ResearchV1HistoricalTriggerInputUnavailable(f"research_v1_historical_metric_unavailable:{metric_ref}")
@@ -1007,6 +1134,8 @@ def _metric_context_window(metric_ref: str) -> str:
         return "5m"
     if metric_ref in {"DE", "ATR percentile"}:
         return "15m"
+    if metric_ref == "TOD_REL_TURNOVER":
+        return "5m"
     if metric_ref == "SWING_SEQUENCE_STATE(asset,1h)":
         return "1h"
     return _metric_source_timeframe(metric_ref)
@@ -1030,6 +1159,8 @@ def _is_contiguous_window(candles: Sequence[Any], duration: timedelta) -> bool:
 
 
 def _timeframe_delta(timeframe: str) -> timedelta:
+    if timeframe == "5m":
+        return timedelta(minutes=5)
     if timeframe == "15m":
         return timedelta(minutes=15)
     if timeframe == "1h":
