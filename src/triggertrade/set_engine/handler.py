@@ -154,7 +154,25 @@ class HandoffFacts:
 
 
 @dataclass(frozen=True)
+class SetResultResolutionRequest:
+    """Inputs required to resolve canonical Set result semantics only."""
+
+    formation_epoch: SetFormationEpoch
+    direction_scope: DirectionResolutionScope
+    formation_result: TriggerResult
+    evaluation_event_ids: tuple[str, ...]
+    source_evidence_digest: str
+    classifier_inputs: ClassifierInputs | None = None
+    fixed_direction_binding: GenericFixedDirectionBinding | None = None
+    generic_branches: tuple[GenericBranchEvidence, ...] = ()
+    declared_conflict_rule: DeclaredConflictRule | None = None
+    frozen_condition: Mapping[str, Any] | None = None
+
+
+@dataclass(frozen=True)
 class SetResolutionRequest:
+    """Durable Set resolution request; matched publication requires handoff facts."""
+
     formation_epoch: SetFormationEpoch
     direction_scope: DirectionResolutionScope
     formation_result: TriggerResult
@@ -256,6 +274,30 @@ class SetDurableHandler:
             outbox_inserted=outbox_inserted,
             result_inserted=result_inserted,
         )
+
+
+def resolve_set_result_without_handoff(request: SetResultResolutionRequest) -> SetResolutionRecord:
+    """Resolve canonical Set result semantics without publishing MARKET_HANDOFF.
+
+    Research historical replay uses this before the factual Market Handoff
+    producer exists. It deliberately reuses the same direction and result
+    payload logic as SetDurableHandler while avoiding any handoff fabrication or
+    persistence side effects.
+    """
+
+    result = _resolve_direction(request)
+    ids = _set_ids(request=request, status=result.status, direction=result.direction, reason_code=result.reason_code)
+    return SetResolutionRecord(
+        status=result.status,
+        decision_cycle_id=ids.get("decision_cycle_id") if result.status is SetMatchStatus.MATCHED else None,
+        set_result_id=ids["set_result_id"],
+        reason_code=result.reason_code,
+        direction=result.direction,
+        result_payload=_result_payload(request=request, result=result, ids=ids),
+        handoff_payload=None,
+        outbox_inserted=False,
+        result_inserted=False,
+    )
 
 
 @dataclass(frozen=True)

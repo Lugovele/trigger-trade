@@ -57,8 +57,10 @@ from .handler import (
     SetMatchStatus,
     SetResolutionRecord,
     SetResolutionRequest,
+    SetResultResolutionRequest,
     SetResultConflict,
     generic_fixed_direction_binding_digest,
+    resolve_set_result_without_handoff,
 )
 
 __all__ = [
@@ -114,6 +116,8 @@ __all__ = [
     "SetMatchStatus",
     "SetResolutionRecord",
     "SetResolutionRequest",
+    "SetResultResolutionRequest",
     "SetResultConflict",
     "generic_fixed_direction_binding_digest",
+    "resolve_set_result_without_handoff",
 ]
