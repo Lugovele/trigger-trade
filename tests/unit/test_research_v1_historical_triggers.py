@@ -1266,27 +1266,38 @@ def test_vnm_population_partial_day_after_complete_population_begins_fails_close
 
     assert observation.status == "UNAVAILABLE"
 
-def test_remaining_phase4_metrics_stay_fail_closed_without_factual_sources():
+def test_classifier_direction_missing_factual_sources_yields_unavailable_without_set_formation():
     candles = _vnm_5m_source_minutes(days=16, extra_buckets=1)
 
-    with pytest.raises(
-        ResearchV1HistoricalTriggerInputUnavailable,
-        match="research_v1_historical_trigger_input_unavailable:TR-R-004",
-    ):
-        evaluate_research_v1_historical_triggers(
-            rules=(_rule("TR-R-004"),),
-            candles=candles,
-            symbol="BTCUSDT",
-            trigger_set_id="SET-R-UNIT",
-            trigger_set_version="v1",
-        )
-    assert metric_readiness("classifier_direction") == "IMPLEMENTATION_MISSING"
+    observation = produce_research_v1_historical_metric(
+        metric_ref="classifier_direction",
+        rule=_rule("TR-R-004"),
+        candles=candles,
+        symbol="BTCUSDT",
+    )
+    evaluation = evaluate_research_v1_historical_triggers(
+        rules=(_rule("TR-R-004"),),
+        candles=candles,
+        symbol="BTCUSDT",
+        trigger_set_id="SET-R-UNIT",
+        trigger_set_version="v1",
+    )[0]
+
+    assert evaluation.metric_ref == "classifier_direction"
+    assert evaluation.metric_value == "UNAVAILABLE"
+    assert evaluation.condition_result is False
+    assert evaluation.output_state == "UNAVAILABLE"
+    assert observation.reason_code == "research_v1_historical_classifier_direction_unavailable:INPUT_UNAVAILABLE"
+    assert observation.payload["classifier_direction"]["missing_input"] == "structure_1h"
+    assert evaluation.signal.reason == "metric_unavailable"
+    assert evaluation.signal.input_snapshot["metric_value"] == "UNAVAILABLE"
+    assert metric_readiness("classifier_direction") == "HISTORICAL_READY"
     assert metric_readiness("AGGRESSIVE_VOLUME_DELTA_PCT") == "HISTORICAL_READY"
 
 
-def test_classifier_direction_remains_blocked_by_required_f004_inputs():
-    assert "classifier_direction" not in HISTORICAL_READY_METRICS
-    assert metric_readiness("classifier_direction") == "IMPLEMENTATION_MISSING"
+def test_classifier_direction_readiness_and_canonical_data_unavailable_semantics():
+    assert "classifier_direction" in HISTORICAL_READY_METRICS
+    assert metric_readiness("classifier_direction") == "HISTORICAL_READY"
     assert metric_readiness("VNM_5m_z") == "HISTORICAL_READY"
     assert metric_readiness("MOMENTUM_SCORE") == "HISTORICAL_READY"
     assert metric_readiness("SWING_SEQUENCE_STATE(asset,1h)") == "HISTORICAL_READY"
@@ -1318,21 +1329,333 @@ def test_classifier_direction_remains_blocked_by_required_f004_inputs():
     assert result.rejection_stage == "DATA_UNAVAILABLE"
 
 
-def test_classifier_direction_triggers_fail_closed_without_partial_historical_classifier():
+def test_classifier_direction_triggers_return_unavailable_without_partial_historical_classifier():
     candles = _vnm_5m_source_minutes(days=16, extra_buckets=1)
 
     for trigger_id in ("TR-R-004", "TR-R-005", "TR-R-015", "TR-R-016"):
-        with pytest.raises(
-            ResearchV1HistoricalTriggerInputUnavailable,
-            match=f"research_v1_historical_trigger_input_unavailable:{trigger_id}",
-        ):
-            evaluate_research_v1_historical_triggers(
-                rules=(_rule(trigger_id),),
-                candles=candles,
-                symbol="BTCUSDT",
-                trigger_set_id="SET-R-UNIT",
-                trigger_set_version="v1",
-            )
+        evaluation = evaluate_research_v1_historical_triggers(
+            rules=(_rule(trigger_id),),
+            candles=candles,
+            symbol="BTCUSDT",
+            trigger_set_id="SET-R-UNIT",
+            trigger_set_version="v1",
+        )[0]
+        assert evaluation.metric_ref == "classifier_direction"
+        assert evaluation.metric_value == "UNAVAILABLE"
+        assert evaluation.condition_result is False
+
+
+def test_classifier_direction_adapter_represents_all_inputs_and_calls_canonical_classifier(monkeypatch):
+    candles = tuple(_candle(index, symbol="ETHUSDT", close="100", high="101", low="99") for index in range(5))
+    observations = _classifier_observations(cutoff=candles[-1].close_time, direction_case="LONG")
+    calls: list[ClassifierInputs] = []
+    original = historical_triggers.classify_direction
+
+    def spy(inputs: ClassifierInputs):
+        calls.append(inputs)
+        return original(inputs)
+
+    monkeypatch.setattr(historical_triggers, "_classifier_input_observations", lambda **kwargs: observations)
+    monkeypatch.setattr(historical_triggers, "classify_direction", spy)
+
+    observation = produce_research_v1_historical_metric(
+        metric_ref="classifier_direction",
+        rule=_rule("TR-R-004"),
+        candles=candles,
+        symbol="ETHUSDT",
+    )
+
+    assert observation.status == "AVAILABLE"
+    assert observation.value == "LONG"
+    assert len(calls) == 1
+    assert set(observation.payload["classifier_direction"]["inputs"]) == {
+        field for field, _metric_ref in historical_triggers.CLASSIFIER_INPUT_METRICS
+    }
+    assert observation.payload["classifier_direction"]["input_count"] == 12
+
+
+def test_classifier_direction_long_short_none_and_pinned_trigger_version(monkeypatch):
+    candles = tuple(
+        _ohlcv_candle(index, symbol="ETHUSDT", open_="90", close="100", high="101", low="89", volume="1", turnover="100")
+        for index in range(5)
+    )
+    cutoff = candles[-1].close_time
+
+    monkeypatch.setattr(
+        historical_triggers,
+        "_classifier_input_observations",
+        lambda **kwargs: _classifier_observations(cutoff=cutoff, direction_case="LONG"),
+    )
+    long_eval = evaluate_research_v1_historical_triggers(
+        rules=(_rule("TR-R-004"),),
+        candles=tuple(reversed(candles)),
+        symbol="ETHUSDT",
+        trigger_set_id="SET-R-UNIT",
+        trigger_set_version="v1",
+    )[0]
+
+    monkeypatch.setattr(
+        historical_triggers,
+        "_classifier_input_observations",
+        lambda **kwargs: _classifier_observations(cutoff=cutoff, direction_case="SHORT"),
+    )
+    short_eval = evaluate_research_v1_historical_triggers(
+        rules=(_rule("TR-R-005"),),
+        candles=candles,
+        symbol="ETHUSDT",
+        trigger_set_id="SET-R-UNIT",
+        trigger_set_version="v1",
+    )[0]
+
+    monkeypatch.setattr(
+        historical_triggers,
+        "_classifier_input_observations",
+        lambda **kwargs: _classifier_observations(cutoff=cutoff, direction_case="NONE"),
+    )
+    none = produce_research_v1_historical_metric(
+        metric_ref="classifier_direction",
+        rule=_rule("TR-R-004"),
+        candles=candles,
+        symbol="ETHUSDT",
+    )
+
+    assert long_eval.trigger_id == "TR-R-004"
+    assert long_eval.trigger_version == "1.0.0"
+    assert long_eval.metric_value == "LONG"
+    assert long_eval.output_state == "LONG"
+    assert long_eval.condition_result is True
+    assert short_eval.trigger_id == "TR-R-005"
+    assert short_eval.metric_value == "SHORT"
+    assert short_eval.output_state == "SHORT"
+    assert short_eval.condition_result is True
+    assert none.status == "AVAILABLE"
+    assert none.value == "NONE"
+
+
+def test_classifier_direction_missing_input_does_not_call_classifier(monkeypatch):
+    candles = tuple(_candle(index, symbol="ETHUSDT", close="100", high="101", low="99") for index in range(5))
+    observations = dict(_classifier_observations(cutoff=candles[-1].close_time, direction_case="LONG"))
+    observations["vnm_5m_z"] = _classifier_metric_observation(
+        metric_ref="VNM_5m_z",
+        value="UNAVAILABLE",
+        observed_at=candles[-1].close_time,
+        status="UNAVAILABLE",
+        reason_code="forced",
+    )
+
+    def fail_classifier(inputs: ClassifierInputs):  # pragma: no cover - should not be called
+        raise AssertionError("classifier called with unavailable input")
+
+    monkeypatch.setattr(historical_triggers, "_classifier_input_observations", lambda **kwargs: observations)
+    monkeypatch.setattr(historical_triggers, "classify_direction", fail_classifier)
+
+    observation = produce_research_v1_historical_metric(
+        metric_ref="classifier_direction",
+        rule=_rule("TR-R-004"),
+        candles=candles,
+        symbol="ETHUSDT",
+    )
+
+    assert observation.status == "UNAVAILABLE"
+    assert observation.reason_code == "research_v1_historical_classifier_direction_unavailable:INPUT_UNAVAILABLE"
+    assert observation.payload["classifier_direction"]["missing_input"] == "vnm_5m_z"
+
+
+def test_classifier_direction_same_slot_alignment_blocks_stale_carry_forward(monkeypatch):
+    candles = tuple(_candle(index, symbol="ETHUSDT", close="100", high="101", low="99") for index in range(5))
+    observations = dict(_classifier_observations(cutoff=candles[-1].close_time, direction_case="LONG"))
+    observations["momentum_score"] = _classifier_metric_observation(
+        metric_ref="MOMENTUM_SCORE",
+        value="1",
+        observed_at=candles[-1].close_time - timedelta(minutes=5),
+    )
+    monkeypatch.setattr(historical_triggers, "_classifier_input_observations", lambda **kwargs: observations)
+
+    observation = produce_research_v1_historical_metric(
+        metric_ref="classifier_direction",
+        rule=_rule("TR-R-004"),
+        candles=candles,
+        symbol="ETHUSDT",
+    )
+
+    assert observation.status == "UNAVAILABLE"
+    assert observation.reason_code == "research_v1_historical_classifier_direction_unavailable:SLOT_MISMATCH"
+    assert observation.payload["classifier_direction"]["missing_input"] == "momentum_score"
+
+
+def test_classifier_direction_evidence_changes_with_upstream_inputs(monkeypatch):
+    candles = tuple(_candle(index, symbol="ETHUSDT", close="100", high="101", low="99") for index in range(5))
+    cutoff = candles[-1].close_time
+
+    monkeypatch.setattr(
+        historical_triggers,
+        "_classifier_input_observations",
+        lambda **kwargs: _classifier_observations(cutoff=cutoff, direction_case="LONG", aggressive_delta_pct="100"),
+    )
+    aggressive_a = produce_research_v1_historical_metric(
+        metric_ref="classifier_direction",
+        rule=_rule("TR-R-004"),
+        candles=candles,
+        symbol="ETHUSDT",
+    )
+
+    monkeypatch.setattr(
+        historical_triggers,
+        "_classifier_input_observations",
+        lambda **kwargs: _classifier_observations(cutoff=cutoff, direction_case="LONG", aggressive_delta_pct="50"),
+    )
+    aggressive_b = produce_research_v1_historical_metric(
+        metric_ref="classifier_direction",
+        rule=_rule("TR-R-004"),
+        candles=candles,
+        symbol="ETHUSDT",
+    )
+
+    monkeypatch.setattr(
+        historical_triggers,
+        "_classifier_input_observations",
+        lambda **kwargs: _classifier_observations(cutoff=cutoff, direction_case="LONG", momentum_score="0.5"),
+    )
+    momentum_changed = produce_research_v1_historical_metric(
+        metric_ref="classifier_direction",
+        rule=_rule("TR-R-004"),
+        candles=candles,
+        symbol="ETHUSDT",
+    )
+
+    monkeypatch.setattr(
+        historical_triggers,
+        "_classifier_input_observations",
+        lambda **kwargs: _classifier_observations(cutoff=cutoff, direction_case="LONG", relative_score="0.5"),
+    )
+    relative_changed = produce_research_v1_historical_metric(
+        metric_ref="classifier_direction",
+        rule=_rule("TR-R-004"),
+        candles=candles,
+        symbol="ETHUSDT",
+    )
+
+    monkeypatch.setattr(
+        historical_triggers,
+        "_classifier_input_observations",
+        lambda **kwargs: _classifier_observations(cutoff=cutoff, direction_case="LONG", btc_return_z="0"),
+    )
+    btc_changed = produce_research_v1_historical_metric(
+        metric_ref="classifier_direction",
+        rule=_rule("TR-R-004"),
+        candles=candles,
+        symbol="ETHUSDT",
+    )
+
+    assert aggressive_a.value == "LONG"
+    assert aggressive_a.evidence_digest != aggressive_b.evidence_digest
+    assert aggressive_a.evidence_digest != momentum_changed.evidence_digest
+    assert aggressive_a.evidence_digest != relative_changed.evidence_digest
+    assert aggressive_a.evidence_digest != btc_changed.evidence_digest
+
+
+def test_classifier_direction_btc_structure_empty_companion_does_not_use_primary_candles():
+    primary = _with_symbol(_btc_context_source_minutes(days=16), "ETHUSDT")
+    cutoff = historical_triggers._aggregate_completed_candles(primary, timeframe="5m")[-1].close_time
+    interval_start = cutoff - timedelta(minutes=5)
+    raw_trades = _raw_trade_response(
+        logical_symbol="ETHUSDT",
+        interval_start=interval_start,
+        interval_end=cutoff,
+        records=(
+            _raw_trade("eth-buy", interval_start, side="BUY", notional="60", logical_symbol="ETHUSDT"),
+            _raw_trade("eth-sell", interval_start + timedelta(minutes=1), side="SELL", notional="40", logical_symbol="ETHUSDT"),
+        ),
+    )
+
+    observations = historical_triggers._classifier_input_observations(
+        rule=_rule("TR-R-004"),
+        candles=primary,
+        symbol="ETHUSDT",
+        cutoff=cutoff,
+        instrument_metadata=_instrument("ETHUSDT"),
+        companion_candles={"BTCUSDT": ()},
+        companion_instrument_metadata={"BTCUSDT": _instrument("BTCUSDT")},
+        raw_trades_pages=(raw_trades,),
+    )
+    btc_structure = observations["btc_structure_1h"]
+
+    assert btc_structure.status == "UNAVAILABLE"
+    assert btc_structure.value == "UNAVAILABLE"
+    assert btc_structure.reason_code == "BTC_STRUCTURE_HISTORY_UNAVAILABLE"
+    assert btc_structure.source_candle_ids == ()
+    assert not any("ETHUSDT" in candle_id for candle_id in btc_structure.source_candle_ids)
+
+    classifier = produce_research_v1_historical_metric(
+        metric_ref="classifier_direction",
+        rule=_rule("TR-R-004"),
+        candles=primary,
+        symbol="ETHUSDT",
+        instrument_metadata=_instrument("ETHUSDT"),
+        companion_candles={"BTCUSDT": ()},
+        companion_instrument_metadata={"BTCUSDT": _instrument("BTCUSDT")},
+        raw_trades_pages=(raw_trades,),
+    )
+
+    assert classifier.status == "UNAVAILABLE"
+
+
+def test_classifier_direction_real_factual_end_to_end_all_inputs_available(monkeypatch):
+    primary = _eth_classifier_source_minutes()
+    btc = _btc_context_source_minutes(days=16)
+    cutoff = historical_triggers._aggregate_completed_candles(primary, timeframe="5m")[-1].close_time
+    interval_start = cutoff - timedelta(minutes=5)
+    raw_trades = _raw_trade_response(
+        logical_symbol="ETHUSDT",
+        interval_start=interval_start,
+        interval_end=cutoff,
+        records=(
+            _raw_trade("eth-left-buy", interval_start, side="BUY", notional="80", logical_symbol="ETHUSDT"),
+            _raw_trade(
+                "eth-mid-sell",
+                interval_start + timedelta(minutes=2),
+                side="SELL",
+                notional="20",
+                logical_symbol="ETHUSDT",
+            ),
+        ),
+    )
+    calls: list[ClassifierInputs] = []
+    original = historical_triggers.classify_direction
+
+    def spy(inputs: ClassifierInputs):
+        calls.append(inputs)
+        return original(inputs)
+
+    monkeypatch.setattr(historical_triggers, "classify_direction", spy)
+
+    observation = produce_research_v1_historical_metric(
+        metric_ref="classifier_direction",
+        rule=_rule("TR-R-004"),
+        candles=tuple(reversed(primary)),
+        symbol="ETHUSDT",
+        instrument_metadata=_instrument("ETHUSDT"),
+        companion_candles={"BTCUSDT": tuple(reversed(btc))},
+        companion_instrument_metadata={"BTCUSDT": _instrument("BTCUSDT")},
+        raw_trades_pages=(raw_trades,),
+    )
+
+    assert len(calls) == 1
+    assert observation.status == "AVAILABLE"
+    assert observation.value in {"LONG", "SHORT", "NONE"}
+    payload = observation.payload["classifier_direction"]
+    inputs = payload["inputs"]
+    assert set(inputs) == {field for field, _metric_ref in historical_triggers.CLASSIFIER_INPUT_METRICS}
+    assert payload["input_count"] == 12
+    assert len({inputs[field]["evidence_digest"] for field in inputs}) == 12
+    assert all(inputs[field]["value"] != "UNAVAILABLE" for field in inputs)
+    assert all(inputs[field]["available_at"] <= payload["evaluation_slot"] for field in inputs)
+    for field, metric_ref in historical_triggers.CLASSIFIER_INPUT_METRICS:
+        expected = historical_triggers._classifier_expected_observed_at(metric_ref, cutoff).isoformat()
+        assert inputs[field]["observed_at"] == expected
+    assert payload["implementation"] == "triggertrade.set_engine.formulas.classify_direction"
+    assert "config_snapshot" not in json.dumps(payload)
+    assert "synthetic" not in json.dumps(payload).lower()
 
 
 def test_aggressive_volume_delta_pct_is_unavailable_without_raw_trades():
@@ -2325,20 +2648,22 @@ def test_deterministic_replay_produces_same_metric_and_trigger_evidence():
 def test_unsupported_required_metric_fails_closed_and_no_set_formation_occurs():
     candles = tuple(_candle(index, close="100") for index in range(6))
 
-    unsupported_rule = _rule("TR-R-004")
+    evaluation = evaluate_research_v1_historical_triggers(
+        rules=(_rule("TR-R-004"),),
+        candles=candles,
+        symbol="BTCUSDT",
+        trigger_set_id="SET-R-BTC-UNIT",
+        trigger_set_version="v1",
+    )[0]
 
-    with pytest.raises(ResearchV1HistoricalTriggerInputUnavailable, match="research_v1_historical_trigger_input_unavailable:TR-R-004"):
-        evaluate_research_v1_historical_triggers(
-            rules=(unsupported_rule,),
-            candles=candles,
-            symbol="BTCUSDT",
-            trigger_set_id="SET-R-BTC-UNIT",
-            trigger_set_version="v1",
-        )
+    assert evaluation.metric_ref == "classifier_direction"
+    assert evaluation.metric_value == "UNAVAILABLE"
+    assert evaluation.output_state == "UNAVAILABLE"
 
     assert metric_readiness("DE") == "HISTORICAL_READY"
     assert metric_readiness("ATR percentile") == "HISTORICAL_READY"
     assert metric_readiness("BTC_CONTEXT_SCORE") == "HISTORICAL_READY"
+    assert metric_readiness("classifier_direction") == "HISTORICAL_READY"
     assert metric_readiness("RELATIVE_RETURN_15m") == "HISTORICAL_READY"
     assert metric_readiness("TOD_REL_TURNOVER") == "HISTORICAL_READY"
     assert metric_readiness("VNM_5m_z") == "HISTORICAL_READY"
@@ -2347,9 +2672,22 @@ def test_unsupported_required_metric_fails_closed_and_no_set_formation_occurs():
     assert "RELATIVE_RETURN_15m" in HISTORICAL_READY_METRICS
     assert "TOD_REL_TURNOVER" in HISTORICAL_READY_METRICS
     assert "AGGRESSIVE_VOLUME_DELTA_PCT" in HISTORICAL_READY_METRICS
+    assert "classifier_direction" in HISTORICAL_READY_METRICS
     assert "VNM_5m_z" in HISTORICAL_READY_METRICS
     assert "MOMENTUM_SCORE" in HISTORICAL_READY_METRICS
     assert metric_readiness("AGGRESSIVE_VOLUME_DELTA_PCT") == "HISTORICAL_READY"
+
+
+def test_all_pinned_research_v1_trigger_metrics_are_historical_ready():
+    package = json.loads(Path("docs/research-import/triggers/RESEARCH_V1_TRIGGERS_WEB_IMPORT.json").read_text(encoding="utf-8"))
+    blockers = []
+    for record in package["records"]:
+        payload = record["rule_definition"]
+        metric_ref = payload["definition"]["metric_ref"]
+        if metric_readiness(metric_ref) != "HISTORICAL_READY":
+            blockers.append((payload["rule_id"], payload["version"], metric_ref, metric_readiness(metric_ref)))
+
+    assert blockers == []
 
 
 def _rule(trigger_id: str) -> RuleDefinition:
@@ -2378,6 +2716,76 @@ def _rule(trigger_id: str) -> RuleDefinition:
         stale_data_semantics=payload.get("stale_data_semantics"),
         missing_data_semantics=payload.get("missing_data_semantics"),
     )
+
+
+def _classifier_metric_observation(
+    *,
+    metric_ref: str,
+    value: str,
+    observed_at: datetime,
+    status: str = "AVAILABLE",
+    reason_code: str | None = None,
+) -> historical_triggers.HistoricalMetricObservation:
+    payload = {
+        "metric_ref": metric_ref,
+        "value": value,
+        "observed_at": observed_at.isoformat(),
+        "status": status,
+        "reason_code": reason_code,
+    }
+    digest = historical_triggers.canonical_json_digest(payload)
+    return historical_triggers.HistoricalMetricObservation(
+        metric_ref=metric_ref,
+        value=value,
+        status=status,
+        observed_at=observed_at.isoformat(),
+        available_at=observed_at.isoformat(),
+        source_candle_ids=(f"{metric_ref}:{observed_at.isoformat()}",),
+        evidence_id=f"fixture-{digest[:16]}",
+        evidence_digest=digest,
+        reason_code=reason_code,
+        payload=payload,
+    )
+
+
+def _classifier_observations(
+    *,
+    cutoff: datetime,
+    direction_case: str,
+    aggressive_delta_pct: str | None = None,
+    momentum_score: str | None = None,
+    relative_score: str | None = None,
+    btc_return_z: str | None = None,
+) -> dict[str, historical_triggers.HistoricalMetricObservation]:
+    case = direction_case.upper()
+    sign = "-1" if case == "SHORT" else "1"
+    structure = "BEARISH" if case == "SHORT" else "BULLISH"
+    de = "0.10" if case == "NONE" else "0.70"
+    five = cutoff
+    fifteen = historical_triggers._floor_completed_slot(cutoff, timedelta(minutes=15))
+    one_hour = historical_triggers._floor_completed_slot(cutoff, timedelta(hours=1))
+    values = {
+        "structure_1h": ("SWING_SEQUENCE_STATE(asset,1h)", structure, one_hour),
+        "structure_15m": ("SWING_SEQUENCE_STATE(asset,15m)", structure, fifteen),
+        "de_15m": ("DE", de, fifteen),
+        "momentum_score": ("MOMENTUM_SCORE", momentum_score or sign, five),
+        "vnm_5m_z": ("VNM_5m_z", sign, five),
+        "relative_score": ("RELATIVE_SCORE", relative_score or sign, fifteen),
+        "relative_return_z": ("RELATIVE_RETURN_Z", sign, fifteen),
+        "aggressive_delta_pct": (
+            "AGGRESSIVE_VOLUME_DELTA_PCT",
+            aggressive_delta_pct or ("-100" if case == "SHORT" else "100"),
+            five,
+        ),
+        "tod_relative_turnover": ("TOD_REL_TURNOVER", "2", five),
+        "atr_pct_percentile_15m": ("ATR percentile", "50", fifteen),
+        "btc_structure_1h": ("SWING_SEQUENCE_STATE(asset,1h)", structure, one_hour),
+        "btc_return_z": ("BTC_RETURN_Z", btc_return_z or sign, fifteen),
+    }
+    return {
+        field: _classifier_metric_observation(metric_ref=metric_ref, value=value, observed_at=observed_at)
+        for field, (metric_ref, value, observed_at) in values.items()
+    }
 
 
 def _candle(
@@ -2876,6 +3284,31 @@ def _one_minute_buckets_15m(
                 )
             )
     return tuple(candles)
+
+
+def _with_symbol(candles: tuple[HistoricalCandle, ...], symbol: str) -> tuple[HistoricalCandle, ...]:
+    return tuple(replace(candle, symbol=symbol) for candle in candles)
+
+
+def _eth_classifier_source_minutes() -> tuple[HistoricalCandle, ...]:
+    candles = _btc_context_source_minutes(days=16)
+    varied: list[HistoricalCandle] = []
+    for index, candle in enumerate(candles):
+        # Keep the structural pattern intact while making ETH returns factually distinct from BTC.
+        tweak = Decimal((index // 15) % 13) / Decimal("1000")
+        close = candle.close + tweak
+        varied.append(
+            replace(
+                candle,
+                symbol="ETHUSDT",
+                open=candle.open + tweak,
+                high=candle.high + tweak,
+                low=candle.low + tweak,
+                close=close,
+                turnover=close * candle.volume,
+            )
+        )
+    return tuple(varied)
 
 
 def _instrument(

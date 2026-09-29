@@ -1,9 +1,8 @@
 """Research V1 historical metric and trigger evaluation.
 
-This module is intentionally Phase 1 only: it produces factual metric
-observations and declarative trigger evaluations from completed historical
-candles. It does not form Sets, resolve direction, create Market Handoffs, or
-enter Position.
+This module produces factual metric observations and declarative trigger
+evaluations from completed historical inputs. It does not form Sets, create
+Market Handoffs, or enter Position.
 """
 
 from __future__ import annotations
@@ -23,10 +22,12 @@ from triggertrade.research_v1_execution import RESEARCH_V1_INSTRUMENT_SYMBOL_OVE
 from triggertrade.instruments import FuturesInstrument
 from triggertrade.set_engine import (
     Candle,
+    ClassifierInputs,
     IndicatorStatus,
     SwingPoint,
     SwingSequenceState,
     TriggerResult,
+    classify_direction,
     directional_efficiency,
     evaluate_f001_price_displacement,
     evaluate_f002_participation,
@@ -53,6 +54,7 @@ HISTORICAL_READY_METRICS = frozenset(
         "ATR percentile",
         "BTC_CONTEXT_SCORE",
         "BTC_RETURN_Z",
+        "classifier_direction",
         "DE",
         "MOMENTUM_SCORE",
         "RELATIVE_RETURN_Z",
@@ -73,8 +75,23 @@ KERNEL_EXISTS_BUT_ADAPTER_MISSING_METRICS = frozenset(
 
 IMPLEMENTATION_MISSING_METRICS = frozenset(
     {
-        "classifier_direction",
     }
+)
+
+
+CLASSIFIER_INPUT_METRICS: tuple[tuple[str, str], ...] = (
+    ("structure_1h", "SWING_SEQUENCE_STATE(asset,1h)"),
+    ("structure_15m", "SWING_SEQUENCE_STATE(asset,15m)"),
+    ("de_15m", "DE"),
+    ("momentum_score", "MOMENTUM_SCORE"),
+    ("vnm_5m_z", "VNM_5m_z"),
+    ("relative_score", "RELATIVE_SCORE"),
+    ("relative_return_z", "RELATIVE_RETURN_Z"),
+    ("aggressive_delta_pct", "AGGRESSIVE_VOLUME_DELTA_PCT"),
+    ("tod_relative_turnover", "TOD_REL_TURNOVER"),
+    ("atr_pct_percentile_15m", "ATR percentile"),
+    ("btc_structure_1h", "SWING_SEQUENCE_STATE(asset,1h)"),
+    ("btc_return_z", "BTC_RETURN_Z"),
 )
 
 
@@ -333,6 +350,16 @@ def _metric_observation(
         return _f001_observation(rule=rule, candles=candles)
     if metric_ref == "F-002 trigger_result":
         return _f002_observation(candles=candles)
+    if metric_ref == "classifier_direction":
+        return _classifier_direction_observation(
+            rule=rule,
+            candles=candles,
+            symbol=symbol,
+            instrument_metadata=instrument_metadata,
+            companion_candles=companion_candles,
+            companion_instrument_metadata=companion_instrument_metadata,
+            raw_trades_pages=raw_trades_pages,
+        )
     if metric_ref == "DE":
         return _de_observation(candles=candles)
     if metric_ref == "VNM_5m_z":
@@ -449,6 +476,243 @@ def _f002_observation(*, candles: Sequence[HistoricalCandle]) -> HistoricalMetri
         reason_code=result.reason_code,
         payload=result.to_payload(),
     )
+
+
+def _classifier_direction_observation(
+    *,
+    rule: RuleDefinition,
+    candles: Sequence[HistoricalCandle],
+    symbol: str,
+    instrument_metadata: FuturesInstrument | None,
+    companion_candles: Mapping[str, Sequence[HistoricalCandle]] | None,
+    companion_instrument_metadata: Mapping[str, FuturesInstrument] | None,
+    raw_trades_pages: Sequence[Mapping[str, Any]] | None,
+) -> HistoricalMetricObservation:
+    five_minute = _aggregate_completed_candles(candles, timeframe="5m")
+    if not five_minute:
+        return _unavailable_observation(
+            "classifier_direction",
+            candles,
+            reason_code="research_v1_historical_classifier_direction_unavailable:NO_COMPLETED_5M_CUTOFF",
+        )
+    cutoff = five_minute[-1].close_time
+    observations = _classifier_input_observations(
+        rule=rule,
+        candles=candles,
+        symbol=symbol,
+        cutoff=cutoff,
+        instrument_metadata=instrument_metadata,
+        companion_candles=companion_candles,
+        companion_instrument_metadata=companion_instrument_metadata,
+        raw_trades_pages=raw_trades_pages,
+    )
+    unavailable = _first_unavailable_classifier_input(observations, cutoff=cutoff)
+    if unavailable is not None:
+        field, observation, reason = unavailable
+        return _observation(
+            metric_ref="classifier_direction",
+            value="UNAVAILABLE",
+            status="UNAVAILABLE",
+            candles=five_minute[-1:],
+            observed_at_override=_iso(cutoff),
+            available_at_override=_iso(cutoff),
+            source_candle_ids_override=_classifier_source_candle_ids(observations),
+            reason_code=f"research_v1_historical_classifier_direction_unavailable:{reason}",
+            payload={
+                "classifier_direction": {
+                    "status": "UNAVAILABLE",
+                    "reason_code": reason,
+                    "missing_input": field,
+                    "input_metric": observation.metric_ref if observation is not None else None,
+                    "input_reason_code": observation.reason_code if observation is not None else None,
+                    "input_evidence_digest": observation.evidence_digest if observation is not None else None,
+                    "evaluation_slot": _iso(cutoff),
+                }
+            },
+        )
+    inputs = _classifier_inputs_from_observations(observations)
+    result = classify_direction(inputs)
+    payload = {
+        "status": result.status.value,
+        "formula_id": "F-004/F-005",
+        "implementation": "triggertrade.set_engine.formulas.classify_direction",
+        "evaluation_slot": _iso(cutoff),
+        "input_count": len(CLASSIFIER_INPUT_METRICS),
+        "inputs": {
+            field: {
+                "metric_ref": observation.metric_ref,
+                "value": observation.value,
+                "observed_at": observation.observed_at,
+                "available_at": observation.available_at,
+                "evidence_digest": observation.evidence_digest,
+            }
+            for field, observation in observations.items()
+        },
+        "classifier_inputs": _classifier_inputs_payload(inputs),
+        "classifier_result": result.to_payload()["f005_classifier"],
+    }
+    payload = {**payload, "classifier_direction_digest": canonical_json_digest(payload)}
+    value = result.direction.value if result.status is IndicatorStatus.AVAILABLE else "UNAVAILABLE"
+    return _observation(
+        metric_ref="classifier_direction",
+        value=value,
+        status=result.status.value,
+        candles=five_minute[-1:],
+        observed_at_override=_iso(cutoff),
+        available_at_override=_iso(cutoff),
+        source_candle_ids_override=_classifier_source_candle_ids(observations),
+        reason_code=result.rejection_stage if result.status is not IndicatorStatus.AVAILABLE else result.veto_reason,
+        payload={"classifier_direction": payload},
+    )
+
+
+def _classifier_input_observations(
+    *,
+    rule: RuleDefinition,
+    candles: Sequence[HistoricalCandle],
+    symbol: str,
+    cutoff: datetime,
+    instrument_metadata: FuturesInstrument | None,
+    companion_candles: Mapping[str, Sequence[HistoricalCandle]] | None,
+    companion_instrument_metadata: Mapping[str, FuturesInstrument] | None,
+    raw_trades_pages: Sequence[Mapping[str, Any]] | None,
+) -> dict[str, HistoricalMetricObservation]:
+    observations: dict[str, HistoricalMetricObservation] = {}
+    for field, metric_ref in CLASSIFIER_INPUT_METRICS:
+        if field == "btc_structure_1h":
+            btc_source = _btc_companion_source(companion_candles)
+            btc_metadata = _btc_companion_metadata(companion_instrument_metadata)
+            if btc_source is None or btc_metadata is None:
+                observations[field] = _observation(
+                    metric_ref=metric_ref,
+                    value="UNAVAILABLE",
+                    status="UNAVAILABLE",
+                    candles=candles[-1:],
+                    observed_at_override=_iso(cutoff),
+                    available_at_override=_iso(cutoff),
+                    reason_code="BTC_STRUCTURE_SOURCE_UNAVAILABLE",
+                    payload={metric_ref: {"status": "UNAVAILABLE", "reason_code": "BTC_STRUCTURE_SOURCE_UNAVAILABLE"}},
+                )
+                continue
+            btc_eligible = _eligible_candles(btc_source, symbol="BTCUSDT", observed_at=cutoff, timeframe="1m")
+            if not btc_eligible:
+                observations[field] = _observation(
+                    metric_ref=metric_ref,
+                    value="UNAVAILABLE",
+                    status="UNAVAILABLE",
+                    candles=candles[-1:],
+                    observed_at_override=_iso(cutoff),
+                    available_at_override=_iso(cutoff),
+                    source_candle_ids_override=(),
+                    reason_code="BTC_STRUCTURE_HISTORY_UNAVAILABLE",
+                    payload={
+                        metric_ref: {
+                            "status": "UNAVAILABLE",
+                            "reason_code": "BTC_STRUCTURE_HISTORY_UNAVAILABLE",
+                        }
+                    },
+                )
+                continue
+            observations[field] = _swing_sequence_observation(
+                candles=btc_eligible,
+                symbol="BTCUSDT",
+                instrument_metadata=btc_metadata,
+                metric_ref=metric_ref,
+                timeframe="1h",
+                unavailable_prefix="research_v1_historical_swing_sequence_unavailable",
+            )
+            continue
+        observations[field] = produce_research_v1_historical_metric(
+            metric_ref=metric_ref,
+            rule=rule,
+            candles=candles,
+            symbol=symbol,
+            observed_at=cutoff,
+            instrument_metadata=instrument_metadata,
+            companion_candles=companion_candles,
+            companion_instrument_metadata=companion_instrument_metadata,
+            raw_trades_pages=raw_trades_pages,
+        )
+    return observations
+
+
+def _first_unavailable_classifier_input(
+    observations: Mapping[str, HistoricalMetricObservation],
+    *,
+    cutoff: datetime,
+) -> tuple[str, HistoricalMetricObservation | None, str] | None:
+    for field, metric_ref in CLASSIFIER_INPUT_METRICS:
+        observation = observations.get(field)
+        if observation is None:
+            return field, None, "INPUT_MISSING"
+        if observation.status != "AVAILABLE" or observation.value == "UNAVAILABLE":
+            return field, observation, "INPUT_UNAVAILABLE"
+        expected_at = _classifier_expected_observed_at(metric_ref, cutoff)
+        if observation.observed_at != _iso(expected_at):
+            return field, observation, "SLOT_MISMATCH"
+        if _parse_iso(observation.available_at) > cutoff:
+            return field, observation, "FUTURE_AVAILABILITY"
+    return None
+
+
+def _classifier_inputs_from_observations(observations: Mapping[str, HistoricalMetricObservation]) -> ClassifierInputs:
+    return ClassifierInputs(
+        structure_1h=SwingSequenceState(observations["structure_1h"].value),
+        structure_15m=SwingSequenceState(observations["structure_15m"].value),
+        de_15m=observations["de_15m"].value,
+        momentum_score=observations["momentum_score"].value,
+        vnm_5m_z=observations["vnm_5m_z"].value,
+        relative_score=observations["relative_score"].value,
+        relative_return_z=observations["relative_return_z"].value,
+        aggressive_delta_pct=observations["aggressive_delta_pct"].value,
+        tod_relative_turnover=observations["tod_relative_turnover"].value,
+        atr_pct_percentile_15m=observations["atr_pct_percentile_15m"].value,
+        btc_structure_1h=SwingSequenceState(observations["btc_structure_1h"].value),
+        btc_return_z=observations["btc_return_z"].value,
+    )
+
+
+def _classifier_inputs_payload(inputs: ClassifierInputs) -> dict[str, str]:
+    return {
+        "structure_1h": inputs.structure_1h.value,
+        "structure_15m": inputs.structure_15m.value,
+        "de_15m": inputs.de_15m,
+        "momentum_score": inputs.momentum_score,
+        "vnm_5m_z": inputs.vnm_5m_z,
+        "relative_score": inputs.relative_score,
+        "relative_return_z": inputs.relative_return_z,
+        "aggressive_delta_pct": inputs.aggressive_delta_pct,
+        "tod_relative_turnover": inputs.tod_relative_turnover,
+        "atr_pct_percentile_15m": inputs.atr_pct_percentile_15m,
+        "btc_structure_1h": inputs.btc_structure_1h.value,
+        "btc_return_z": inputs.btc_return_z,
+    }
+
+
+def _classifier_source_candle_ids(observations: Mapping[str, HistoricalMetricObservation]) -> tuple[str, ...]:
+    ids: list[str] = []
+    for field, _metric_ref in CLASSIFIER_INPUT_METRICS:
+        observation = observations.get(field)
+        if observation is not None:
+            ids.extend(observation.source_candle_ids)
+    return tuple(dict.fromkeys(ids))
+
+
+def _classifier_expected_observed_at(metric_ref: str, cutoff: datetime) -> datetime:
+    if metric_ref in {"AGGRESSIVE_VOLUME_DELTA_PCT", "MOMENTUM_SCORE", "TOD_REL_TURNOVER", "VNM_5m_z"}:
+        return cutoff
+    if metric_ref in {
+        "ATR percentile",
+        "BTC_RETURN_Z",
+        "DE",
+        "RELATIVE_RETURN_Z",
+        "RELATIVE_SCORE",
+        "SWING_SEQUENCE_STATE(asset,15m)",
+    }:
+        return _floor_completed_slot(cutoff, timedelta(minutes=15))
+    if metric_ref == "SWING_SEQUENCE_STATE(asset,1h)":
+        return _floor_completed_slot(cutoff, timedelta(hours=1))
+    return cutoff
 
 
 def _return_5m_observation(*, candles: Sequence[HistoricalCandle]) -> HistoricalMetricObservation:
@@ -2622,6 +2886,7 @@ def _metric_source_timeframe(metric_ref: str) -> str:
         "F-001 trigger_result",
         "F-002 trigger_result",
         "AGGRESSIVE_VOLUME_DELTA_PCT",
+        "classifier_direction",
         "RETURN(asset,5m)",
         "DE",
         "ATR percentile",
@@ -2653,7 +2918,7 @@ def _metric_context_window(metric_ref: str) -> str:
         return "5m"
     if metric_ref == "AGGRESSIVE_VOLUME_DELTA_PCT":
         return "5m"
-    if metric_ref in {"VNM_5m_z", "MOMENTUM_SCORE"}:
+    if metric_ref in {"classifier_direction", "VNM_5m_z", "MOMENTUM_SCORE"}:
         return "5m"
     if metric_ref == "SWING_SEQUENCE_STATE(asset,1h)":
         return "1h"
@@ -2677,6 +2942,10 @@ def _is_contiguous_window(candles: Sequence[Any], duration: timedelta) -> bool:
             return False
         previous_close = candle.close_time
     return True
+
+
+def _floor_completed_slot(value: datetime, duration: timedelta) -> datetime:
+    return _bucket_start(value, duration)
 
 
 def _timeframe_delta(timeframe: str) -> timedelta:
