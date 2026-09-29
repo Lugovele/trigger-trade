@@ -4,6 +4,7 @@ from copy import deepcopy
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from fractions import Fraction
 import json
 from pathlib import Path
 import re
@@ -752,6 +753,177 @@ def test_relative_return_15m_trigger_uses_exact_pinned_version():
     assert evaluation.condition_result is True
 
 
+def test_relative_return_z_uses_frozen_population_and_binds_asset_btc_evidence():
+    rule = _rule("TR-R-011")
+    asset, btc = _relative_return_z_streams()
+    changed_btc = tuple(
+        replace(candle, close=candle.close + Decimal("0.25"), high=candle.high + Decimal("0.25"))
+        if candle.open_time == datetime(2026, 8, 10, 9, 17, tzinfo=UTC)
+        else candle
+        for candle in btc
+    )
+
+    observation = produce_research_v1_historical_metric(
+        metric_ref="RELATIVE_RETURN_Z",
+        rule=rule,
+        candles=asset,
+        symbol="ETHUSDT",
+        companion_candles={"BTCUSDT": btc},
+    )
+    reversed_order = produce_research_v1_historical_metric(
+        metric_ref="RELATIVE_RETURN_Z",
+        rule=rule,
+        candles=tuple(reversed(asset)),
+        symbol="ETHUSDT",
+        companion_candles={"BTCUSDT": tuple(reversed(btc))},
+    )
+    changed = produce_research_v1_historical_metric(
+        metric_ref="RELATIVE_RETURN_Z",
+        rule=rule,
+        candles=asset,
+        symbol="ETHUSDT",
+        companion_candles={"BTCUSDT": changed_btc},
+    )
+
+    payload = observation.payload["relative_return_z"]
+    assert observation.status == "AVAILABLE"
+    assert payload["ddof"] == 0
+    assert payload["minimum_warmup_days"] == 14
+    assert payload["reference_observation_count"] >= 14 * 96
+    assert payload["value"] == observation.value
+    assert observation.evidence_digest == reversed_order.evidence_digest
+    assert observation.evidence_digest != changed.evidence_digest
+
+
+def test_relative_return_z_fail_closed_cases():
+    rule = _rule("TR-R-011")
+    asset, btc = _relative_return_z_streams()
+    flat_asset, flat_btc = _flat_relative_return_z_streams()
+    missing_btc = btc[:2000] + btc[2001:]
+
+    short = produce_research_v1_historical_metric(
+        metric_ref="RELATIVE_RETURN_Z",
+        rule=rule,
+        candles=asset[:100],
+        symbol="ETHUSDT",
+        companion_candles={"BTCUSDT": btc[:100]},
+    )
+    flat = produce_research_v1_historical_metric(
+        metric_ref="RELATIVE_RETURN_Z",
+        rule=rule,
+        candles=flat_asset,
+        symbol="ETHUSDT",
+        companion_candles={"BTCUSDT": flat_btc},
+    )
+    gap = produce_research_v1_historical_metric(
+        metric_ref="RELATIVE_RETURN_Z",
+        rule=rule,
+        candles=asset,
+        symbol="ETHUSDT",
+        companion_candles={"BTCUSDT": missing_btc},
+    )
+
+    assert short.status == "UNAVAILABLE"
+    assert short.reason_code == "research_v1_historical_relative_return_z_unavailable:INSUFFICIENT_COMPLETED_UTC_DAYS"
+    assert flat.status == "UNAVAILABLE"
+    assert flat.reason_code == "research_v1_historical_relative_return_z_unavailable:ZERO_OR_UNAVAILABLE_SIGMA"
+    assert gap.status == "UNAVAILABLE"
+    assert gap.reason_code == "research_v1_historical_relative_return_z_unavailable:RELATIVE_RETURN_15M_UNAVAILABLE"
+
+
+def test_relative_score_uses_frozen_clip_transform_and_unavailable_z_fails_closed():
+    rule = _rule("TR-R-011")
+    asset, btc = _relative_return_z_streams()
+    flat_asset, flat_btc = _flat_relative_return_z_streams()
+
+    score = produce_research_v1_historical_metric(
+        metric_ref="RELATIVE_SCORE",
+        rule=rule,
+        candles=asset,
+        symbol="ETHUSDT",
+        companion_candles={"BTCUSDT": btc},
+    )
+    z = produce_research_v1_historical_metric(
+        metric_ref="RELATIVE_RETURN_Z",
+        rule=rule,
+        candles=asset,
+        symbol="ETHUSDT",
+        companion_candles={"BTCUSDT": btc},
+    )
+    unavailable = produce_research_v1_historical_metric(
+        metric_ref="RELATIVE_SCORE",
+        rule=rule,
+        candles=flat_asset,
+        symbol="ETHUSDT",
+        companion_candles={"BTCUSDT": flat_btc},
+    )
+
+    expected_fraction = historical_triggers._clip_fraction(  # noqa: SLF001 - frozen F-004 score transform
+        historical_triggers.exact_divide(Fraction(Decimal(z.value)), 2),  # type: ignore[attr-defined]
+        Fraction(-1),
+        Fraction(1),
+    )
+    expected = Decimal(historical_triggers.canonical_decimal_text(historical_triggers.q36_working(expected_fraction).value))  # type: ignore[attr-defined]
+    assert score.status == "AVAILABLE"
+    assert Decimal(score.value) == expected
+    assert score.payload["relative_score"]["formula"] == "Q36(clip(relative_return_z / 2.0, -1, +1))"
+    assert unavailable.status == "UNAVAILABLE"
+    assert unavailable.reason_code == "research_v1_historical_relative_score_unavailable:RELATIVE_RETURN_Z_UNAVAILABLE"
+
+
+
+def test_relative_score_inherits_exact_relative_z_temporal_identity():
+    rule = _rule("TR-R-011")
+    asset, btc = _relative_return_z_streams()
+
+    baseline = produce_research_v1_historical_metric(
+        metric_ref="RELATIVE_SCORE",
+        rule=rule,
+        candles=asset,
+        symbol="ETHUSDT",
+        companion_candles={"BTCUSDT": btc},
+    )
+
+    asset_tail = tuple(
+        replace(
+            asset[-1],
+            open_time=asset[-1].close_time + timedelta(minutes=index),
+            close_time=asset[-1].close_time + timedelta(minutes=index + 1),
+        )
+        for index in range(7)
+    )
+    btc_tail = tuple(
+        replace(
+            btc[-1],
+            open_time=btc[-1].close_time + timedelta(minutes=index),
+            close_time=btc[-1].close_time + timedelta(minutes=index + 1),
+        )
+        for index in range(7)
+    )
+
+    with_incomplete_next_slot = produce_research_v1_historical_metric(
+        metric_ref="RELATIVE_SCORE",
+        rule=rule,
+        candles=asset + asset_tail,
+        symbol="ETHUSDT",
+        companion_candles={"BTCUSDT": btc + btc_tail},
+    )
+
+    relative_z = produce_research_v1_historical_metric(
+        metric_ref="RELATIVE_RETURN_Z",
+        rule=rule,
+        candles=asset + asset_tail,
+        symbol="ETHUSDT",
+        companion_candles={"BTCUSDT": btc + btc_tail},
+    )
+
+    assert with_incomplete_next_slot.status == "AVAILABLE"
+    assert with_incomplete_next_slot.observed_at == relative_z.observed_at
+    assert with_incomplete_next_slot.available_at == relative_z.available_at
+    assert with_incomplete_next_slot.source_candle_ids == relative_z.source_candle_ids
+    assert with_incomplete_next_slot.observed_at != (asset + asset_tail)[-1].close_time.isoformat()
+    assert with_incomplete_next_slot.evidence_digest == baseline.evidence_digest
+
 def test_btc_return_z_uses_completed_15m_population_and_ddof_zero():
     btc = _btc_context_source_minutes()
     observation = historical_triggers._btc_return_z_observation(  # noqa: SLF001 - phase contract evidence
@@ -1022,6 +1194,10 @@ def test_classifier_direction_remains_blocked_by_required_f004_inputs():
     assert metric_readiness("classifier_direction") == "IMPLEMENTATION_MISSING"
     assert metric_readiness("VNM_5m_z") == "IMPLEMENTATION_MISSING"
     assert metric_readiness("SWING_SEQUENCE_STATE(asset,1h)") == "HISTORICAL_READY"
+    assert metric_readiness("SWING_SEQUENCE_STATE(asset,15m)") == "HISTORICAL_READY"
+    assert metric_readiness("RELATIVE_RETURN_Z") == "HISTORICAL_READY"
+    assert metric_readiness("RELATIVE_SCORE") == "HISTORICAL_READY"
+    assert metric_readiness("BTC_RETURN_Z") == "HISTORICAL_READY"
     assert metric_readiness("AGGRESSIVE_VOLUME_DELTA_PCT") == "HISTORICAL_READY"
 
     inputs = ClassifierInputs(
@@ -1858,6 +2034,110 @@ def test_swing_sequence_state_deterministic_replay_and_provenance_binding():
     assert first.evidence_id != changed_as_of.evidence_id
 
 
+def test_swing_sequence_state_15m_uses_same_canonical_kernel_and_tick_metadata():
+    rule = _rule("TR-R-009")
+    candles = _one_minute_buckets_15m(_bullish_swing_hourly_ohlc())
+
+    observation = produce_research_v1_historical_metric(
+        metric_ref="SWING_SEQUENCE_STATE(asset,15m)",
+        rule=rule,
+        candles=candles,
+        symbol="BTCUSDT",
+        instrument_metadata=_instrument("BTCUSDT"),
+    )
+
+    payload = observation.payload["swing_sequence_state"]
+    assert observation.status == "AVAILABLE"
+    assert observation.value == "BULLISH"
+    assert payload["input_timeframe"] == "15m"
+    assert payload["pivot_window"] == "2_LEFT_2_RIGHT"
+    assert payload["confirmation_delay"] == "2_COMPLETED_15M_CANDLES"
+    assert "source_15m_population_digest" in payload
+    assert payload["instrument_metadata"]["instrument_symbol"] == "BTCUSDT"
+    assert metric_readiness("SWING_SEQUENCE_STATE(asset,15m)") == "HISTORICAL_READY"
+
+
+def test_swing_sequence_state_15m_gap_future_and_provenance_safety():
+    rule = _rule("TR-R-009")
+    candles = _one_minute_buckets_15m(_bullish_swing_hourly_ohlc())
+    missing_constituent = tuple(candle for index, candle in enumerate(candles) if index != 3 * 15 + 7)
+    partial_current = candles + (
+        replace(
+            candles[-1],
+            open_time=candles[-1].close_time,
+            close_time=candles[-1].close_time + timedelta(minutes=1),
+            completed=False,
+        ),
+    )
+    changed = list(candles)
+    changed[6 * 15 + 5] = replace(changed[6 * 15 + 5], high=Decimal("16"), close=Decimal("14"), turnover=Decimal("14"))
+
+    missing = produce_research_v1_historical_metric(
+        metric_ref="SWING_SEQUENCE_STATE(asset,15m)",
+        rule=rule,
+        candles=missing_constituent,
+        symbol="BTCUSDT",
+        instrument_metadata=_instrument("BTCUSDT"),
+    )
+    complete = produce_research_v1_historical_metric(
+        metric_ref="SWING_SEQUENCE_STATE(asset,15m)",
+        rule=rule,
+        candles=candles,
+        symbol="BTCUSDT",
+        instrument_metadata=_instrument("BTCUSDT"),
+    )
+    with_partial = produce_research_v1_historical_metric(
+        metric_ref="SWING_SEQUENCE_STATE(asset,15m)",
+        rule=rule,
+        candles=partial_current,
+        symbol="BTCUSDT",
+        instrument_metadata=_instrument("BTCUSDT"),
+    )
+    reversed_order = produce_research_v1_historical_metric(
+        metric_ref="SWING_SEQUENCE_STATE(asset,15m)",
+        rule=rule,
+        candles=tuple(reversed(candles)),
+        symbol="BTCUSDT",
+        instrument_metadata=_instrument("BTCUSDT"),
+    )
+    changed_observation = produce_research_v1_historical_metric(
+        metric_ref="SWING_SEQUENCE_STATE(asset,15m)",
+        rule=rule,
+        candles=tuple(changed),
+        symbol="BTCUSDT",
+        instrument_metadata=_instrument("BTCUSDT"),
+    )
+
+    assert missing.status == "UNAVAILABLE"
+    assert missing.reason_code == "research_v1_historical_swing_sequence_15m_unavailable:NON_CONTINUOUS_15M_WINDOW"
+    assert complete.status == "AVAILABLE"
+    assert with_partial.evidence_id == complete.evidence_id
+    assert reversed_order.evidence_id == complete.evidence_id
+    assert changed_observation.evidence_id != complete.evidence_id
+
+
+def test_btc_return_z_metric_exposure_reuses_context_producer_evidence():
+    rule = _rule("TR-R-018")
+    btc = _btc_context_source_minutes()
+    primary = (_primary_cutoff_candle("ETHUSDT", btc[-1].close_time),)
+
+    exposed = produce_research_v1_historical_metric(
+        metric_ref="BTC_RETURN_Z",
+        rule=rule,
+        candles=primary,
+        symbol="ETHUSDT",
+        companion_candles={"BTCUSDT": btc},
+    )
+    internal = historical_triggers._btc_return_z_observation(  # noqa: SLF001 - verifies single producer contract
+        btc_candles=btc,
+        evaluation_at=primary[-1].close_time,
+    )
+
+    assert exposed.status == "AVAILABLE"
+    assert exposed.value == internal.value
+    assert exposed.evidence_digest == internal.evidence_digest
+
+
 def test_btc_return_trigger_uses_factual_5m_return_and_directional_outputs():
     long_rule = _rule("TR-R-BTC-001")
     short_rule = _rule("TR-R-BTC-002")
@@ -2207,6 +2487,34 @@ def _relative_return_15m_streams(
     )
 
 
+def _relative_return_z_streams() -> tuple[tuple[HistoricalCandle, ...], tuple[HistoricalCandle, ...]]:
+    start = datetime(2026, 8, 1, 0, 0, tzinfo=UTC)
+    total_minutes = 16 * 24 * 60 + 15
+    asset_closes: list[str] = []
+    btc_closes: list[str] = []
+    for index in range(total_minutes):
+        bucket = index // 15
+        asset_close = Decimal("100") + Decimal(bucket) / Decimal("500") + Decimal(bucket % 13) / Decimal("100")
+        btc_close = Decimal("200") + Decimal(bucket) / Decimal("900") + Decimal(bucket % 7) / Decimal("200")
+        asset_closes.append(str(asset_close))
+        btc_closes.append(str(btc_close))
+    return (
+        _minute_stream_from_closes(symbol="ETHUSDT", start=start, closes=tuple(asset_closes)),
+        _minute_stream_from_closes(symbol="BTCUSDT", start=start, closes=tuple(btc_closes)),
+    )
+
+
+def _flat_relative_return_z_streams() -> tuple[tuple[HistoricalCandle, ...], tuple[HistoricalCandle, ...]]:
+    start = datetime(2026, 8, 1, 0, 0, tzinfo=UTC)
+    total_minutes = 16 * 24 * 60 + 15
+    asset_closes = ("100",) * total_minutes
+    btc_closes = ("200",) * total_minutes
+    return (
+        _minute_stream_from_closes(symbol="ETHUSDT", start=start, closes=asset_closes),
+        _minute_stream_from_closes(symbol="BTCUSDT", start=start, closes=btc_closes),
+    )
+
+
 def _btc_context_source_minutes(
     *,
     days: int = 16,
@@ -2412,6 +2720,47 @@ def _one_minute_buckets_1h(
             opened = start + timedelta(hours=hour_index, minutes=minute)
             minute_high = high_value if minute == 20 else max(open_value, close_value)
             minute_low = low_value if minute == 20 else min(open_value, close_value)
+            candles.append(
+                HistoricalCandle(
+                    symbol=symbol,
+                    category="linear",
+                    timeframe="1m",
+                    open_time=opened,
+                    close_time=opened + timedelta(minutes=1),
+                    open=open_value,
+                    high=minute_high,
+                    low=minute_low,
+                    close=close_value,
+                    volume=Decimal("1"),
+                    turnover=close_value,
+                    completed=True,
+                )
+            )
+    return tuple(candles)
+
+
+def _one_minute_buckets_15m(
+    buckets_15m: tuple[str | tuple[str, str, str], ...],
+    *,
+    symbol: str = "BTCUSDT",
+) -> tuple[HistoricalCandle, ...]:
+    start = datetime(2026, 9, 5, 13, 0, tzinfo=UTC)
+    candles: list[HistoricalCandle] = []
+    for bucket_index, bucket in enumerate(buckets_15m):
+        if isinstance(bucket, tuple):
+            high, low, close = bucket
+        else:
+            high = bucket
+            low = bucket
+            close = bucket
+        high_value = Decimal(high)
+        low_value = Decimal(low)
+        close_value = Decimal(close)
+        open_value = close_value
+        for minute in range(15):
+            opened = start + timedelta(minutes=bucket_index * 15 + minute)
+            minute_high = high_value if minute == 5 else max(open_value, close_value)
+            minute_low = low_value if minute == 5 else min(open_value, close_value)
             candles.append(
                 HistoricalCandle(
                     symbol=symbol,
