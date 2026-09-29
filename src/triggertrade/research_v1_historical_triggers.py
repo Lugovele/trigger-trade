@@ -34,6 +34,7 @@ from triggertrade.set_engine import (
     swing_sequence_state,
     wilder_atr_seed,
     wilder_atr_update,
+    zscore_working,
 )
 from triggertrade.set_engine.formulas import SetKernelError
 from triggertrade.trigger_sets import RuleDefinition
@@ -47,6 +48,7 @@ HISTORICAL_READY_METRICS = frozenset(
         "F-001 trigger_result",
         "F-002 trigger_result",
         "ATR percentile",
+        "BTC_CONTEXT_SCORE",
         "DE",
         "RELATIVE_RETURN_15m",
         "RETURN(asset,5m)",
@@ -63,7 +65,6 @@ KERNEL_EXISTS_BUT_ADAPTER_MISSING_METRICS = frozenset(
 IMPLEMENTATION_MISSING_METRICS = frozenset(
     {
         "AGGRESSIVE_VOLUME_DELTA_PCT",
-        "BTC_CONTEXT_SCORE",
         "VNM_5m_z",
         "classifier_direction",
     }
@@ -200,6 +201,7 @@ def evaluate_research_v1_historical_triggers(
     observed_at: datetime | None = None,
     instrument_metadata: FuturesInstrument | None = None,
     companion_candles: Mapping[str, Sequence[HistoricalCandle]] | None = None,
+    companion_instrument_metadata: Mapping[str, FuturesInstrument] | None = None,
 ) -> tuple[HistoricalTriggerEvaluation, ...]:
     """Evaluate pinned declarative Research V1 triggers from factual candles.
 
@@ -222,6 +224,7 @@ def evaluate_research_v1_historical_triggers(
             observed_at=observed_at,
             instrument_metadata=instrument_metadata,
             companion_candles=companion_candles,
+            companion_instrument_metadata=companion_instrument_metadata,
         )
         context_time = _parse_iso(observation.observed_at)
         signal = DeclarativeMetricPredicateTrigger(rule).evaluate(
@@ -279,6 +282,7 @@ def produce_research_v1_historical_metric(
     observed_at: datetime | None = None,
     instrument_metadata: FuturesInstrument | None = None,
     companion_candles: Mapping[str, Sequence[HistoricalCandle]] | None = None,
+    companion_instrument_metadata: Mapping[str, FuturesInstrument] | None = None,
 ) -> HistoricalMetricObservation:
     """Produce one factual Research V1 metric observation from historical candles."""
 
@@ -299,6 +303,7 @@ def produce_research_v1_historical_metric(
         symbol=symbol,
         instrument_metadata=instrument_metadata,
         companion_candles=companion_candles,
+        companion_instrument_metadata=companion_instrument_metadata,
     )
 
 
@@ -310,6 +315,7 @@ def _metric_observation(
     symbol: str,
     instrument_metadata: FuturesInstrument | None,
     companion_candles: Mapping[str, Sequence[HistoricalCandle]] | None,
+    companion_instrument_metadata: Mapping[str, FuturesInstrument] | None,
 ) -> HistoricalMetricObservation:
     if metric_ref == "F-001 trigger_result":
         return _f001_observation(rule=rule, candles=candles)
@@ -319,6 +325,12 @@ def _metric_observation(
         return _de_observation(candles=candles)
     if metric_ref == "ATR percentile":
         return _atr_percentile_observation(candles=candles)
+    if metric_ref == "BTC_CONTEXT_SCORE":
+        return _btc_context_score_observation(
+            candles=candles,
+            companion_candles=companion_candles,
+            companion_instrument_metadata=companion_instrument_metadata,
+        )
     if metric_ref == "RELATIVE_RETURN_15m":
         return _relative_return_15m_observation(
             candles=candles,
@@ -676,6 +688,117 @@ def _relative_return_15m_observation(
         candles=(asset_previous, asset_current, btc_previous, btc_current),
         reason_code=None,
         payload={"relative_return_15m": payload},
+    )
+
+
+def _btc_context_score_observation(
+    *,
+    candles: Sequence[HistoricalCandle],
+    companion_candles: Mapping[str, Sequence[HistoricalCandle]] | None,
+    companion_instrument_metadata: Mapping[str, FuturesInstrument] | None,
+) -> HistoricalMetricObservation:
+    evaluation_at = candles[-1].close_time
+    btc_source = _btc_companion_source(companion_candles)
+    if btc_source is None:
+        return _unavailable_observation(
+            "BTC_CONTEXT_SCORE",
+            candles,
+            reason_code="research_v1_historical_btc_context_score_unavailable:BTC_STREAM_UNAVAILABLE",
+        )
+    btc_metadata = _btc_companion_metadata(companion_instrument_metadata)
+    if btc_metadata is None:
+        return _unavailable_observation(
+            "BTC_CONTEXT_SCORE",
+            candles,
+            reason_code="research_v1_historical_btc_context_score_unavailable:INSTRUMENT_METADATA_UNAVAILABLE",
+        )
+    btc_eligible = _eligible_candles(
+        btc_source,
+        symbol="BTCUSDT",
+        observed_at=evaluation_at,
+        timeframe="1m",
+    )
+    if not btc_eligible:
+        return _unavailable_observation(
+            "BTC_CONTEXT_SCORE",
+            candles,
+            reason_code="research_v1_historical_btc_context_score_unavailable:BTC_STREAM_UNAVAILABLE",
+        )
+    return_z = _btc_return_z_observation(btc_candles=btc_eligible, evaluation_at=evaluation_at)
+    if return_z.status != "AVAILABLE":
+        return _observation(
+            metric_ref="BTC_CONTEXT_SCORE",
+            value="UNAVAILABLE",
+            status="UNAVAILABLE",
+            candles=btc_eligible[-1:],
+            reason_code="research_v1_historical_btc_context_score_unavailable:BTC_RETURN_Z_UNAVAILABLE",
+            payload={
+                "btc_context_score": {
+                    "status": "UNAVAILABLE",
+                    "reason_code": "BTC_RETURN_Z_UNAVAILABLE",
+                    "btc_return_z": return_z.payload,
+                    "btc_return_z_evidence_digest": return_z.evidence_digest,
+                }
+            },
+        )
+    structure = _swing_sequence_observation(
+        candles=btc_eligible,
+        symbol="BTCUSDT",
+        instrument_metadata=btc_metadata,
+    )
+    if structure.status != "AVAILABLE":
+        return _observation(
+            metric_ref="BTC_CONTEXT_SCORE",
+            value="UNAVAILABLE",
+            status="UNAVAILABLE",
+            candles=btc_eligible[-1:],
+            reason_code="research_v1_historical_btc_context_score_unavailable:BTC_STRUCTURE_UNAVAILABLE",
+            payload={
+                "btc_context_score": {
+                    "status": "UNAVAILABLE",
+                    "reason_code": "BTC_STRUCTURE_UNAVAILABLE",
+                    "btc_structure": structure.payload,
+                    "btc_structure_evidence_digest": structure.evidence_digest,
+                }
+            },
+        )
+    try:
+        structure_score = _structure_score(structure.value)
+        momentum_score = _clip_fraction(exact_divide(Fraction(Decimal(return_z.value)), 2), Fraction(-1), Fraction(1))
+        context_score = q36_working(
+            Fraction(3, 5) * structure_score + Fraction(2, 5) * momentum_score
+        ).value
+        value = canonical_decimal_text(context_score)
+    except (ArithmeticError, NumericPolicyError, ValueError) as exc:
+        return _observation(
+            metric_ref="BTC_CONTEXT_SCORE",
+            value="UNAVAILABLE",
+            status="UNAVAILABLE",
+            candles=btc_eligible[-1:],
+            reason_code=f"research_v1_historical_btc_context_score_unavailable:{exc}",
+            payload={"btc_context_score": {"status": "UNAVAILABLE", "reason_code": str(exc)}},
+        )
+    payload = {
+        "status": "AVAILABLE",
+        "formula": "Q36(0.60 * BTC_STRUCTURE_SCORE + 0.40 * BTC_MOMENTUM_SCORE)",
+        "btc_structure_state": structure.value,
+        "btc_structure_score": canonical_decimal_text(structure_score),
+        "btc_momentum_score": canonical_decimal_text(q36_working(momentum_score).value),
+        "btc_return_z": return_z.value,
+        "btc_structure_evidence_digest": structure.evidence_digest,
+        "btc_return_z_evidence_digest": return_z.evidence_digest,
+        "structure_weight": "0.60",
+        "momentum_weight": "0.40",
+        "value": value,
+    }
+    payload = {**payload, "btc_context_digest": canonical_json_digest(payload)}
+    return _observation(
+        metric_ref="BTC_CONTEXT_SCORE",
+        value=value,
+        status="AVAILABLE",
+        candles=btc_eligible[-1:],
+        reason_code=None,
+        payload={"btc_context_score": payload},
     )
 
 
@@ -1043,6 +1166,191 @@ def _btc_companion_source(
     return None
 
 
+def _btc_companion_metadata(
+    companion_instrument_metadata: Mapping[str, FuturesInstrument] | None,
+) -> FuturesInstrument | None:
+    if companion_instrument_metadata is None:
+        return None
+    for key, value in companion_instrument_metadata.items():
+        if str(key).upper() == "BTCUSDT":
+            return value
+    return None
+
+
+def _btc_return_z_observation(
+    *,
+    btc_candles: Sequence[HistoricalCandle],
+    evaluation_at: datetime,
+) -> HistoricalMetricObservation:
+    source = tuple(candle for candle in btc_candles if candle.close_time <= evaluation_at)
+    if not source:
+        return _unavailable_observation(
+            "BTC_RETURN_Z",
+            btc_candles,
+            reason_code="research_v1_historical_btc_return_z_unavailable:BTC_STREAM_UNAVAILABLE",
+        )
+    fifteen_minute = _aggregate_completed_candles(source, timeframe="15m")
+    if len(fifteen_minute) < 2:
+        return _unavailable_observation(
+            "BTC_RETURN_Z",
+            btc_candles,
+            reason_code="research_v1_historical_btc_return_z_unavailable:INSUFFICIENT_15M_HISTORY",
+        )
+    if not _is_contiguous_window(fifteen_minute, timedelta(minutes=15)):
+        return _observation(
+            metric_ref="BTC_RETURN_Z",
+            value="UNAVAILABLE",
+            status="UNAVAILABLE",
+            candles=fifteen_minute[-1:],
+            reason_code="research_v1_historical_btc_return_z_unavailable:NON_CONTINUOUS_15M_RETURN_CHAIN",
+            payload={"btc_return_z": {"status": "UNAVAILABLE", "reason_code": "NON_CONTINUOUS_15M_RETURN_CHAIN"}},
+        )
+    returns = _return_15m_series(fifteen_minute)
+    if not returns:
+        return _observation(
+            metric_ref="BTC_RETURN_Z",
+            value="UNAVAILABLE",
+            status="UNAVAILABLE",
+            candles=fifteen_minute[-1:],
+            reason_code="research_v1_historical_btc_return_z_unavailable:RETURN_SERIES_UNAVAILABLE",
+            payload={"btc_return_z": {"status": "UNAVAILABLE", "reason_code": "RETURN_SERIES_UNAVAILABLE"}},
+        )
+    current = returns[-1]
+    reference_population = _eligible_15m_return_reference_population(returns, evaluation_at=current["closed_at_dt"])
+    if reference_population is None:
+        return _observation(
+            metric_ref="BTC_RETURN_Z",
+            value="UNAVAILABLE",
+            status="UNAVAILABLE",
+            candles=(current["current_candle"],),
+            reason_code="research_v1_historical_btc_return_z_unavailable:INSUFFICIENT_COMPLETED_UTC_DAYS",
+            payload={"btc_return_z": {"status": "UNAVAILABLE", "minimum_warmup_days": 14}},
+        )
+    z = zscore_working(current=current["return_15m"], population=reference_population["values"])
+    if z is None:
+        return _observation(
+            metric_ref="BTC_RETURN_Z",
+            value="UNAVAILABLE",
+            status="UNAVAILABLE",
+            candles=(current["current_candle"],),
+            reason_code="research_v1_historical_btc_return_z_unavailable:ZERO_OR_UNAVAILABLE_SIGMA",
+            payload={"btc_return_z": {"status": "UNAVAILABLE", "reason_code": "ZERO_OR_UNAVAILABLE_SIGMA"}},
+        )
+    value = canonical_decimal_text(z)
+    return _observation(
+        metric_ref="BTC_RETURN_Z",
+        value=value,
+        status="AVAILABLE",
+        candles=(current["current_candle"],),
+        reason_code=None,
+        payload={
+            "btc_return_z": {
+                "status": "AVAILABLE",
+                "formula": "Q36((RETURN(BTC,15m) - mean(reference_returns)) / population_stddev(reference_returns))",
+                "input_timeframe": "15m",
+                "benchmark_symbol": "BTCUSDT",
+                "lookback": "30_completed_UTC_calendar_days",
+                "minimum_warmup_days": 14,
+                "ddof": 0,
+                "zero_variance_behavior": "UNAVAILABLE",
+                "current_return_observation_digest": current["digest"],
+                    "reference_population_digest": reference_population["reference_population_digest"],
+                "reference_observation_count": reference_population["reference_observation_count"],
+                "eligible_completed_utc_days": reference_population["eligible_completed_utc_days"],
+                "selection_start": reference_population["selection_start"],
+                "selection_end": reference_population["selection_end"],
+                "value": value,
+            }
+        },
+    )
+
+
+def _return_15m_series(candles: Sequence[AggregatedHistoricalCandle]) -> tuple[dict[str, Any], ...]:
+    observations: list[dict[str, Any]] = []
+    for previous, current in zip(candles, candles[1:]):
+        if current.close_time - previous.close_time != timedelta(minutes=15):
+            return ()
+        try:
+            value = canonical_decimal_text(_return_between(previous, current))
+        except (ArithmeticError, NumericPolicyError, ValueError):
+            return ()
+        payload = {
+            "previous_candle_id": _candle_id(previous),
+            "current_candle_id": _candle_id(current),
+            "previous_close_time": _iso(previous.close_time),
+            "current_close_time": _iso(current.close_time),
+            "return_15m": value,
+        }
+        observations.append(
+            {
+                **payload,
+                "digest": canonical_json_digest(payload),
+                "current_candle": current,
+                "closed_at_dt": current.close_time,
+            }
+        )
+    return tuple(observations)
+
+
+def _eligible_15m_return_reference_population(
+    series: Sequence[dict[str, Any]],
+    *,
+    evaluation_at: datetime,
+) -> dict[str, Any] | None:
+    evaluation_day = evaluation_at.astimezone(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    start = evaluation_day - timedelta(days=30)
+    grouped: dict[datetime, list[dict[str, Any]]] = {}
+    for item in series:
+        candle = item["current_candle"]
+        opened = candle.open_time.astimezone(UTC)
+        closed = candle.close_time.astimezone(UTC)
+        if opened < start or closed > evaluation_day:
+            continue
+        day = opened.replace(hour=0, minute=0, second=0, microsecond=0)
+        grouped.setdefault(day, []).append(item)
+    complete_days: list[datetime] = []
+    observations: list[dict[str, Any]] = []
+    for day in sorted(grouped):
+        values = tuple(sorted(grouped[day], key=lambda item: str(item["current_close_time"])))
+        if len(values) != 96:
+            continue
+        complete_days.append(day)
+        observations.extend(_return_15m_public_observation(value) for value in values)
+    for previous, current in zip(complete_days, complete_days[1:]):
+        if current - previous != timedelta(days=1):
+            return None
+    if len(complete_days) < 14 or not observations:
+        return None
+    population_digest = canonical_json_digest(
+        {
+            "selection_start": _iso(start),
+            "selection_end": _iso(evaluation_day),
+            "minimum_warmup_days": 14,
+            "ddof": 0,
+            "observations": observations,
+        }
+    )
+    return {
+        "selection_start": _iso(start),
+        "selection_end": _iso(evaluation_day),
+        "eligible_completed_utc_days": tuple(_iso(day) for day in complete_days),
+        "reference_population_digest": population_digest,
+        "reference_observation_count": len(observations),
+        "values": tuple(str(item["return_15m"]) for item in observations),
+    }
+
+
+def _return_15m_public_observation(item: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "previous_candle_id": str(item["previous_candle_id"]),
+        "current_candle_id": str(item["current_candle_id"]),
+        "previous_close_time": str(item["previous_close_time"]),
+        "current_close_time": str(item["current_close_time"]),
+        "return_15m": str(item["return_15m"]),
+        "digest": str(item["digest"]),
+    }
+
+
 def _return_between(previous: AggregatedHistoricalCandle, current: AggregatedHistoricalCandle) -> Fraction:
     previous_close = Fraction(previous.close)
     current_close = Fraction(current.close)
@@ -1061,6 +1369,20 @@ def _interval_payload(previous: AggregatedHistoricalCandle, current: AggregatedH
         "interval_end": _iso(current.close_time),
         "source_candle_ids": (_candle_id(previous), _candle_id(current)),
     }
+
+
+def _structure_score(state: str) -> Fraction:
+    if state == SwingSequenceState.BULLISH.value:
+        return Fraction(1)
+    if state == SwingSequenceState.AMBIGUOUS.value:
+        return Fraction(0)
+    if state == SwingSequenceState.BEARISH.value:
+        return Fraction(-1)
+    raise NumericPolicyError(f"unavailable BTC structure state: {state}")
+
+
+def _clip_fraction(value: Fraction, lower: Fraction, upper: Fraction) -> Fraction:
+    return max(lower, min(upper, value))
 
 
 def _median_fraction(values: Sequence[Fraction]) -> Fraction:
@@ -1287,6 +1609,7 @@ def _metric_source_timeframe(metric_ref: str) -> str:
         "RETURN(asset,5m)",
         "DE",
         "ATR percentile",
+        "BTC_CONTEXT_SCORE",
         "RELATIVE_RETURN_15m",
         "SWING_SEQUENCE_STATE(asset,1h)",
         "TOD_REL_TURNOVER",
