@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from triggertrade.backtest import BacktestResult, BacktestStatus, ExactBacktestTriggerSetResolver
 from triggertrade.backtest.data import HistoricalDataError
 from triggertrade.backtest.engine import BacktestEngineError
+from triggertrade.instruments import CatalogError, FuturesInstrument
 import pytest
 
 from triggertrade.persistence import ResearchBacktestRunRecord, ResearchBacktestStatus
@@ -17,8 +18,17 @@ from triggertrade.services.research_backtest_execution import (
     _backtest_unavailable_reason,
     _run_research_v1_certified_position_backtest,
 )
+from triggertrade.services.runtime import _research_backtest_instrument
 from tests.unit.test_backtest_replay import _config, _instrument, _trade_candles
+from tests.unit.test_position_opportunity_b7a import rules_version as _position_rules_version
 from tests.unit.test_research_demo_execution import _research_record, _rules_version, _trigger_set
+from tests.unit.test_research_v1_historical_handoff import (
+    _instrument as _catalog_instrument,
+    _matched_btc_fact_candles,
+    _research_set,
+    _rules_for,
+    _ticker_response,
+)
 
 
 def test_canonical_research_backtest_executor_loads_exact_config_fetches_history_and_persists_result(tmp_path, monkeypatch):
@@ -187,14 +197,19 @@ def test_canonical_research_backtest_executor_engine_errors_are_not_historical_f
     assert store.updates[-1]["metrics"] == {}
 
 
-def test_research_v1_backtest_fails_closed_without_factual_historical_market_handoff():
-    with pytest.raises(HistoricalDataError, match="research_v1_historical_market_handoff_unavailable"):
+def test_research_v1_backtest_fails_closed_without_factual_ticker_handoff_input():
+    research_set = _research_set("SET-R-BTC-001-V2")
+    candles = _matched_btc_fact_candles()
+
+    with pytest.raises(HistoricalDataError, match="TICKER_LAST_PRICE_UNAVAILABLE"):
         _run_research_v1_certified_position_backtest(
-            trigger_set=_trigger_set(),
-            rules=_rules_version(),
-            plan=_backtest_plan(),
-            candles=_trade_candles(volume_spike=True),
-            instrument=_instrument(),
+            trigger_set=replace(_trigger_set(), set_id=research_set.set_id, version=research_set.set_version),
+            research_set=research_set,
+            trigger_rules=_rules_for(research_set),
+            rules=_position_rules_version(metadata={"stop_loss_mode": "DYNAMIC"}, minimum_risk_reward_enabled=False),
+            plan=_backtest_plan(research_end=candles[-1].close_time),
+            candles=candles,
+            instrument=replace(_catalog_instrument("BTCUSDT"), updated_at="2026-08-01T00:00:00+00:00"),
             portfolio_state=object(),
         )
 
@@ -204,6 +219,132 @@ def test_research_v1_historical_fail_closed_reason_is_preserved():
 
     assert reason == "research_v1_historical_market_handoff_unavailable"
     assert reason != "historical_fetch_failed"
+
+
+
+def test_research_v1_backtest_rejects_instrument_metadata_from_after_decision_slot():
+    research_set = _research_set("SET-R-BTC-001-V2")
+    candles = _matched_btc_fact_candles()
+    rules = _position_rules_version(
+        metadata={"stop_loss_mode": "DYNAMIC"},
+        minimum_risk_reward_enabled=False,
+    )
+    future_instrument = replace(
+        _catalog_instrument("BTCUSDT"),
+        updated_at="2099-01-01T00:00:00+00:00",
+    )
+
+    with pytest.raises(
+        HistoricalDataError,
+        match="research_v1_historical_instrument_metadata_snapshot_unavailable",
+    ):
+        _run_research_v1_certified_position_backtest(
+            trigger_set=replace(
+                _trigger_set(),
+                set_id=research_set.set_id,
+                version=research_set.set_version,
+            ),
+            research_set=research_set,
+            trigger_rules=_rules_for(research_set),
+            rules=rules,
+            plan=_backtest_plan(research_end=candles[-1].close_time),
+            candles=candles,
+            instrument=future_instrument,
+            portfolio_state=object(),
+            ticker_responses=(
+                _ticker_response(
+                    "BTCUSDT",
+                    candles[-1].close_time,
+                    "1",
+                ),
+            ),
+        )
+
+
+def test_research_v1_backtest_wires_factual_handoff_to_canonical_position_decision():
+    research_set = _research_set("SET-R-BTC-001-V2")
+    candles = _matched_btc_fact_candles()
+    rules = _position_rules_version(metadata={"stop_loss_mode": "DYNAMIC"}, minimum_risk_reward_enabled=False)
+
+    result = _run_research_v1_certified_position_backtest(
+        trigger_set=replace(_trigger_set(), set_id=research_set.set_id, version=research_set.set_version),
+        research_set=research_set,
+        trigger_rules=_rules_for(research_set),
+        rules=rules,
+        plan=_backtest_plan(research_end=candles[-1].close_time),
+        candles=candles,
+        instrument=replace(_catalog_instrument("BTCUSDT"), updated_at="2026-08-01T00:00:00+00:00"),
+        portfolio_state=object(),
+        ticker_responses=(_ticker_response("BTCUSDT", candles[-1].close_time, "1"),),
+    )
+
+    evidence = result.research_v1_certified_position_evidence
+    state = evidence["position_state"]
+    handoff = state["source_contracts"]["market_handoff"]["market_handoff"]
+    evaluation = state["evaluation"]
+
+    assert evidence["research_set_id"] == research_set.set_id
+    assert evidence["research_set_version"] == research_set.set_version
+    assert evidence["rules_version_id"] == rules.rules_version_id
+    assert evidence["set_direction"] == "LONG"
+    assert handoff["snapshot"]["direction"] == "LONG"
+    assert evaluation["direction"] == handoff["snapshot"]["direction"]
+    assert state["decision"]["decision"] in {"APPROVE", "REJECT"}
+    assert state["decision"]["construction_gates"] == "NOT_YET_EVALUATED"
+    assert evidence["portfolio_boundary"] == "CAPITAL_AND_LIMITS_NOT_EVALUATED"
+    assert evidence["order_spec_status"] == "NOT_EVALUATED_REQUIRES_PORTFOLIO_GRANT"
+    assert result.trades == 0
+    assert result.closed_trades == 0
+
+
+def test_research_v1_position_evidence_changes_with_handoff_and_rules_identity():
+    research_set = _research_set("SET-R-BTC-001-V2")
+    candles = _matched_btc_fact_candles()
+    rules = _position_rules_version(metadata={"stop_loss_mode": "DYNAMIC"}, minimum_risk_reward_enabled=False)
+    kwargs = dict(
+        trigger_set=replace(_trigger_set(), set_id=research_set.set_id, version=research_set.set_version),
+        research_set=research_set,
+        trigger_rules=_rules_for(research_set),
+        rules=rules,
+        plan=_backtest_plan(research_end=candles[-1].close_time),
+        candles=candles,
+        instrument=replace(_catalog_instrument("BTCUSDT"), updated_at="2026-08-01T00:00:00+00:00"),
+        portfolio_state=object(),
+    )
+
+    first = _run_research_v1_certified_position_backtest(
+        **kwargs,
+        ticker_responses=(_ticker_response("BTCUSDT", candles[-1].close_time, "1"),),
+    )
+    changed_handoff = _run_research_v1_certified_position_backtest(
+        **kwargs,
+        ticker_responses=(_ticker_response("BTCUSDT", candles[-1].close_time, "2"),),
+    )
+    changed_rules = _run_research_v1_certified_position_backtest(
+        **{**kwargs, "rules": replace(rules, rules_version_id="rules-v2", version="v2")},
+        ticker_responses=(_ticker_response("BTCUSDT", candles[-1].close_time, "1"),),
+    )
+
+    assert first.research_v1_certified_position_evidence["evidence_digest"] != changed_handoff.research_v1_certified_position_evidence["evidence_digest"]
+    assert first.research_v1_certified_position_evidence["evidence_digest"] != changed_rules.research_v1_certified_position_evidence["evidence_digest"]
+
+
+def test_research_backtest_runtime_provider_returns_factual_catalog_instrument():
+    instrument = _research_backtest_instrument(_FakeInstrumentClient(), "BTCUSDT")
+    repeated = _research_backtest_instrument(_FakeInstrumentClient(), "BTCUSDT")
+
+    assert isinstance(instrument, FuturesInstrument)
+    assert instrument.symbol == "BTCUSDT"
+    assert instrument.source == "bybit_public_v5_instruments_info_linear"
+    assert instrument.catalog_hash
+    assert instrument.updated_at == "2026-09-07T12:00:00+00:00"
+    assert repeated.updated_at == instrument.updated_at
+    assert repeated.catalog_hash == instrument.catalog_hash
+
+
+def test_research_backtest_runtime_provider_fails_without_factual_metadata_time():
+    with pytest.raises(CatalogError, match="source timestamp unavailable"):
+        _research_backtest_instrument(_FakeInstrumentClient(time=None), "BTCUSDT")
 
 
 class _FakeHistoricalSource:
@@ -219,6 +360,39 @@ class _FakeHistoricalSource:
 class _ForbiddenHistoricalSource:
     def load(self, **kwargs):
         raise RuntimeError("Bybit API HTTP error: 403 Forbidden")
+
+
+class _FakeInstrumentClient:
+    def __init__(self, *, time="1788782400000"):
+        self.time = time
+
+    def linear_instrument_metadata(self, symbol):
+        return SimpleNamespace(
+            time=self.time,
+            result={
+                "list": [
+                    {
+                        "symbol": symbol,
+                        "baseCoin": symbol.removesuffix("USDT"),
+                        "quoteCoin": "USDT",
+                        "settleCoin": "USDT",
+                        "contractType": "LinearPerpetual",
+                        "status": "Trading",
+                        "priceFilter": {"tickSize": "0.10", "priceScale": "2"},
+                        "lotSizeFilter": {
+                            "qtyStep": "0.001",
+                            "minOrderQty": "0.001",
+                            "maxOrderQty": "100",
+                            "minNotionalValue": "5",
+                            "maxMktOrderQty": "50",
+                        },
+                        "leverageFilter": {"minLeverage": "1", "maxLeverage": "100", "leverageStep": "0.01"},
+                        "launchTime": "1700000000000",
+                        "deliveryTime": "0",
+                    }
+                ]
+            }
+        )
 
 
 class _FakeRunStore:
@@ -321,13 +495,14 @@ def _backtest_record(*, run_id="rbt-worker-1", status=ResearchBacktestStatus.RUN
     )
 
 
-def _backtest_plan():
+def _backtest_plan(*, research_end=None):
     from triggertrade.backtest import BacktestPlan
 
+    end = research_end or datetime(2026, 9, 5, 14, 14, tzinfo=UTC)
     return BacktestPlan(
         "BTCUSDT",
         "linear",
         "1m",
-        datetime(2026, 9, 5, 14, 1, tzinfo=UTC),
-        datetime(2026, 9, 5, 14, 14, tzinfo=UTC),
+        end,
+        end,
     )

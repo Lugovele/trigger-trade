@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -29,8 +30,12 @@ from triggertrade.research_v1_execution import (
     run_research_v1_demo_orchestration,
 )
 from triggertrade.backtest import BacktestResult, BacktestStatus
+from triggertrade.backtest.models import HistoricalCandle
 from triggertrade.persistence.research_store import ResearchBacktestRunRecord, ResearchDecision, ResearchRecord, ResearchStatus
-from triggertrade.services.research_backtest_execution import CanonicalResearchBacktestExecutionExecutor
+from triggertrade.services.research_backtest_execution import (
+    RESEARCH_V1_PORTFOLIO_LIFECYCLE_BOUNDARY_REASON,
+    CanonicalResearchBacktestExecutionExecutor,
+)
 from triggertrade.services.research_demo_execution import CanonicalResearchDemoExecutionExecutor
 from triggertrade.services.research import (
     ResearchBacktestExecutionHandoffResult,
@@ -544,6 +549,94 @@ def test_durable_backtest_worker_applies_shared_portfolio_events_and_enforces_gl
     ]
 
 
+def test_durable_backtest_worker_fails_closed_at_portfolio_lifecycle_boundary_and_preserves_pepe_binding(monkeypatch):
+    rules = _fixed_research_v1_rule("TRV-R-POS-001-PR-201")
+    research = _research_v1_record("R-001")
+    record = _backtest_record(research.research_id)
+    updates = []
+    runner_calls = []
+
+    class FakeRegistry:
+        def __init__(self, _connection):
+            pass
+
+        def get_trading_rules_version(self, rules_version_id):
+            return rules if rules_version_id == rules.rules_version_id else None
+
+    class FakeSetRegistry:
+        def __init__(self, _connection):
+            pass
+
+        def list_research_sets(self):
+            return tuple(_research_v1_sets_by_version().values())
+
+    class FakeRunStore:
+        def __init__(self, _connection):
+            pass
+
+        def update_backtest_run(self, **kwargs):
+            updates.append(kwargs)
+            return replace(
+                record,
+                status=kwargs["status"],
+                engine_run_id=kwargs.get("engine_run_id"),
+                metrics=kwargs.get("metrics") or {},
+                unavailable_reason=kwargs.get("unavailable_reason"),
+            )
+
+    def fake_certified_backtest(**kwargs):
+        runner_calls.append(
+            {
+                "plan_symbol": kwargs["plan"].symbol,
+                "candle_symbols": tuple(candle.symbol for candle in kwargs["candles"]),
+                "instrument_symbol": kwargs["instrument"].symbol,
+                "symbol_binding": kwargs["symbol_binding"],
+            }
+        )
+        result = _backtest_result(kwargs["plan"].symbol)
+        object.__setattr__(
+            result,
+            "research_v1_certified_position_evidence",
+            {
+                "evidence_digest": f"digest-{kwargs['plan'].symbol}",
+                "symbol_binding": kwargs["symbol_binding"],
+            },
+        )
+        return result
+
+    monkeypatch.setattr("triggertrade.services.research_backtest_execution.PostgresUnitOfWork", _FakeUnitOfWork)
+    monkeypatch.setattr("triggertrade.services.research_backtest_execution.PostgresResearchConfigurationRegistry", FakeRegistry)
+    monkeypatch.setattr("triggertrade.services.research_backtest_execution.PostgresResearchSetRegistry", FakeSetRegistry)
+    monkeypatch.setattr("triggertrade.services.research_backtest_execution.PostgresResearchRunStore", FakeRunStore)
+    monkeypatch.setattr("triggertrade.services.research_backtest_execution._run_research_v1_certified_position_backtest", fake_certified_backtest)
+    source = _FakeHistoricalSource()
+    executor = CanonicalResearchBacktestExecutionExecutor(
+        config=_config(Path(".tmp") / "research-v1-durable-boundary.db"),
+        db_path=Path(".tmp") / "research-v1-durable-boundary.db",
+        factory=object(),
+        historical_source=source,
+        instrument_provider=lambda symbol: SimpleNamespace(symbol=symbol),
+    )
+
+    updated = executor._start_research_v1_backtest(record, research, _plan("BTCUSDT"))
+
+    assert updated.status is ResearchBacktestStatus.FAILED
+    assert updated.engine_run_id is None
+    assert updated.unavailable_reason == RESEARCH_V1_PORTFOLIO_LIFECYCLE_BOUNDARY_REASON
+    assert updates[-1]["status"] is ResearchBacktestStatus.FAILED
+    assert updates[-1]["engine_run_id"] is None
+    assert updates[-1]["unavailable_reason"] == RESEARCH_V1_PORTFOLIO_LIFECYCLE_BOUNDARY_REASON
+    assert updates[-1]["metrics"]["research_v1"] is True
+    pepe_fetches = [call for call in source.calls if call["symbol"] == "1000PEPEUSDT"]
+    assert pepe_fetches
+    pepe_runner = next(call for call in runner_calls if call["plan_symbol"] == "PEPEUSDT")
+    assert pepe_runner["candle_symbols"] == ("PEPEUSDT",)
+    assert pepe_runner["instrument_symbol"] == "1000PEPEUSDT"
+    assert pepe_runner["symbol_binding"]["logical_symbol"] == "PEPEUSDT"
+    assert pepe_runner["symbol_binding"]["instrument_symbol"] == "1000PEPEUSDT"
+    assert next(call for call in runner_calls if call["plan_symbol"] == "BTCUSDT")["instrument_symbol"] == "BTCUSDT"
+
+
 def test_durable_backtest_worker_releases_only_from_closed_finality(monkeypatch):
     rules = replace(
         _fixed_research_v1_rule("TRV-R-POS-001-PR-201"),
@@ -913,8 +1006,31 @@ def _backtest_result(symbol: str, *, research_v1_portfolio_events=()) -> Backtes
 
 
 class _FakeHistoricalSource:
-    def load(self, **_kwargs):
-        return SimpleNamespace(candles=("canonical-candle",))
+    def __init__(self):
+        self.calls = []
+
+    def load(self, **kwargs):
+        self.calls.append(kwargs)
+        start = datetime(2026, 9, 1, tzinfo=UTC)
+        symbol = kwargs["symbol"]
+        return SimpleNamespace(
+            candles=(
+                HistoricalCandle(
+                    symbol,
+                    "linear",
+                    "1m",
+                    start,
+                    start + timedelta(minutes=1),
+                    Decimal("100"),
+                    Decimal("101"),
+                    Decimal("99"),
+                    Decimal("100"),
+                    Decimal("1"),
+                    Decimal("100"),
+                    True,
+                ),
+            )
+        )
 
 
 class _FakeUnitOfWork:

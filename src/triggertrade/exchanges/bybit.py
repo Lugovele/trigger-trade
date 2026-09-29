@@ -30,6 +30,7 @@ class BybitResponse:
     ret_code: int
     ret_msg: str
     result: dict[str, Any]
+    time: str | None = None
 
 
 HttpTransport = Callable[[Request, int], bytes]
@@ -386,6 +387,7 @@ class BybitDemoClient:
             ret_code=int(raw.get("retCode", -1)),
             ret_msg=str(raw.get("retMsg", "")),
             result=raw.get("result") or {},
+            time=None if raw.get("time") in {None, ""} else str(raw.get("time")),
         )
         if response.ret_code != 0:
             message = _sanitize_error_message(response.ret_msg)

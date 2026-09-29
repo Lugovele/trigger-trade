@@ -10,7 +10,7 @@ import pytest
 
 from triggertrade.backtest import BACKTEST_EVIDENCE_SOURCE, BacktestPlan, BacktestStatus, ExactBacktestTriggerSetResolver, run_backtest
 from triggertrade.backtest.comparison import compare_backtest_runs
-from triggertrade.backtest.data import HistoricalDataError, HistoricalKlineCache, validate_historical_candles
+from triggertrade.backtest.data import BybitHistoricalDataSource, HistoricalDataError, HistoricalKlineCache, validate_historical_candles
 from triggertrade.backtest.engine import BacktestEngineError
 from triggertrade.backtest.models import BACKTEST_SIMULATOR_VERSION, HistoricalCandle
 from triggertrade.backtest.simulator import BacktestFuturesSimulator, BacktestSimulationError
@@ -24,6 +24,7 @@ from triggertrade.persistence import FuturesExecutionStore, RuntimeStore, TraceS
 from triggertrade.persistence.futures_accounting_store import FuturesAccountingStore
 from triggertrade.trigger_sets import RuleDefinition, RuleStatus, RuleType, TriggerSetStatus
 from triggertrade.triggers import DECLARATIVE_METRIC_PREDICATE_IMPLEMENTATION_KEY, DECLARATIVE_METRIC_PREDICATE_SCHEMA
+from triggertrade.exchanges import BybitResponse
 
 
 def test_historical_candles_reject_invalid_order_duplicates_gaps_and_scope():
@@ -79,6 +80,35 @@ def test_historical_cache_reuses_same_validated_content(tmp_path):
 
     with pytest.raises(HistoricalDataError, match="boundary"):
         cache.save(candles[1:], symbol="BTCUSDT", category="linear", timeframe="1m", start=start, end=end)
+
+
+def test_bybit_historical_source_supports_research_v1_linear_symbols_and_uses_requested_instrument(tmp_path):
+    start = datetime(2026, 9, 19, 10, 49, tzinfo=UTC)
+    end = start + timedelta(minutes=2)
+    client = _FakeHistoricalClient()
+    source = BybitHistoricalDataSource(client, cache=HistoricalKlineCache(tmp_path / "history"), retry_sleep_seconds=0)
+
+    eth = source.load(symbol="ETHUSDT", category="linear", timeframe="1m", start=start, end=end, use_cache=False)
+    pepe = source.load(symbol="1000PEPEUSDT", category="linear", timeframe="1m", start=start, end=end, use_cache=False)
+
+    assert client.calls[0]["symbol"] == "ETHUSDT"
+    assert client.calls[1]["symbol"] == "1000PEPEUSDT"
+    assert {candle.symbol for candle in eth.candles} == {"ETHUSDT"}
+    assert {candle.symbol for candle in pepe.candles} == {"1000PEPEUSDT"}
+
+
+def test_bybit_historical_source_still_fails_closed_for_unsupported_scope(tmp_path):
+    start = datetime(2026, 9, 19, 10, 49, tzinfo=UTC)
+    end = start + timedelta(minutes=1)
+    source = BybitHistoricalDataSource(_FakeHistoricalClient(), cache=HistoricalKlineCache(tmp_path / "history"), retry_sleep_seconds=0)
+
+    source.load(symbol="BTCUSDT", category="linear", timeframe="1m", start=start, end=end, use_cache=False)
+    with pytest.raises(HistoricalDataError, match="linear perpetual"):
+        source.load(symbol="BTCUSDT", category="spot", timeframe="1m", start=start, end=end, use_cache=False)
+    with pytest.raises(HistoricalDataError, match="1m"):
+        source.load(symbol="BTCUSDT", category="linear", timeframe="5m", start=start, end=end, use_cache=False)
+    with pytest.raises(HistoricalDataError, match="Research V1 linear perpetual"):
+        source.load(symbol="UNKNOWNUSDT", category="linear", timeframe="1m", start=start, end=end, use_cache=False)
 
 
 def test_backtest_simulator_fills_after_decision_candle_and_records_backtest_source(tmp_path):
@@ -416,6 +446,28 @@ def _intent(*, created_at):
 
 def _candles(count: int):
     return tuple(_candle(index) for index in range(count))
+
+
+class _FakeHistoricalClient:
+    def __init__(self):
+        self.calls = []
+
+    def linear_historical_candles(self, *, symbol, interval, start_ms, end_ms, limit):
+        self.calls.append(
+            {
+                "symbol": symbol,
+                "interval": interval,
+                "start_ms": start_ms,
+                "end_ms": end_ms,
+                "limit": limit,
+            }
+        )
+        rows = []
+        current = start_ms
+        while current <= end_ms:
+            rows.append([str(current), "100", "101", "99", "100", "1", "100"])
+            current += 60_000
+        return BybitResponse(0, "OK", {"list": rows})
 
 
 def _trade_candles(*, volume_spike: bool = False):

@@ -618,7 +618,6 @@ def build_canonical_runtime_from_env(env: dict[str, str]):
     )
     from triggertrade.backtest.data import BybitHistoricalDataSource
     from triggertrade.execution.bybit_futures import BybitFuturesExecutionAdapter
-    from triggertrade.market_data import parse_linear_instrument
     from triggertrade.services.futures_runtime import FuturesOperatorExecutionRuntime
     from triggertrade.services.research_backtest_execution import CanonicalResearchBacktestExecutionExecutor
     from triggertrade.services.research_demo_execution import (
@@ -680,10 +679,7 @@ def build_canonical_runtime_from_env(env: dict[str, str]):
         db_path=db_path,
         factory=factory,
         historical_source=BybitHistoricalDataSource(market_client),
-        instrument_provider=lambda symbol: parse_linear_instrument(
-            market_client.linear_instrument_metadata(symbol).result,
-            symbol=symbol,
-        ),
+        instrument_provider=lambda symbol: _research_backtest_instrument(market_client, symbol),
     )
     return build_target_trading_worker(
         factory=factory,
@@ -694,6 +690,36 @@ def build_canonical_runtime_from_env(env: dict[str, str]):
         worker_id=str(runtime_env.get("TRIGGERTRADE_WORKER_ID") or "").strip() or None,
         poll_seconds=_poll_seconds(runtime_env, key="TRIGGERTRADE_WORKER_POLL_SECONDS", default="5"),
     )
+
+
+def _research_backtest_instrument(market_client, symbol: str):
+    from triggertrade.instruments import catalog_hash, instrument_from_bybit
+    from triggertrade.instruments.catalog import CatalogError, with_catalog_hash
+
+    expected = symbol.strip().upper()
+    response = market_client.linear_instrument_metadata(expected)
+    updated_at = _bybit_response_time_iso(response)
+    for candidate in response.result.get("list") or ():
+        if str(candidate.get("symbol") or "").upper() == expected:
+            item = candidate
+            break
+    else:
+        raise CatalogError(f"Bybit response did not include expected symbol {expected}")
+    instrument = instrument_from_bybit(item, updated_at=updated_at)
+    return with_catalog_hash(instrument, catalog_hash((instrument,)))
+
+
+def _bybit_response_time_iso(response) -> str:
+    from triggertrade.instruments.catalog import CatalogError
+
+    raw_time = getattr(response, "time", None)
+    if raw_time in {None, ""}:
+        raise CatalogError("instrument metadata source timestamp unavailable")
+    try:
+        millis = int(str(raw_time))
+    except ValueError as exc:
+        raise CatalogError("instrument metadata source timestamp invalid") from exc
+    return datetime.fromtimestamp(millis / 1000, UTC).isoformat()
 
 
 def build_legacy_demo_futures_runtime_from_env(env: dict[str, str]):

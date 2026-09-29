@@ -21,6 +21,22 @@ class HistoricalDataError(ValueError):
     pass
 
 
+RESEARCH_V1_LINEAR_HISTORICAL_INSTRUMENTS = frozenset(
+    {
+        "BTCUSDT",
+        "ETHUSDT",
+        "SOLUSDT",
+        "XRPUSDT",
+        "DOGEUSDT",
+        "SUIUSDT",
+        "1000PEPEUSDT",
+        "AVAXUSDT",
+        "LINKUSDT",
+        "BNBUSDT",
+    }
+)
+
+
 @dataclass(frozen=True)
 class HistoricalCacheRecord:
     path: Path
@@ -152,8 +168,8 @@ class BybitHistoricalDataSource:
     def load(self, *, symbol: str, category: str, timeframe: str, start: datetime, end: datetime, use_cache: bool = True) -> HistoricalCacheRecord:
         if category.lower() != "linear":
             raise HistoricalDataError("historical replay supports Bybit linear perpetual only")
-        if symbol.upper() != "BTCUSDT":
-            raise HistoricalDataError("historical replay supports BTCUSDT only")
+        if symbol.upper() not in RESEARCH_V1_LINEAR_HISTORICAL_INSTRUMENTS:
+            raise HistoricalDataError("historical replay supports Research V1 linear perpetual instruments only")
         if _timeframe(timeframe) != "1m":
             raise HistoricalDataError("historical replay supports 1m candles only")
         if _utc(start) >= _utc(end):

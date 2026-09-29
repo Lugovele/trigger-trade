@@ -2,18 +2,20 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from hashlib import sha256
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Callable, Mapping, Protocol
 
 from triggertrade.backtest import BacktestPlan, BacktestResult, BacktestStatus, ExactBacktestTriggerSetResolver, run_backtest
 from triggertrade.backtest.data import HistoricalDataError
 from triggertrade.backtest.engine import BacktestEngineError
-from triggertrade.backtest.models import BACKTEST_DATA_SOURCE_VERSION
+from triggertrade.backtest.models import BACKTEST_DATA_SOURCE_VERSION, HistoricalCandle
+from triggertrade.canonical_json import canonical_json_digest
 from triggertrade.config import AppConfig
+from triggertrade.instruments import FuturesInstrument
 from triggertrade.market_data import FuturesInstrumentMetadata
 from triggertrade.persistence.durable_messages import DurableMessageStore
 from triggertrade.persistence.postgres import PostgresConnectionFactory, PostgresPersistenceError, PostgresUnitOfWork
@@ -21,7 +23,17 @@ from triggertrade.persistence.postgres_research_registry import (
     PostgresResearchConfigurationRegistry,
     PostgresResearchRunStore,
 )
-from triggertrade.persistence.postgres_research_set_registry import PostgresResearchSetRegistry
+from triggertrade.persistence.postgres_research_set_registry import PostgresResearchSetRegistry, ResearchSetVersion
+from triggertrade.persistence.postgres_trigger_registry import PostgresTriggerRegistry
+from triggertrade.position_rules import (
+    PositionOpportunityCommand,
+    PositionOpportunityHandler,
+)
+from triggertrade.research_v1_historical_handoff import (
+    ResearchV1HistoricalMarketHandoffUnavailable,
+    produce_research_v1_historical_market_handoff,
+)
+from triggertrade.research_v1_historical_sets import ResearchV1HistoricalSetError, resolve_research_v1_historical_set
 from triggertrade.persistence.research_store import ResearchBacktestRunRecord, ResearchBacktestStatus, ResearchRecord
 from triggertrade.rules import TradingRulesVersion
 from triggertrade.research_v1_execution import (
@@ -35,13 +47,14 @@ from triggertrade.research_v1_execution import (
 )
 from triggertrade.services.research import ResearchBacktestExecutionHandoffResult, _backtest_metrics
 from triggertrade.services.runtime import interval_delta
-from triggertrade.trigger_sets import TriggerSetVersion
+from triggertrade.trigger_sets import RuleDefinition, TriggerSetVersion
 
 
 RESEARCH_BACKTEST_PRODUCER = "Research"
 RESEARCH_BACKTEST_CONSUMER = "ResearchBacktestExecution"
 RESEARCH_BACKTEST_MESSAGE_TYPE = "RESEARCH_BACKTEST_START"
 RESEARCH_BACKTEST_MESSAGE_VERSION = "1"
+RESEARCH_V1_PORTFOLIO_LIFECYCLE_BOUNDARY_REASON = "research_v1_portfolio_lifecycle_not_yet_wired"
 
 
 class HistoricalReplaySource(Protocol):
@@ -49,13 +62,38 @@ class HistoricalReplaySource(Protocol):
 
 
 class BacktestInstrumentProvider(Protocol):
-    def __call__(self, symbol: str) -> FuturesInstrumentMetadata: ...
+    def __call__(self, symbol: str) -> FuturesInstrumentMetadata | FuturesInstrument: ...
 
 
 class ResearchBacktestExecutionExecutor(Protocol):
     canonical_research_backtest_executor: bool
 
     def start_research_backtest(self, record: ResearchBacktestRunRecord) -> ResearchBacktestRunRecord: ...
+
+
+@dataclass(frozen=True)
+class ResearchV1CertifiedPositionBacktestResult:
+    backtest_run_id: str
+    status: BacktestStatus
+    candles_processed: int
+    signals: int
+    intents: int
+    trades: int
+    closed_trades: int
+    rejected_intents: int
+    no_action_count: int
+    technical_failures: int
+    net_pnl: Decimal
+    expectancy: Decimal | None
+    profit_factor: Decimal | None
+    max_drawdown: Decimal | None
+    fees: Decimal
+    funding: Decimal
+    long_trades: int
+    short_trades: int
+    by_regime: dict[str, int]
+    research_v1_certified_position_evidence: dict[str, Any]
+    research_v1_portfolio_events: tuple[dict[str, Any], ...] = ()
 
 
 class PostgresResearchBacktestExecutionHandoff:
@@ -271,12 +309,17 @@ class CanonicalResearchBacktestExecutionExecutor:
                 end=plan.research_end,
                 use_cache=True,
             )
-            candles = tuple(replay.candles)
-            if not candles:
+            physical_candles = tuple(replay.candles)
+            if not physical_candles:
                 raise HistoricalDataError("backend_historical_replay_inputs_unavailable")
+            candles = _research_v1_logical_candles(
+                physical_candles,
+                logical_symbol=binding.symbol,
+                instrument_symbol=binding.instrument_symbol,
+            )
             instrument = self._instrument_provider(binding.instrument_symbol)
             symbol_plan = BacktestPlan(
-                binding.instrument_symbol,
+                binding.symbol,
                 plan.category,
                 plan.timeframe,
                 plan.research_start,
@@ -285,14 +328,30 @@ class CanonicalResearchBacktestExecutionExecutor:
                 validation_end=plan.validation_end,
                 warmup_candles=plan.warmup_candles,
             )
-            trigger_set = research_set_to_trigger_set(research_set, symbol=binding.instrument_symbol)
+            trigger_set = research_set_to_trigger_set(research_set, symbol=binding.symbol)
             result = _run_research_v1_certified_position_backtest(
                 trigger_set=trigger_set,
+                research_set=research_set,
+                trigger_rules_loader=lambda research_set=research_set: _load_trigger_rules_for_research_set(
+                    self._factory,
+                    research_set,
+                ),
                 rules=rules_by_id[binding.rules_version_id],
                 plan=symbol_plan,
                 candles=candles,
                 instrument=instrument,
                 portfolio_state=portfolio_state,
+                ticker_responses=_replay_sequence(replay, "ticker_responses"),
+                companion_candles=_replay_mapping(replay, "companion_candles"),
+                companion_instrument_metadata=_replay_mapping(replay, "companion_instrument_metadata"),
+                raw_trades_pages=_replay_sequence(replay, "raw_trades_pages"),
+                symbol_binding={
+                    "logical_symbol": binding.symbol,
+                    "instrument_symbol": binding.instrument_symbol,
+                    "asset": binding.asset,
+                    "set_version_id": binding.set_version_id,
+                    "rules_version_id": binding.rules_version_id,
+                },
             )
             portfolio_events = _research_v1_portfolio_events_from_execution_result(result)
             next_portfolio = apply_research_v1_portfolio_events(portfolio_state, portfolio_events)
@@ -318,7 +377,6 @@ class CanonicalResearchBacktestExecutionExecutor:
             portfolio_factory=lambda cell: portfolio_for_rules(cell.rules_version_id),
         )
         closed_trades = sum(int(item.get("closed_trades") or 0) for item in result.symbol_results)
-        status = ResearchBacktestStatus.COMPLETED if closed_trades > 0 else ResearchBacktestStatus.COMPLETED_NO_TRADES
         metrics = {
             "research_v1": True,
             "closed_trades": closed_trades,
@@ -331,10 +389,10 @@ class CanonicalResearchBacktestExecutionExecutor:
             return PostgresResearchRunStore(uow.connection).update_backtest_run(
                 research_id=record.research_id,
                 run_id=record.run_id,
-                status=status,
-                engine_run_id=f"research-v1-{record.run_id}",
+                status=ResearchBacktestStatus.FAILED,
+                engine_run_id=None,
                 metrics=metrics,
-                unavailable_reason=None,
+                unavailable_reason=RESEARCH_V1_PORTFOLIO_LIFECYCLE_BOUNDARY_REASON,
                 updated_at=datetime.now(UTC).isoformat(),
             )
 
@@ -424,22 +482,240 @@ def _research_v1_portfolio_events_from_execution_result(result: object) -> tuple
 def _run_research_v1_certified_position_backtest(
     *,
     trigger_set: TriggerSetVersion,
+    research_set: ResearchSetVersion | None = None,
+    trigger_rules: tuple[RuleDefinition, ...] | None = None,
+    trigger_rules_loader: Callable[[], tuple[RuleDefinition, ...]] | None = None,
     rules: TradingRulesVersion | None,
     plan: BacktestPlan,
     candles: tuple[Any, ...],
-    instrument: FuturesInstrumentMetadata,
+    instrument: FuturesInstrumentMetadata | FuturesInstrument,
     portfolio_state: ResearchV1SharedPortfolioState,
+    ticker_responses: tuple[Mapping[str, Any], ...] = (),
+    companion_candles: Mapping[str, tuple[Any, ...]] | None = None,
+    companion_instrument_metadata: Mapping[str, FuturesInstrument] | None = None,
+    raw_trades_pages: tuple[Mapping[str, Any], ...] = (),
+    symbol_binding: Mapping[str, Any] | None = None,
 ):
-    """Fail closed until historical Set evaluation can produce factual Market Handoff.
+    """Run factual Research V1 Set -> MARKET_HANDOFF -> Position opportunity."""
 
-    Research V1 Dynamic TP/SL may only enter Position from an already-frozen
-    Set-owned MARKET_HANDOFF. The current backtest stack can load historical
-    candles and resolve pinned symbols/Sets/Rules, but it does not yet have a
-    factual historical producer for trigger evaluations, Set result direction,
-    ATR_15m, structural reference levels, or thesis context. Do not synthesize
-    those inputs here.
-    """
-    raise HistoricalDataError("research_v1_historical_market_handoff_unavailable")
+    if rules is None:
+        raise HistoricalDataError("research_v1_historical_position_unavailable:TRADING_RULES_UNAVAILABLE")
+    if research_set is None:
+        raise HistoricalDataError("research_v1_historical_position_unavailable:RESEARCH_SET_UNAVAILABLE")
+    resolved_trigger_rules = trigger_rules
+    if resolved_trigger_rules is None and trigger_rules_loader is not None:
+        resolved_trigger_rules = trigger_rules_loader()
+    if not resolved_trigger_rules:
+        raise HistoricalDataError("research_v1_historical_position_unavailable:TRIGGER_RULES_UNAVAILABLE")
+    if not isinstance(instrument, FuturesInstrument):
+        raise HistoricalDataError("research_v1_historical_market_handoff_unavailable:INSTRUMENT_METADATA_UNAVAILABLE")
+
+    try:
+        metadata_as_of = datetime.fromisoformat(instrument.updated_at.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        raise HistoricalDataError(
+            "research_v1_historical_instrument_metadata_snapshot_unavailable"
+        )
+
+    if metadata_as_of > plan.research_end.astimezone(UTC):
+        raise HistoricalDataError(
+            "research_v1_historical_instrument_metadata_snapshot_unavailable"
+        )
+
+    try:
+        set_resolution = resolve_research_v1_historical_set(
+            research_set=research_set,
+            trigger_rules=resolved_trigger_rules,
+            candles=candles,
+            symbol=trigger_set.symbol,
+            observed_at=plan.research_end,
+            instrument_metadata=instrument,
+            companion_candles=companion_candles,
+            companion_instrument_metadata=companion_instrument_metadata,
+            raw_trades_pages=raw_trades_pages,
+        )
+        handoff = produce_research_v1_historical_market_handoff(
+            research_set=research_set,
+            set_resolution=set_resolution,
+            candles=candles,
+            symbol=trigger_set.symbol,
+            instrument_metadata=instrument,
+            ticker_responses=ticker_responses,
+        )
+    except (ResearchV1HistoricalSetError, ResearchV1HistoricalMarketHandoffUnavailable) as exc:
+        raise HistoricalDataError(str(exc)) from exc
+
+    if handoff is None:
+        evidence = _research_v1_position_evidence(
+            trigger_set=trigger_set,
+            research_set=research_set,
+            rules=rules,
+            set_resolution=set_resolution,
+            handoff=None,
+            position_state=None,
+            symbol_binding=symbol_binding,
+        )
+        return _research_v1_position_result(
+            plan=plan,
+            candles=candles,
+            evidence=evidence,
+            no_action_count=1,
+        )
+
+    position_decision_id = f"rv1-position-decision-{handoff.evidence_digest[:24]}"
+    command = PositionOpportunityCommand(
+        event_id=f"rv1-position-event-{handoff.evidence_digest[:24]}",
+        position_decision_id=position_decision_id,
+        occurred_at=handoff.payload["market_handoff"]["created_at"],
+        market_handoff=handoff.payload,
+        rules_version=rules,
+    )
+    try:
+        position = PositionOpportunityHandler().evaluate(command)
+    except ValueError as exc:
+        raise HistoricalDataError(f"research_v1_historical_position_unavailable:{exc}") from exc
+
+    position_state = position.to_state_payload()["position_opportunity_state"]
+    evidence = _research_v1_position_evidence(
+        trigger_set=trigger_set,
+        research_set=research_set,
+        rules=rules,
+        set_resolution=set_resolution,
+        handoff=handoff,
+        position_state=position_state,
+        symbol_binding=symbol_binding,
+    )
+    decision = str(position_state["decision"]["decision"])
+    return _research_v1_position_result(
+        plan=plan,
+        candles=candles,
+        evidence=evidence,
+        intents=1,
+        rejected_intents=1 if decision == "REJECT" else 0,
+        no_action_count=0,
+    )
+
+
+def _load_trigger_rules_for_research_set(
+    factory: PostgresConnectionFactory,
+    research_set: ResearchSetVersion,
+) -> tuple[RuleDefinition, ...]:
+    with PostgresUnitOfWork(factory) as uow:
+        registry = PostgresTriggerRegistry(uow.connection)
+        rules: list[RuleDefinition] = []
+        for member in research_set.trigger_members:
+            rule = registry.get_trigger_version(member.trigger_id, member.trigger_version)
+            if rule is None:
+                raise PostgresPersistenceError(f"research_v1_trigger_version_missing:{member.trigger_id}@{member.trigger_version}")
+            rules.append(rule)
+        return tuple(rules)
+
+
+def _replay_sequence(replay: object, name: str) -> tuple[Mapping[str, Any], ...]:
+    value = getattr(replay, name, ())
+    if value is None:
+        return ()
+    return tuple(value)
+
+
+def _replay_mapping(replay: object, name: str) -> Mapping[str, Any] | None:
+    value = getattr(replay, name, None)
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise HistoricalDataError(f"research_v1_historical_replay_{name}_invalid")
+    return {str(key): tuple(item) if name == "companion_candles" else item for key, item in value.items()}
+
+
+def _research_v1_logical_candles(
+    candles: tuple[HistoricalCandle, ...],
+    *,
+    logical_symbol: str,
+    instrument_symbol: str,
+) -> tuple[HistoricalCandle, ...]:
+    expected = instrument_symbol.upper()
+    requested = logical_symbol.upper()
+    converted: list[HistoricalCandle] = []
+    for candle in candles:
+        if candle.symbol.upper() != expected:
+            raise HistoricalDataError("research_v1_historical_physical_symbol_mismatch")
+        if requested == expected:
+            converted.append(candle)
+        else:
+            converted.append(replace(candle, symbol=requested))
+    return tuple(converted)
+
+
+def _research_v1_position_evidence(
+    *,
+    trigger_set: TriggerSetVersion,
+    research_set: ResearchSetVersion,
+    rules: TradingRulesVersion,
+    set_resolution,
+    handoff,
+    position_state: Mapping[str, Any] | None,
+    symbol_binding: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload = {
+        "producer": "research_v1_historical_position_opportunity@1",
+        "trigger_set_id": trigger_set.set_id,
+        "trigger_set_version": trigger_set.version,
+        "research_set_id": research_set.set_id,
+        "research_set_version": research_set.set_version,
+        "rules_version_id": rules.rules_version_id,
+        "rules_version": rules.version,
+        "set_resolution_evidence_digest": set_resolution.evidence_digest,
+        "set_result_id": set_resolution.set_result_id,
+        "decision_cycle_id": set_resolution.decision_cycle_id,
+        "set_direction": set_resolution.direction,
+        "market_handoff_evidence_digest": None if handoff is None else handoff.evidence_digest,
+        "market_handoff_id": None if handoff is None else handoff.evidence_id,
+        "position_state": position_state,
+        "symbol_binding": None if symbol_binding is None else dict(symbol_binding),
+    }
+    digest = canonical_json_digest(payload)
+    return {
+        **payload,
+        "evidence_id": f"rv1-position-opportunity-{digest[:24]}",
+        "evidence_digest": digest,
+        "portfolio_boundary": "CAPITAL_AND_LIMITS_NOT_EVALUATED",
+        "order_spec_status": "NOT_EVALUATED_REQUIRES_PORTFOLIO_GRANT",
+    }
+
+
+def _research_v1_position_result(
+    *,
+    plan: BacktestPlan,
+    candles: tuple[Any, ...],
+    evidence: dict[str, Any],
+    intents: int = 0,
+    rejected_intents: int = 0,
+    no_action_count: int = 0,
+    long_trades: int = 0,
+    short_trades: int = 0,
+) -> ResearchV1CertifiedPositionBacktestResult:
+    return ResearchV1CertifiedPositionBacktestResult(
+        backtest_run_id=f"research-v1-position-{evidence['evidence_digest'][:24]}",
+        status=BacktestStatus.COMPLETED,
+        candles_processed=len(candles),
+        signals=1 if intents else 0,
+        intents=intents,
+        trades=0,
+        closed_trades=0,
+        rejected_intents=rejected_intents,
+        no_action_count=no_action_count,
+        technical_failures=0,
+        net_pnl=Decimal("0"),
+        expectancy=None,
+        profit_factor=None,
+        max_drawdown=Decimal("0"),
+        fees=Decimal("0"),
+        funding=Decimal("0"),
+        long_trades=long_trades,
+        short_trades=short_trades,
+        by_regime={},
+        research_v1_certified_position_evidence=evidence,
+    )
 
 def _historical_replay_load_start(plan: BacktestPlan) -> datetime:
     return plan.research_start.astimezone(UTC) - interval_delta(plan.timeframe) * (plan.warmup_candles + 1)
