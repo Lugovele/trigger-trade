@@ -1013,6 +1013,50 @@ def test_remaining_phase4_metrics_stay_fail_closed_without_factual_sources():
         assert metric_readiness(metric_ref) == "IMPLEMENTATION_MISSING"
 
 
+def test_aggressive_volume_delta_pct_remains_fail_closed_without_raw_trades():
+    candles = tuple(
+        _candle(index, close=str(100 + index), high=str(101 + index), low=str(99 + index), volume="100000")
+        for index in range(30)
+    )
+
+    with pytest.raises(
+        ResearchV1HistoricalTriggerInputUnavailable,
+        match="research_v1_historical_metric_unavailable:AGGRESSIVE_VOLUME_DELTA_PCT",
+    ):
+        produce_research_v1_historical_metric(
+            metric_ref="AGGRESSIVE_VOLUME_DELTA_PCT",
+            rule=_rule("TR-R-013"),
+            candles=candles,
+            symbol="BTCUSDT",
+        )
+    assert "AGGRESSIVE_VOLUME_DELTA_PCT" not in HISTORICAL_READY_METRICS
+    assert metric_readiness("AGGRESSIVE_VOLUME_DELTA_PCT") == "IMPLEMENTATION_MISSING"
+
+
+def test_aggressive_volume_delta_pct_does_not_use_candle_direction_or_ohlcv_proxy():
+    green_candles = tuple(
+        _ohlcv_candle(index, open_="100", high="120", low="90", close="119", volume="100000", turnover="11900000")
+        for index in range(30)
+    )
+    red_candles = tuple(
+        _ohlcv_candle(index, open_="119", high="120", low="90", close="100", volume="100000", turnover="10000000")
+        for index in range(30)
+    )
+
+    for trigger_id, candles in (("TR-R-013", green_candles), ("TR-R-014", red_candles)):
+        with pytest.raises(
+            ResearchV1HistoricalTriggerInputUnavailable,
+            match=f"research_v1_historical_trigger_input_unavailable:{trigger_id}",
+        ):
+            evaluate_research_v1_historical_triggers(
+                rules=(_rule(trigger_id),),
+                candles=candles,
+                symbol="BTCUSDT",
+                trigger_set_id="SET-R-UNIT",
+                trigger_set_version="v1",
+            )
+
+
 def test_swing_sequence_state_requires_factual_tick_metadata():
     rule = _rule("TR-R-009")
     candles = _one_minute_buckets_1h(_bullish_swing_hourly_ohlc())
@@ -1475,6 +1519,34 @@ def _candle(
         close=close_value,
         volume=Decimal(volume),
         turnover=close_value * Decimal(volume),
+        completed=True,
+    )
+
+
+def _ohlcv_candle(
+    index: int,
+    *,
+    symbol: str = "BTCUSDT",
+    open_: str,
+    high: str,
+    low: str,
+    close: str,
+    volume: str,
+    turnover: str,
+) -> HistoricalCandle:
+    start = datetime(2026, 9, 5, 13, 0, tzinfo=UTC) + timedelta(minutes=index)
+    return HistoricalCandle(
+        symbol=symbol,
+        category="linear",
+        timeframe="1m",
+        open_time=start,
+        close_time=start + timedelta(minutes=1),
+        open=Decimal(open_),
+        high=Decimal(high),
+        low=Decimal(low),
+        close=Decimal(close),
+        volume=Decimal(volume),
+        turnover=Decimal(turnover),
         completed=True,
     )
 
