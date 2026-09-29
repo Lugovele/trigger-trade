@@ -942,13 +942,62 @@ def test_btc_context_score_trigger_uses_exact_pinned_version():
     assert evaluation.metric_value != "UNAVAILABLE"
 
 
+def test_vnm_5m_z_parallel_atr_implementation_is_removed():
+    source = Path("src/triggertrade/research_v1_historical_triggers.py").read_text(encoding="utf-8")
+
+    assert "_true_range_5m" not in source
+    assert "_atr_5m_series" not in source
+    assert "_vnm_5m_series" not in source
+    assert "_vnm_5m_z_observation" not in source
+    assert "VNM_5m_z" not in HISTORICAL_READY_METRICS
+    assert metric_readiness("VNM_5m_z") == "IMPLEMENTATION_MISSING"
+
+
+def test_vnm_5m_z_stays_fail_closed_because_certified_atr_contract_is_15m_only():
+    rule = _rule("TR-R-022")
+    candles = _vnm_5m_source_minutes(days=1, extra_buckets=0)
+    five_minute = historical_triggers._aggregate_completed_candles(candles, timeframe="5m")
+    seed = tuple(historical_triggers._set_candle(candle) for candle in five_minute[1:15])
+
+    seed_result = historical_triggers.wilder_atr_seed(seed_candles=seed, predecessor_close=str(five_minute[0].close))
+
+    assert seed_result.status is historical_triggers.IndicatorStatus.UNAVAILABLE
+    assert seed_result.reason_code == "candle timeframe mismatch"
+    with pytest.raises(
+        ResearchV1HistoricalTriggerInputUnavailable,
+        match="research_v1_historical_metric_unavailable:VNM_5m_z",
+    ):
+        produce_research_v1_historical_metric(
+            metric_ref="VNM_5m_z",
+            rule=rule,
+            candles=candles,
+            symbol="BTCUSDT",
+        )
+
+
+def test_vnm_5m_z_trigger_remains_fail_closed_without_stale_observation_fallback():
+    rule = _rule("TR-R-022")
+    candles = _vnm_5m_source_minutes(days=16, extra_buckets=1)
+
+    with pytest.raises(
+        ResearchV1HistoricalTriggerInputUnavailable,
+        match="research_v1_historical_trigger_input_unavailable:TR-R-022",
+    ):
+        evaluate_research_v1_historical_triggers(
+            rules=(rule,),
+            candles=candles,
+            symbol="BTCUSDT",
+            trigger_set_id="SET-R-UNIT",
+            trigger_set_version="v1",
+        )
+
+
 def test_remaining_phase4_metrics_stay_fail_closed_without_factual_sources():
     candles = _vnm_5m_source_minutes(days=16, extra_buckets=1)
 
     for trigger_id, metric_ref in (
         ("TR-R-004", "classifier_direction"),
         ("TR-R-013", "AGGRESSIVE_VOLUME_DELTA_PCT"),
-        ("TR-R-022", "VNM_5m_z"),
     ):
         with pytest.raises(
             ResearchV1HistoricalTriggerInputUnavailable,
@@ -1365,11 +1414,12 @@ def test_unsupported_required_metric_fails_closed_and_no_set_formation_occurs():
     assert metric_readiness("BTC_CONTEXT_SCORE") == "HISTORICAL_READY"
     assert metric_readiness("RELATIVE_RETURN_15m") == "HISTORICAL_READY"
     assert metric_readiness("TOD_REL_TURNOVER") == "HISTORICAL_READY"
+    assert metric_readiness("VNM_5m_z") == "IMPLEMENTATION_MISSING"
     assert "BTC_CONTEXT_SCORE" in HISTORICAL_READY_METRICS
     assert "RELATIVE_RETURN_15m" in HISTORICAL_READY_METRICS
     assert "TOD_REL_TURNOVER" in HISTORICAL_READY_METRICS
+    assert "VNM_5m_z" not in HISTORICAL_READY_METRICS
     assert metric_readiness("AGGRESSIVE_VOLUME_DELTA_PCT") == "IMPLEMENTATION_MISSING"
-    assert metric_readiness("VNM_5m_z") == "IMPLEMENTATION_MISSING"
 
 
 def _rule(trigger_id: str) -> RuleDefinition:
