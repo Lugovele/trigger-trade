@@ -28,12 +28,12 @@ EXPECTED_FAMILY_VERSIONS = {
 }
 
 
-def test_active_package_revision_and_family_versions_match_frozen_v1_2_15():
+def test_active_package_revision_and_family_versions_match_frozen_v1_2_16():
     registry = implemented_contract_registry()
 
-    assert APPROVED_PACKAGE_REVISION == "v1.2.15"
-    assert WIRE_SCHEMA["$id"] == "https://triggertrade.invalid/spec/v1.2.15/wire.schema.json"
-    assert WIRE_SCHEMA["title"] == "TriggerTrade v1.2.15 strict wire contracts"
+    assert APPROVED_PACKAGE_REVISION == "v1.2.16"
+    assert WIRE_SCHEMA["$id"] == "https://triggertrade.invalid/spec/v1.2.16/wire.schema.json"
+    assert WIRE_SCHEMA["title"] == "TriggerTrade v1.2.16 strict wire contracts"
     assert set(registry) == set(EXPECTED_FAMILY_VERSIONS)
     assert {family: item["version"] for family, item in registry.items()} == EXPECTED_FAMILY_VERSIONS
 

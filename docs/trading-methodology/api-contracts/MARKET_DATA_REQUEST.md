@@ -23,7 +23,9 @@ Other explicitly governed metric-specific calendar/bucket selectors retain their
 
 RAW_TRADES, QUOTE_TURNOVER and KLINES use INTERVAL mode. Raw trades select event timestamps in [range_from,range_to); quote turnover selects complete factual buckets wholly contained in that interval. KLINES select closed intervals wholly contained in it, with exact timeframe and completed_only=true. Normalized candle close_time denotes the exclusive interval end; adapters document any native millisecond-end normalization. count, when provided for KLINES, selects the latest requested number among the complete interval's correctly ordered candles. Insufficient count is incomplete, not a shorter available window. Non-KLINES interval selectors carry null timeframe/count. Missing history cannot be replaced by a shifted interval.
 
-TICKER, BEST_BID_ASK, VOLUME, OPEN_INTEREST, FUNDING_RATE and INSTRUMENT_METADATA use AS_OF mode with null range/timeframe/count. The adapter must return a factual point snapshot effective at or before the requested cutoff, with exact source as_of/provenance. If historical point facts for that cutoff are unsupported or cannot be established, return UNAVAILABLE; never substitute the current snapshot. No more recent source fact is permitted. This is factual selection, not a local marketability gate.
+TICKER, LAST_TRADED_PRICE, BEST_BID_ASK, VOLUME, OPEN_INTEREST, FUNDING_RATE and INSTRUMENT_METADATA use AS_OF mode with null range/timeframe/count. The adapter must return a factual point snapshot effective at or before the requested cutoff, with exact source as_of/provenance. If historical point facts for that cutoff are unsupported or cannot be established, return UNAVAILABLE; never substitute the current snapshot. No more recent source fact is permitted. This is factual selection, not a local marketability gate.
+
+LAST_TRADED_PRICE is the canonical point fact for the most recent factual exchange trade price effective at or before the requested AS_OF cutoff. It is selected as the latest factual trade with `trade_timestamp <= as_of`; if more than one factual source record has the same timestamp, deterministic ordering uses the native/source record identity in the factual source's canonical order. It is not a candle close, mark price, index price, midpoint, interpolation, current-live snapshot or freshness assertion. If no eligible factual trade exists, the result is UNAVAILABLE with null data.
 
 ## 4. Payloads and explicit availability
 
@@ -62,8 +64,9 @@ market_data_request:
     nullable: string
   selections:
   - selection_id: string
-    dataset: TICKER | BEST_BID_ASK | KLINES | VOLUME | OPEN_INTEREST | FUNDING_RATE
-      | RAW_TRADES | QUOTE_TURNOVER | INSTRUMENT_METADATA
+    dataset: TICKER | LAST_TRADED_PRICE | BEST_BID_ASK | KLINES | VOLUME
+      | OPEN_INTEREST | FUNDING_RATE | RAW_TRADES | QUOTE_TURNOVER
+      | INSTRUMENT_METADATA
     mode: INTERVAL | AS_OF
     as_of: RFC3339-timestamp
     range_from:
@@ -96,8 +99,9 @@ market_data_response:
   selection_results:
   - selection:
       selection_id: string
-      dataset: TICKER | BEST_BID_ASK | KLINES | VOLUME | OPEN_INTEREST | FUNDING_RATE
-        | RAW_TRADES | QUOTE_TURNOVER | INSTRUMENT_METADATA
+      dataset: TICKER | LAST_TRADED_PRICE | BEST_BID_ASK | KLINES | VOLUME
+        | OPEN_INTEREST | FUNDING_RATE | RAW_TRADES | QUOTE_TURNOVER
+        | INSTRUMENT_METADATA
       mode: INTERVAL | AS_OF
       as_of: RFC3339-timestamp
       range_from:
@@ -127,6 +131,17 @@ market_data_response:
             last_price: decimal-string
             mark_price: decimal-string
             index_price: decimal-string
+      LAST_TRADED_PRICE:
+        status: AVAILABLE | UNAVAILABLE | PARTIAL
+        as_of: RFC3339-timestamp
+        source_endpoint: string
+        data:
+          nullable:
+            price: decimal-string
+            observed_at: RFC3339-timestamp
+            source_record_id: string
+            venue: string
+            instrument_symbol: string
       BEST_BID_ASK:
         status: AVAILABLE | UNAVAILABLE | PARTIAL
         as_of: RFC3339-timestamp

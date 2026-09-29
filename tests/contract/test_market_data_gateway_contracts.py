@@ -76,6 +76,89 @@ def test_market_gateway_outputs_approved_market_data_request_v3_contracts():
     assert contract_digest(response) == contract_digest(response.to_payload())
 
 
+def test_market_gateway_contract_accepts_last_traded_price_without_weakening_ticker():
+    selection = market_selection(
+        selection_id="sel-last-traded-price-contract-1",
+        dataset="LAST_TRADED_PRICE",
+        mode="AS_OF",
+        as_of=NOW,
+    )
+    response = build_market_data_response(
+        request_id="mdr-contract-last-traded-price-1",
+        response_id="mdr-response-last-traded-price-1",
+        symbol="PEPEUSDT",
+        snapshot_started_at=NOW,
+        snapshot_completed_at=NOW,
+        as_of=NOW,
+        selection_results=(
+            market_selection_result(
+                symbol="PEPEUSDT",
+                selection=selection,
+                page_id="page-last-traded-price-contract-1",
+                page_index=0,
+                source_snapshot_id="snapshot-last-traded-price-contract-1",
+                payload=dataset_payload(
+                    dataset="LAST_TRADED_PRICE",
+                    status="AVAILABLE",
+                    as_of=NOW,
+                    source_endpoint="/v5/market/recent-trade?category=linear&symbol=1000PEPEUSDT",
+                    data={
+                        "price": "0.012345",
+                        "observed_at": "2026-09-13T23:59:59Z",
+                        "source_record_id": "bybit-trade-123",
+                        "venue": "BYBIT",
+                        "instrument_symbol": "1000PEPEUSDT",
+                    },
+                ),
+                coverage=coverage(
+                    coverage_complete=True,
+                    pagination_complete=True,
+                    next_cursor=None,
+                    expected_page_ids=("page-last-traded-price-contract-1",),
+                    source_finality_confirmed=True,
+                ),
+            ),
+        ),
+        expected_selections=(selection,),
+    )
+
+    assert parse_contract("MARKET_DATA_REQUEST", response.to_payload(), definition="MARKET_DATA_REQUEST.response")
+
+    ticker = market_selection(selection_id="sel-ticker-contract-1", dataset="TICKER", mode="AS_OF", as_of=NOW)
+    ticker_last_only = market_selection_result(
+        symbol="BTCUSDT",
+        selection=ticker,
+        page_id="page-ticker-last-only-contract-1",
+        page_index=0,
+        source_snapshot_id="snapshot-ticker-contract-1",
+        payload=dataset_payload(
+            dataset="TICKER",
+            status="AVAILABLE",
+            as_of=NOW,
+            source_endpoint="/v5/market/tickers",
+            data={"last_price": "65000.1"},
+        ),
+        coverage=coverage(
+            coverage_complete=True,
+            pagination_complete=True,
+            next_cursor=None,
+            expected_page_ids=("page-ticker-last-only-contract-1",),
+            source_finality_confirmed=True,
+        ),
+    )
+    with pytest.raises(MarketDataGatewayError, match="missing required fields: index_price, mark_price"):
+        build_market_data_response(
+            request_id="mdr-contract-ticker-last-only-1",
+            response_id="mdr-response-ticker-last-only-1",
+            symbol="BTCUSDT",
+            snapshot_started_at=NOW,
+            snapshot_completed_at=NOW,
+            as_of=NOW,
+            selection_results=(ticker_last_only,),
+            expected_selections=(ticker,),
+        )
+
+
 def test_market_gateway_rejects_unrelated_selection_result():
     expected = market_selection(selection_id="expected", dataset="TICKER", mode="AS_OF", as_of=NOW)
     unrelated = market_selection(selection_id="unrelated", dataset="TICKER", mode="AS_OF", as_of=NOW)

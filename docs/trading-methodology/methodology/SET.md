@@ -3599,10 +3599,10 @@ This is the canonical market price reference frozen at Set match.
 Baseline factual basis:
 
 ```text
-set_match_reference_price = TICKER.last_price
+set_match_reference_price = LAST_TRADED_PRICE.price
 ```
 
-It is sampled from the same governed market snapshot used to declare MATCHED, with `observed_at <= matched_at`, and the handoff persists:
+It is sampled from the same governed market snapshot used to declare MATCHED, with `observed_at <= matched_at`, and is the latest factual exchange trade price whose factual trade timestamp is at or before `matched_at`. It is a point fact, not a candle close, mark price, index price, midpoint, interpolation or current-live substitute. Live paths that obtain the same economic fact from an exchange ticker `last_price` field are representing `LAST_TRADED_PRICE`; historical paths must ground it in factual trade history such as validated RAW_TRADES. The handoff persists:
 
 ```text
 reference_price_basis = LAST_TRADED_PRICE

@@ -1,4 +1,4 @@
-"""Strict target contract envelopes for the approved v1.2.15 wire package."""
+"""Strict target contract envelopes for the approved v1.2.16 wire package."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from triggertrade.canonical_json import CanonicalJsonError, canonical_json_diges
 from .schema_validator import SchemaValidationError, validate_wire_definition
 
 
-APPROVED_PACKAGE_REVISION = "v1.2.15"
+APPROVED_PACKAGE_REVISION = "v1.2.16"
 SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
