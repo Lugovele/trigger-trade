@@ -19,6 +19,7 @@ from triggertrade.market_data.raw_trades import (
 )
 import triggertrade.research_v1_historical_triggers as historical_triggers
 from triggertrade.research_v1_execution import RESEARCH_V1_SYMBOLS
+from triggertrade.set_engine import ClassifierInputs, Direction, IndicatorStatus, SwingSequenceState, classify_direction
 from triggertrade.research_v1_historical_triggers import (
     HISTORICAL_READY_METRICS,
     ResearchV1HistoricalTriggerInputUnavailable,
@@ -1014,6 +1015,52 @@ def test_remaining_phase4_metrics_stay_fail_closed_without_factual_sources():
         )
     assert metric_readiness("classifier_direction") == "IMPLEMENTATION_MISSING"
     assert metric_readiness("AGGRESSIVE_VOLUME_DELTA_PCT") == "HISTORICAL_READY"
+
+
+def test_classifier_direction_remains_blocked_by_required_f004_inputs():
+    assert "classifier_direction" not in HISTORICAL_READY_METRICS
+    assert metric_readiness("classifier_direction") == "IMPLEMENTATION_MISSING"
+    assert metric_readiness("VNM_5m_z") == "IMPLEMENTATION_MISSING"
+    assert metric_readiness("SWING_SEQUENCE_STATE(asset,1h)") == "HISTORICAL_READY"
+    assert metric_readiness("AGGRESSIVE_VOLUME_DELTA_PCT") == "HISTORICAL_READY"
+
+    inputs = ClassifierInputs(
+        structure_1h=SwingSequenceState.BULLISH,
+        structure_15m=SwingSequenceState.BULLISH,
+        de_15m="0.70",
+        momentum_score="1",
+        vnm_5m_z="UNAVAILABLE",
+        relative_score="1",
+        relative_return_z="1",
+        aggressive_delta_pct="100",
+        tod_relative_turnover="1",
+        atr_pct_percentile_15m="50",
+        btc_structure_1h=SwingSequenceState.BULLISH,
+        btc_return_z="1",
+    )
+
+    result = classify_direction(inputs)
+
+    assert result.status is IndicatorStatus.UNAVAILABLE
+    assert result.direction is Direction.NONE
+    assert result.rejection_stage == "DATA_UNAVAILABLE"
+
+
+def test_classifier_direction_triggers_fail_closed_without_partial_historical_classifier():
+    candles = _vnm_5m_source_minutes(days=16, extra_buckets=1)
+
+    for trigger_id in ("TR-R-004", "TR-R-005", "TR-R-015", "TR-R-016"):
+        with pytest.raises(
+            ResearchV1HistoricalTriggerInputUnavailable,
+            match=f"research_v1_historical_trigger_input_unavailable:{trigger_id}",
+        ):
+            evaluate_research_v1_historical_triggers(
+                rules=(_rule(trigger_id),),
+                candles=candles,
+                symbol="BTCUSDT",
+                trigger_set_id="SET-R-UNIT",
+                trigger_set_version="v1",
+            )
 
 
 def test_aggressive_volume_delta_pct_is_unavailable_without_raw_trades():
