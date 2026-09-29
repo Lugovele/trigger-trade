@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from fractions import Fraction
 
@@ -21,7 +21,9 @@ from triggertrade.set_engine import (
     normalize_working,
     swing_points,
     swing_sequence_state,
+    wilder_atr_seed_for_timeframe,
     wilder_atr_seed,
+    wilder_atr_update_for_timeframe,
     wilder_atr_update,
     zscore_working,
 )
@@ -260,6 +262,74 @@ def test_f003_wilder_atr_seed_update_zero_close_and_exports_are_exact():
     assert mixed_seed.status is IndicatorStatus.UNAVAILABLE
     assert duplicate_seed.status is IndicatorStatus.UNAVAILABLE
 
+
+def test_f003_15m_wrappers_match_timeframe_parameterized_primitives():
+    seed_candles = [
+        _candle(f"shared-seed-{i}", high=str(101 + i), low=str(100 + i), close=str(100 + i), timeframe="15m")
+        for i in range(14)
+    ]
+    wrapped_seed = wilder_atr_seed(seed_candles=seed_candles, predecessor_close="100")
+    shared_seed = wilder_atr_seed_for_timeframe(
+        seed_candles=seed_candles,
+        predecessor_close="100",
+        timeframe="15m",
+    )
+
+    assert shared_seed == wrapped_seed
+
+    update_candle = _candle("shared-update-14", high="116", low="114", close="115", timeframe="15m")
+    wrapped_update = wilder_atr_update(
+        prior_atr_work=wrapped_seed.atr_work or "",
+        candle=update_candle,
+        previous_close="113",
+    )
+    shared_update = wilder_atr_update_for_timeframe(
+        prior_atr_work=wrapped_seed.atr_work or "",
+        candle=update_candle,
+        previous_close="113",
+        timeframe="15m",
+    )
+
+    assert shared_update == wrapped_update
+
+
+
+def test_shared_atr_primitives_reject_unauthorized_timeframe():
+    seed_candles = [
+        _candle(
+            f"unauthorized-seed-{i}",
+            high=str(101 + i),
+            low=str(100 + i),
+            close=str(100 + i),
+            timeframe="1h",
+        )
+        for i in range(14)
+    ]
+
+    seed = wilder_atr_seed_for_timeframe(
+        seed_candles=seed_candles,
+        predecessor_close="100",
+        timeframe="1h",
+    )
+
+    assert seed.status is IndicatorStatus.UNAVAILABLE
+    assert seed.reason_code == "ATR timeframe must be 5m or 15m"
+
+    update = wilder_atr_update_for_timeframe(
+        prior_atr_work="1",
+        candle=_candle(
+            "unauthorized-update-1",
+            high="102",
+            low="100",
+            close="101",
+            timeframe="1h",
+        ),
+        previous_close="100",
+        timeframe="1h",
+    )
+
+    assert update.status is IndicatorStatus.UNAVAILABLE
+    assert update.reason_code == "ATR timeframe must be 5m or 15m"
 
 def test_population_sqrt_zscore_and_q36_normalization_are_exact_and_do_not_feed_from_q18():
     z = zscore_working(current="4", population=["1", "2", "3", "4"])

@@ -312,8 +312,14 @@ def evaluate_f002_participation(
         return ParticipationResult(IndicatorStatus.UNAVAILABLE, TriggerResult.UNAVAILABLE, None, None, None, None, str(exc), evaluation_slot)
 
 
-def true_range(candle: Candle, *, previous_close: str) -> Fraction:
-    candle.require_common(timeframe="15m")
+def _require_supported_atr_timeframe(timeframe: str) -> None:
+    if timeframe not in {"5m", "15m"}:
+        raise SetKernelError("ATR timeframe must be 5m or 15m")
+
+
+def true_range_for_timeframe(candle: Candle, *, previous_close: str, timeframe: str) -> Fraction:
+    _require_supported_atr_timeframe(timeframe)
+    candle.require_common(timeframe=timeframe)
     candle.require_ohlc_geometry()
     predecessor = _nonnegative_decimal(previous_close, "previous_close")
     high = candle.high_value
@@ -321,19 +327,29 @@ def true_range(candle: Candle, *, previous_close: str) -> Fraction:
     return max(high - low, abs(high - predecessor), abs(low - predecessor))
 
 
-def wilder_atr_seed(*, seed_candles: Iterable[Candle], predecessor_close: str) -> ATRUpdateResult:
+def true_range(candle: Candle, *, previous_close: str) -> Fraction:
+    return true_range_for_timeframe(candle, previous_close=previous_close, timeframe="15m")
+
+
+def wilder_atr_seed_for_timeframe(
+    *,
+    seed_candles: Iterable[Candle],
+    predecessor_close: str,
+    timeframe: str,
+) -> ATRUpdateResult:
     candles = tuple(seed_candles)
     if len(candles) != 14:
         return ATRUpdateResult(IndicatorStatus.UNAVAILABLE, None, None, None, None, None, None, "ATR seed requires 14 candles", None)
     prior = predecessor_close
     ranges: list[Fraction] = []
     try:
+        _require_supported_atr_timeframe(timeframe)
         _require_unique_candle_ids(candles)
         for candle in candles:
-            candle.require_common(timeframe="15m", symbol=candles[0].symbol)
+            candle.require_common(timeframe=timeframe, symbol=candles[0].symbol)
             if candle.venue != candles[0].venue or candle.product != candles[0].product or candle.source != candles[0].source:
                 raise SetKernelError("seed candles must share venue/product/source")
-            tr = true_range(candle, previous_close=prior)
+            tr = true_range_for_timeframe(candle, previous_close=prior, timeframe=timeframe)
             ranges.append(tr)
             prior = candle.close
         seed = q36_working(exact_divide(sum(ranges, Fraction(0)), 14)).value
@@ -343,19 +359,43 @@ def wilder_atr_seed(*, seed_candles: Iterable[Candle], predecessor_close: str) -
         return ATRUpdateResult(IndicatorStatus.UNAVAILABLE, None, None, None, None, None, None, str(exc), None)
 
 
-def wilder_atr_update(*, prior_atr_work: str, candle: Candle, previous_close: str) -> ATRUpdateResult:
+def wilder_atr_seed(*, seed_candles: Iterable[Candle], predecessor_close: str) -> ATRUpdateResult:
+    return wilder_atr_seed_for_timeframe(
+        seed_candles=seed_candles,
+        predecessor_close=predecessor_close,
+        timeframe="15m",
+    )
+
+
+def wilder_atr_update_for_timeframe(
+    *,
+    prior_atr_work: str,
+    candle: Candle,
+    previous_close: str,
+    timeframe: str,
+) -> ATRUpdateResult:
     try:
+        _require_supported_atr_timeframe(timeframe)
         prior = parse_decimal_text(prior_atr_work)
         if prior < 0:
             raise SetKernelError("prior ATR must be nonnegative")
         if q36_working(prior).value != prior:
             raise SetKernelError("prior ATR must be a persisted Q36 work value")
-        candle.require_common(timeframe="15m")
-        tr = true_range(candle, previous_close=previous_close)
+        candle.require_common(timeframe=timeframe)
+        tr = true_range_for_timeframe(candle, previous_close=previous_close, timeframe=timeframe)
         updated = q36_working(exact_divide(13 * prior + tr, 14)).value
         return _atr_result(updated, tr, candle)
     except (NumericPolicyError, SetKernelError) as exc:
         return ATRUpdateResult(IndicatorStatus.UNAVAILABLE, None, None, None, None, None, None, str(exc), candle.candle_id)
+
+
+def wilder_atr_update(*, prior_atr_work: str, candle: Candle, previous_close: str) -> ATRUpdateResult:
+    return wilder_atr_update_for_timeframe(
+        prior_atr_work=prior_atr_work,
+        candle=candle,
+        previous_close=previous_close,
+        timeframe="15m",
+    )
 
 
 def atr_pct_exports(*, atr_work: str, close: str) -> tuple[str | None, str | None, str | None]:

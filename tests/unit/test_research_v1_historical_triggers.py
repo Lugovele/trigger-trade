@@ -1126,15 +1126,15 @@ def test_vnm_5m_z_parallel_atr_implementation_is_removed():
 
     assert "_true_range_5m" not in source
     assert "_atr_5m_series" not in source
-    assert "_vnm_5m_series" not in source
-    assert "_vnm_5m_z_observation" not in source
-    assert "VNM_5m_z" not in HISTORICAL_READY_METRICS
-    assert metric_readiness("VNM_5m_z") == "IMPLEMENTATION_MISSING"
+    assert "13 * prior_atr + tr" not in source
+    assert "sum(ranges" not in source
+    assert "VNM_5m_z" in HISTORICAL_READY_METRICS
+    assert metric_readiness("VNM_5m_z") == "HISTORICAL_READY"
 
 
-def test_vnm_5m_z_stays_fail_closed_because_certified_atr_contract_is_15m_only():
+def test_vnm_5m_z_uses_shared_atr_primitives_while_f003_public_contract_stays_15m(monkeypatch):
     rule = _rule("TR-R-022")
-    candles = _vnm_5m_source_minutes(days=1, extra_buckets=0)
+    candles = _vnm_5m_source_minutes(days=16, extra_buckets=1)
     five_minute = historical_triggers._aggregate_completed_candles(candles, timeframe="5m")
     seed = tuple(historical_triggers._set_candle(candle) for candle in five_minute[1:15])
 
@@ -1142,34 +1142,129 @@ def test_vnm_5m_z_stays_fail_closed_because_certified_atr_contract_is_15m_only()
 
     assert seed_result.status is historical_triggers.IndicatorStatus.UNAVAILABLE
     assert seed_result.reason_code == "candle timeframe mismatch"
-    with pytest.raises(
-        ResearchV1HistoricalTriggerInputUnavailable,
-        match="research_v1_historical_metric_unavailable:VNM_5m_z",
-    ):
-        produce_research_v1_historical_metric(
-            metric_ref="VNM_5m_z",
-            rule=rule,
-            candles=candles,
-            symbol="BTCUSDT",
-        )
+    calls: list[tuple[str, str]] = []
+    original_seed = historical_triggers.wilder_atr_seed_for_timeframe
+    original_update = historical_triggers.wilder_atr_update_for_timeframe
+
+    def spy_seed(*args, **kwargs):
+        calls.append(("seed", kwargs["timeframe"]))
+        return original_seed(*args, **kwargs)
+
+    def spy_update(*args, **kwargs):
+        calls.append(("update", kwargs["timeframe"]))
+        return original_update(*args, **kwargs)
+
+    monkeypatch.setattr(historical_triggers, "wilder_atr_seed_for_timeframe", spy_seed)
+    monkeypatch.setattr(historical_triggers, "wilder_atr_update_for_timeframe", spy_update)
+
+    observation = produce_research_v1_historical_metric(
+        metric_ref="VNM_5m_z",
+        rule=rule,
+        candles=candles,
+        symbol="BTCUSDT",
+    )
+
+    assert observation.status == "AVAILABLE"
+    assert calls[0] == ("seed", "5m")
+    assert ("update", "5m") in calls
+    assert observation.payload["vnm_5m_z"]["current_slot_close_time"] == candles[-1].close_time.isoformat()
 
 
-def test_vnm_5m_z_trigger_remains_fail_closed_without_stale_observation_fallback():
+def test_vnm_5m_z_latest_slot_failure_does_not_use_stale_observation():
+    rule = _rule("TR-R-022")
+    candles = list(_vnm_5m_source_minutes(days=16, extra_buckets=1))
+    for index in range(len(candles) - 5, len(candles)):
+        candles[index] = replace(candles[index], open=Decimal("0"), high=Decimal("0"), low=Decimal("0"), close=Decimal("0"), turnover=Decimal("0"))
+
+    observation = produce_research_v1_historical_metric(
+        metric_ref="VNM_5m_z",
+        rule=rule,
+        candles=tuple(candles),
+        symbol="BTCUSDT",
+    )
+
+    assert observation.status == "UNAVAILABLE"
+    assert observation.reason_code == "research_v1_historical_vnm_5m_z_unavailable:LATEST_SLOT_UNAVAILABLE"
+
+
+def test_vnm_5m_z_incomplete_population_day_fails_closed():
+    rule = _rule("TR-R-022")
+    candles = list(_vnm_5m_source_minutes(days=16, extra_buckets=1))
+    missing_minute = datetime(2026, 8, 6, 12, 2, tzinfo=UTC)
+    candles = [candle for candle in candles if candle.open_time != missing_minute]
+
+    observation = produce_research_v1_historical_metric(
+        metric_ref="VNM_5m_z",
+        rule=rule,
+        candles=tuple(candles),
+        symbol="BTCUSDT",
+    )
+
+    assert observation.status == "UNAVAILABLE"
+    assert observation.reason_code == "research_v1_historical_vnm_5m_z_unavailable:NON_CONTINUOUS_5M_CHAIN"
+
+
+
+def test_momentum_score_inherits_exact_vnm_temporal_identity():
     rule = _rule("TR-R-022")
     candles = _vnm_5m_source_minutes(days=16, extra_buckets=1)
 
-    with pytest.raises(
-        ResearchV1HistoricalTriggerInputUnavailable,
-        match="research_v1_historical_trigger_input_unavailable:TR-R-022",
-    ):
-        evaluate_research_v1_historical_triggers(
-            rules=(rule,),
-            candles=candles,
-            symbol="BTCUSDT",
-            trigger_set_id="SET-R-UNIT",
-            trigger_set_version="v1",
-        )
+    baseline = produce_research_v1_historical_metric(
+        metric_ref="MOMENTUM_SCORE",
+        rule=rule,
+        candles=candles,
+        symbol="BTCUSDT",
+    )
 
+    tail = tuple(
+        replace(
+            candles[-1],
+            open_time=candles[-1].close_time + timedelta(minutes=index),
+            close_time=candles[-1].close_time + timedelta(minutes=index + 1),
+        )
+        for index in range(2)
+    )
+
+    extended = candles + tail
+
+    momentum = produce_research_v1_historical_metric(
+        metric_ref="MOMENTUM_SCORE",
+        rule=rule,
+        candles=extended,
+        symbol="BTCUSDT",
+    )
+    vnm = produce_research_v1_historical_metric(
+        metric_ref="VNM_5m_z",
+        rule=rule,
+        candles=extended,
+        symbol="BTCUSDT",
+    )
+
+    assert momentum.status == "AVAILABLE"
+    assert momentum.observed_at == vnm.observed_at
+    assert momentum.available_at == vnm.available_at
+    assert momentum.source_candle_ids == vnm.source_candle_ids
+    assert momentum.observed_at != extended[-1].close_time.isoformat()
+    assert momentum.evidence_digest == baseline.evidence_digest
+
+
+def test_vnm_population_partial_day_after_complete_population_begins_fails_closed():
+    rule = _rule("TR-R-022")
+    candles = _vnm_5m_source_minutes(days=16, extra_buckets=1)
+
+    # Day 1 contains expected ATR warmup and may be ineligible.
+    # Damage a later day, after complete eligible population has already begun.
+    missing_minute = datetime(2026, 8, 8, 12, 2, tzinfo=UTC)
+    damaged = tuple(candle for candle in candles if candle.open_time != missing_minute)
+
+    observation = produce_research_v1_historical_metric(
+        metric_ref="VNM_5m_z",
+        rule=rule,
+        candles=damaged,
+        symbol="BTCUSDT",
+    )
+
+    assert observation.status == "UNAVAILABLE"
 
 def test_remaining_phase4_metrics_stay_fail_closed_without_factual_sources():
     candles = _vnm_5m_source_minutes(days=16, extra_buckets=1)
@@ -1192,7 +1287,8 @@ def test_remaining_phase4_metrics_stay_fail_closed_without_factual_sources():
 def test_classifier_direction_remains_blocked_by_required_f004_inputs():
     assert "classifier_direction" not in HISTORICAL_READY_METRICS
     assert metric_readiness("classifier_direction") == "IMPLEMENTATION_MISSING"
-    assert metric_readiness("VNM_5m_z") == "IMPLEMENTATION_MISSING"
+    assert metric_readiness("VNM_5m_z") == "HISTORICAL_READY"
+    assert metric_readiness("MOMENTUM_SCORE") == "HISTORICAL_READY"
     assert metric_readiness("SWING_SEQUENCE_STATE(asset,1h)") == "HISTORICAL_READY"
     assert metric_readiness("SWING_SEQUENCE_STATE(asset,15m)") == "HISTORICAL_READY"
     assert metric_readiness("RELATIVE_RETURN_Z") == "HISTORICAL_READY"
@@ -2245,12 +2341,14 @@ def test_unsupported_required_metric_fails_closed_and_no_set_formation_occurs():
     assert metric_readiness("BTC_CONTEXT_SCORE") == "HISTORICAL_READY"
     assert metric_readiness("RELATIVE_RETURN_15m") == "HISTORICAL_READY"
     assert metric_readiness("TOD_REL_TURNOVER") == "HISTORICAL_READY"
-    assert metric_readiness("VNM_5m_z") == "IMPLEMENTATION_MISSING"
+    assert metric_readiness("VNM_5m_z") == "HISTORICAL_READY"
+    assert metric_readiness("MOMENTUM_SCORE") == "HISTORICAL_READY"
     assert "BTC_CONTEXT_SCORE" in HISTORICAL_READY_METRICS
     assert "RELATIVE_RETURN_15m" in HISTORICAL_READY_METRICS
     assert "TOD_REL_TURNOVER" in HISTORICAL_READY_METRICS
     assert "AGGRESSIVE_VOLUME_DELTA_PCT" in HISTORICAL_READY_METRICS
-    assert "VNM_5m_z" not in HISTORICAL_READY_METRICS
+    assert "VNM_5m_z" in HISTORICAL_READY_METRICS
+    assert "MOMENTUM_SCORE" in HISTORICAL_READY_METRICS
     assert metric_readiness("AGGRESSIVE_VOLUME_DELTA_PCT") == "HISTORICAL_READY"
 
 

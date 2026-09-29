@@ -33,7 +33,9 @@ from triggertrade.set_engine import (
     swing_points,
     swing_sequence_state,
     wilder_atr_seed,
+    wilder_atr_seed_for_timeframe,
     wilder_atr_update,
+    wilder_atr_update_for_timeframe,
     zscore_working,
 )
 from triggertrade.set_engine.formulas import SetKernelError
@@ -52,6 +54,7 @@ HISTORICAL_READY_METRICS = frozenset(
         "BTC_CONTEXT_SCORE",
         "BTC_RETURN_Z",
         "DE",
+        "MOMENTUM_SCORE",
         "RELATIVE_RETURN_Z",
         "RELATIVE_RETURN_15m",
         "RELATIVE_SCORE",
@@ -59,6 +62,7 @@ HISTORICAL_READY_METRICS = frozenset(
         "SWING_SEQUENCE_STATE(asset,15m)",
         "SWING_SEQUENCE_STATE(asset,1h)",
         "TOD_REL_TURNOVER",
+        "VNM_5m_z",
     }
 )
 
@@ -69,7 +73,6 @@ KERNEL_EXISTS_BUT_ADAPTER_MISSING_METRICS = frozenset(
 
 IMPLEMENTATION_MISSING_METRICS = frozenset(
     {
-        "VNM_5m_z",
         "classifier_direction",
     }
 )
@@ -332,6 +335,10 @@ def _metric_observation(
         return _f002_observation(candles=candles)
     if metric_ref == "DE":
         return _de_observation(candles=candles)
+    if metric_ref == "VNM_5m_z":
+        return _vnm_5m_z_observation(candles=candles)
+    if metric_ref == "MOMENTUM_SCORE":
+        return _momentum_score_observation(candles=candles)
     if metric_ref == "AGGRESSIVE_VOLUME_DELTA_PCT":
         return _aggressive_volume_delta_pct_observation(
             candles=candles,
@@ -521,6 +528,148 @@ def _de_observation(*, candles: Sequence[HistoricalCandle]) -> HistoricalMetricO
             reason_code=f"research_v1_historical_de_unavailable:{exc}",
             payload={"directional_efficiency": {"status": "UNAVAILABLE", "reason_code": str(exc)}},
         )
+
+
+def _vnm_5m_z_observation(*, candles: Sequence[HistoricalCandle]) -> HistoricalMetricObservation:
+    five_minute = _aggregate_completed_candles(candles, timeframe="5m")
+    if len(five_minute) < 16:
+        return _unavailable_observation(
+            "VNM_5m_z",
+            candles,
+            reason_code="research_v1_historical_vnm_5m_z_unavailable:INSUFFICIENT_5M_HISTORY",
+        )
+    if not _is_contiguous_window(five_minute, timedelta(minutes=5)):
+        return _unavailable_observation(
+            "VNM_5m_z",
+            candles,
+            reason_code="research_v1_historical_vnm_5m_z_unavailable:NON_CONTINUOUS_5M_CHAIN",
+        )
+    atr_series = _atr_pct_series_for_timeframe(five_minute, timeframe="5m")
+    if not atr_series:
+        return _unavailable_observation(
+            "VNM_5m_z",
+            candles,
+            reason_code="research_v1_historical_vnm_5m_z_unavailable:ATR_5M_UNAVAILABLE",
+        )
+    vnm_series = _vnm_5m_series(five_minute=five_minute, atr_series=atr_series)
+    latest = five_minute[-1]
+    if not vnm_series or vnm_series[-1]["closed_at_dt"] != latest.close_time:
+        return _observation(
+            metric_ref="VNM_5m_z",
+            value="UNAVAILABLE",
+            status="UNAVAILABLE",
+            candles=(latest,),
+            reason_code="research_v1_historical_vnm_5m_z_unavailable:LATEST_SLOT_UNAVAILABLE",
+            payload={"vnm_5m_z": {"status": "UNAVAILABLE", "reason_code": "LATEST_SLOT_UNAVAILABLE"}},
+        )
+    current = vnm_series[-1]
+    reference_population = _eligible_vnm_5m_reference_population(vnm_series, evaluation_at=current["closed_at_dt"])
+    if reference_population is None:
+        return _observation(
+            metric_ref="VNM_5m_z",
+            value="UNAVAILABLE",
+            status="UNAVAILABLE",
+            candles=(current["current_candle"],),
+            reason_code="research_v1_historical_vnm_5m_z_unavailable:INSUFFICIENT_OR_INCOMPLETE_COMPLETED_UTC_DAYS",
+            payload={"vnm_5m_z": {"status": "UNAVAILABLE", "minimum_warmup_days": 14}},
+        )
+    z = zscore_working(current=current["vnm_5m"], population=reference_population["values"])
+    if z is None:
+        return _observation(
+            metric_ref="VNM_5m_z",
+            value="UNAVAILABLE",
+            status="UNAVAILABLE",
+            candles=(current["current_candle"],),
+            reason_code="research_v1_historical_vnm_5m_z_unavailable:ZERO_OR_UNAVAILABLE_SIGMA",
+            payload={"vnm_5m_z": {"status": "UNAVAILABLE", "reason_code": "ZERO_OR_UNAVAILABLE_SIGMA"}},
+        )
+    value = canonical_decimal_text(z)
+    return _observation(
+        metric_ref="VNM_5m_z",
+        value=value,
+        status="AVAILABLE",
+        candles=(current["current_candle"],),
+        reason_code=None,
+        payload={
+            "vnm_5m_z": {
+                "status": "AVAILABLE",
+                "formula": "Q36((VNM_5m - mean(reference_vnm_5m)) / population_stddev(reference_vnm_5m))",
+                "vnm_formula": "RETURN_5m / ATR_PCT_decimal_5m",
+                "input_timeframe": "5m",
+                "lookback": "30_completed_UTC_calendar_days",
+                "minimum_warmup_days": 14,
+                "ddof": 0,
+                "zero_variance_behavior": "UNAVAILABLE",
+                "current_slot_close_time": _iso(current["closed_at_dt"]),
+                "current_vnm_observation_digest": current["digest"],
+                "reference_population_digest": reference_population["reference_population_digest"],
+                "reference_observation_count": reference_population["reference_observation_count"],
+                "eligible_completed_utc_days": reference_population["eligible_completed_utc_days"],
+                "selection_start": reference_population["selection_start"],
+                "selection_end": reference_population["selection_end"],
+                "value": value,
+            }
+        },
+    )
+
+
+def _momentum_score_observation(*, candles: Sequence[HistoricalCandle]) -> HistoricalMetricObservation:
+    vnm = _vnm_5m_z_observation(candles=candles)
+    if vnm.status != "AVAILABLE":
+        return _observation(
+            metric_ref="MOMENTUM_SCORE",
+            value="UNAVAILABLE",
+            status="UNAVAILABLE",
+            candles=candles[-1:],
+        observed_at_override=vnm.observed_at,
+        available_at_override=vnm.available_at,
+        source_candle_ids_override=vnm.source_candle_ids,
+            reason_code="research_v1_historical_momentum_score_unavailable:VNM_5M_Z_UNAVAILABLE",
+            payload={
+                "momentum_score": {
+                    "status": "UNAVAILABLE",
+                    "reason_code": "VNM_5M_Z_UNAVAILABLE",
+                    "vnm_5m_z": vnm.payload,
+                    "vnm_5m_z_evidence_digest": vnm.evidence_digest,
+                }
+            },
+        )
+    try:
+        score = q36_working(
+            _clip_fraction(exact_divide(Fraction(Decimal(vnm.value)), 2), Fraction(-1), Fraction(1))
+        ).value
+        value = canonical_decimal_text(score)
+    except (ArithmeticError, NumericPolicyError, ValueError) as exc:
+        return _observation(
+            metric_ref="MOMENTUM_SCORE",
+            value="UNAVAILABLE",
+            status="UNAVAILABLE",
+            candles=candles[-1:],
+        observed_at_override=vnm.observed_at,
+        available_at_override=vnm.available_at,
+        source_candle_ids_override=vnm.source_candle_ids,
+            reason_code=f"research_v1_historical_momentum_score_unavailable:{exc}",
+            payload={"momentum_score": {"status": "UNAVAILABLE", "reason_code": str(exc)}},
+        )
+    payload = {
+        "status": "AVAILABLE",
+        "formula": "Q36(clip(VNM_5m_z / 2.0, -1, +1))",
+        "vnm_5m_z": vnm.value,
+        "vnm_5m_z_evidence_digest": vnm.evidence_digest,
+        "value": value,
+    }
+    payload = {**payload, "momentum_score_digest": canonical_json_digest(payload)}
+    return _observation(
+        metric_ref="MOMENTUM_SCORE",
+        value=value,
+        status="AVAILABLE",
+        candles=candles[-1:],
+        observed_at_override=vnm.observed_at,
+        available_at_override=vnm.available_at,
+        source_candle_ids_override=vnm.source_candle_ids,
+        reason_code=None,
+        payload={"momentum_score": payload},
+    )
 
 
 def _aggressive_volume_delta_pct_observation(
@@ -1491,26 +1640,152 @@ def _aggregate_completed_candles(candles: Sequence[HistoricalCandle], *, timefra
 
 
 def _atr_pct_series(candles: Sequence[AggregatedHistoricalCandle]) -> tuple[tuple[AggregatedHistoricalCandle, Any], ...]:
+    return _atr_pct_series_for_timeframe(candles, timeframe="15m")
+
+
+def _atr_pct_series_for_timeframe(
+    candles: Sequence[AggregatedHistoricalCandle],
+    *,
+    timeframe: str,
+) -> tuple[tuple[AggregatedHistoricalCandle, Any], ...]:
     ordered = tuple(candles)
     if len(ordered) < 15:
         return ()
     seed_candles = tuple(_set_candle(candle) for candle in ordered[1:15])
-    seed = wilder_atr_seed(seed_candles=seed_candles, predecessor_close=_decimal_text(ordered[0].close))
+    seed = wilder_atr_seed_for_timeframe(
+        seed_candles=seed_candles,
+        predecessor_close=_decimal_text(ordered[0].close),
+        timeframe=timeframe,
+    )
     if seed.status is not IndicatorStatus.AVAILABLE or seed.atr_work is None:
         return ()
     series: list[tuple[AggregatedHistoricalCandle, Any]] = [(ordered[14], seed)]
     prior_atr = seed.atr_work
     for index in range(15, len(ordered)):
-        update = wilder_atr_update(
+        update = wilder_atr_update_for_timeframe(
             prior_atr_work=prior_atr,
             candle=_set_candle(ordered[index]),
             previous_close=_decimal_text(ordered[index - 1].close),
+            timeframe=timeframe,
         )
         if update.status is not IndicatorStatus.AVAILABLE or update.atr_work is None:
             return tuple(series)
         series.append((ordered[index], update))
         prior_atr = update.atr_work
     return tuple(series)
+
+
+def _vnm_5m_series(
+    *,
+    five_minute: Sequence[AggregatedHistoricalCandle],
+    atr_series: Sequence[tuple[AggregatedHistoricalCandle, Any]],
+) -> tuple[dict[str, Any], ...]:
+    atr_by_close = {candle.close_time: (candle, update) for candle, update in atr_series}
+    observations: list[dict[str, Any]] = []
+    for previous, current in zip(five_minute, five_minute[1:]):
+        if current.close_time - previous.close_time != timedelta(minutes=5):
+            return ()
+        atr_entry = atr_by_close.get(current.close_time)
+        if atr_entry is None:
+            continue
+        atr_candle, atr_update = atr_entry
+        if atr_candle.open_time != current.open_time or atr_update.atr_pct_work is None:
+            continue
+        try:
+            atr_pct = Fraction(Decimal(atr_update.atr_pct_work))
+            if atr_pct <= 0:
+                continue
+            return_5m = _return_between(previous, current)
+            atr_pct_decimal = exact_divide(atr_pct, 100)
+            vnm_value = canonical_decimal_text(q36_working(exact_divide(return_5m, atr_pct_decimal)).value)
+        except (ArithmeticError, NumericPolicyError, ValueError):
+            continue
+        atr_provenance = _atr_observation_provenance(current, atr_update)
+        payload = {
+            "previous_candle_id": _candle_id(previous),
+            "current_candle_id": _candle_id(current),
+            "previous_close_time": _iso(previous.close_time),
+            "current_close_time": _iso(current.close_time),
+            "return_5m": canonical_decimal_text(return_5m),
+            "atr_pct_5m": str(atr_update.atr_pct_work),
+            "atr_pct_decimal_5m": canonical_decimal_text(atr_pct_decimal),
+            "atr_observation_digest": atr_provenance["digest"],
+            "vnm_5m": vnm_value,
+        }
+        observations.append(
+            {
+                **payload,
+                "digest": canonical_json_digest(payload),
+                "current_candle": current,
+                "closed_at_dt": current.close_time,
+            }
+        )
+    return tuple(observations)
+
+
+def _eligible_vnm_5m_reference_population(
+    series: Sequence[dict[str, Any]],
+    *,
+    evaluation_at: datetime,
+) -> dict[str, Any] | None:
+    evaluation_day = evaluation_at.astimezone(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    start = evaluation_day - timedelta(days=30)
+    grouped: dict[datetime, list[dict[str, Any]]] = {}
+    for item in series:
+        candle = item["current_candle"]
+        opened = candle.open_time.astimezone(UTC)
+        closed = candle.close_time.astimezone(UTC)
+        if opened < start or closed > evaluation_day:
+            continue
+        day = opened.replace(hour=0, minute=0, second=0, microsecond=0)
+        grouped.setdefault(day, []).append(item)
+    complete_days: list[datetime] = []
+    observations: list[dict[str, Any]] = []
+    for day in sorted(grouped):
+        values = tuple(sorted(grouped[day], key=lambda item: str(item["current_close_time"])))
+        if len(values) != 288:
+            if complete_days:
+                return None
+            continue
+        complete_days.append(day)
+        observations.extend(_vnm_5m_public_observation(value) for value in values)
+    for previous, current in zip(complete_days, complete_days[1:]):
+        if current - previous != timedelta(days=1):
+            return None
+    if len(complete_days) < 14 or not observations:
+        return None
+    population_digest = canonical_json_digest(
+        {
+            "selection_start": _iso(start),
+            "selection_end": _iso(evaluation_day),
+            "minimum_warmup_days": 14,
+            "ddof": 0,
+            "observations": observations,
+        }
+    )
+    return {
+        "selection_start": _iso(start),
+        "selection_end": _iso(evaluation_day),
+        "eligible_completed_utc_days": tuple(_iso(day) for day in complete_days),
+        "reference_population_digest": population_digest,
+        "reference_observation_count": len(observations),
+        "values": tuple(str(item["vnm_5m"]) for item in observations),
+    }
+
+
+def _vnm_5m_public_observation(item: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "previous_candle_id": str(item["previous_candle_id"]),
+        "current_candle_id": str(item["current_candle_id"]),
+        "previous_close_time": str(item["previous_close_time"]),
+        "current_close_time": str(item["current_close_time"]),
+        "return_5m": str(item["return_5m"]),
+        "atr_pct_5m": str(item["atr_pct_5m"]),
+        "atr_pct_decimal_5m": str(item["atr_pct_decimal_5m"]),
+        "atr_observation_digest": str(item["atr_observation_digest"]),
+        "vnm_5m": str(item["vnm_5m"]),
+        "digest": str(item["digest"]),
+    }
 
 
 def _eligible_atr_percentile_reference_population(
@@ -2358,6 +2633,8 @@ def _metric_source_timeframe(metric_ref: str) -> str:
         "SWING_SEQUENCE_STATE(asset,15m)",
         "SWING_SEQUENCE_STATE(asset,1h)",
         "TOD_REL_TURNOVER",
+        "VNM_5m_z",
+        "MOMENTUM_SCORE",
     }:
         return "1m"
     raise ResearchV1HistoricalTriggerInputUnavailable(f"research_v1_historical_metric_unavailable:{metric_ref}")
@@ -2375,6 +2652,8 @@ def _metric_context_window(metric_ref: str) -> str:
     if metric_ref == "TOD_REL_TURNOVER":
         return "5m"
     if metric_ref == "AGGRESSIVE_VOLUME_DELTA_PCT":
+        return "5m"
+    if metric_ref in {"VNM_5m_z", "MOMENTUM_SCORE"}:
         return "5m"
     if metric_ref == "SWING_SEQUENCE_STATE(asset,1h)":
         return "1h"
