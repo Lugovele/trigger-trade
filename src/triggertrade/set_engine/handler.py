@@ -300,6 +300,30 @@ def resolve_set_result_without_handoff(request: SetResultResolutionRequest) -> S
     )
 
 
+def build_validated_market_handoff_payload(
+    *,
+    request: SetResolutionRequest,
+    direction: Direction,
+    decision_cycle_id: str,
+    set_result_id: str,
+) -> dict[str, Any]:
+    """Build and validate the canonical Set -> Position MARKET_HANDOFF payload."""
+
+    payload = _market_handoff_payload(
+        request=request,
+        direction=direction,
+        ids={"decision_cycle_id": decision_cycle_id, "set_result_id": set_result_id},
+    )
+    parsed = validate_contract_edge(
+        producer=BindingRole.SET,
+        consumer=BindingRole.POSITION,
+        contract_type="MARKET_HANDOFF",
+        payload=payload,
+        definition="MARKET_HANDOFF",
+    )
+    return parsed.to_payload()
+
+
 @dataclass(frozen=True)
 class _Resolution:
     status: SetMatchStatus
@@ -666,5 +690,6 @@ __all__ = [
     "SetResolutionRecord",
     "SetResolutionRequest",
     "SetResultConflict",
+    "build_validated_market_handoff_payload",
     "generic_fixed_direction_binding_digest",
 ]

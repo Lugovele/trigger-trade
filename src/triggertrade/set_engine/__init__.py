@@ -59,6 +59,7 @@ from .handler import (
     SetResolutionRequest,
     SetResultResolutionRequest,
     SetResultConflict,
+    build_validated_market_handoff_payload,
     generic_fixed_direction_binding_digest,
     resolve_set_result_without_handoff,
 )
@@ -118,6 +119,7 @@ __all__ = [
     "SetResolutionRequest",
     "SetResultResolutionRequest",
     "SetResultConflict",
+    "build_validated_market_handoff_payload",
     "generic_fixed_direction_binding_digest",
     "resolve_set_result_without_handoff",
 ]
