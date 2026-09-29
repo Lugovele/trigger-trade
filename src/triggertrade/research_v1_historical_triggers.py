@@ -47,6 +47,7 @@ HISTORICAL_READY_METRICS = frozenset(
     {
         "F-001 trigger_result",
         "F-002 trigger_result",
+        "AGGRESSIVE_VOLUME_DELTA_PCT",
         "ATR percentile",
         "BTC_CONTEXT_SCORE",
         "DE",
@@ -64,7 +65,6 @@ KERNEL_EXISTS_BUT_ADAPTER_MISSING_METRICS = frozenset(
 
 IMPLEMENTATION_MISSING_METRICS = frozenset(
     {
-        "AGGRESSIVE_VOLUME_DELTA_PCT",
         "VNM_5m_z",
         "classifier_direction",
     }
@@ -202,6 +202,7 @@ def evaluate_research_v1_historical_triggers(
     instrument_metadata: FuturesInstrument | None = None,
     companion_candles: Mapping[str, Sequence[HistoricalCandle]] | None = None,
     companion_instrument_metadata: Mapping[str, FuturesInstrument] | None = None,
+    raw_trades_pages: Sequence[Mapping[str, Any]] | None = None,
 ) -> tuple[HistoricalTriggerEvaluation, ...]:
     """Evaluate pinned declarative Research V1 triggers from factual candles.
 
@@ -225,6 +226,7 @@ def evaluate_research_v1_historical_triggers(
             instrument_metadata=instrument_metadata,
             companion_candles=companion_candles,
             companion_instrument_metadata=companion_instrument_metadata,
+            raw_trades_pages=raw_trades_pages,
         )
         context_time = _parse_iso(observation.observed_at)
         signal = DeclarativeMetricPredicateTrigger(rule).evaluate(
@@ -283,6 +285,7 @@ def produce_research_v1_historical_metric(
     instrument_metadata: FuturesInstrument | None = None,
     companion_candles: Mapping[str, Sequence[HistoricalCandle]] | None = None,
     companion_instrument_metadata: Mapping[str, FuturesInstrument] | None = None,
+    raw_trades_pages: Sequence[Mapping[str, Any]] | None = None,
 ) -> HistoricalMetricObservation:
     """Produce one factual Research V1 metric observation from historical candles."""
 
@@ -304,6 +307,7 @@ def produce_research_v1_historical_metric(
         instrument_metadata=instrument_metadata,
         companion_candles=companion_candles,
         companion_instrument_metadata=companion_instrument_metadata,
+        raw_trades_pages=raw_trades_pages,
     )
 
 
@@ -316,6 +320,7 @@ def _metric_observation(
     instrument_metadata: FuturesInstrument | None,
     companion_candles: Mapping[str, Sequence[HistoricalCandle]] | None,
     companion_instrument_metadata: Mapping[str, FuturesInstrument] | None,
+    raw_trades_pages: Sequence[Mapping[str, Any]] | None,
 ) -> HistoricalMetricObservation:
     if metric_ref == "F-001 trigger_result":
         return _f001_observation(rule=rule, candles=candles)
@@ -323,6 +328,12 @@ def _metric_observation(
         return _f002_observation(candles=candles)
     if metric_ref == "DE":
         return _de_observation(candles=candles)
+    if metric_ref == "AGGRESSIVE_VOLUME_DELTA_PCT":
+        return _aggressive_volume_delta_pct_observation(
+            candles=candles,
+            symbol=symbol,
+            raw_trades_pages=raw_trades_pages,
+        )
     if metric_ref == "ATR percentile":
         return _atr_percentile_observation(candles=candles)
     if metric_ref == "BTC_CONTEXT_SCORE":
@@ -477,6 +488,120 @@ def _de_observation(*, candles: Sequence[HistoricalCandle]) -> HistoricalMetricO
             reason_code=f"research_v1_historical_de_unavailable:{exc}",
             payload={"directional_efficiency": {"status": "UNAVAILABLE", "reason_code": str(exc)}},
         )
+
+
+def _aggressive_volume_delta_pct_observation(
+    *,
+    candles: Sequence[HistoricalCandle],
+    symbol: str,
+    raw_trades_pages: Sequence[Mapping[str, Any]] | None,
+) -> HistoricalMetricObservation:
+    current = candles[-1]
+    interval_end = current.close_time
+    interval_start = interval_end - timedelta(minutes=5)
+    unavailable_payload_base = {
+        "aggressive_volume_delta_pct": {
+            "status": "UNAVAILABLE",
+            "formula": "100 * (AggBuyNotional - AggSellNotional) / (AggBuyNotional + AggSellNotional)",
+            "quantity_basis": "quote_notional",
+            "interval_start": _iso(interval_start),
+            "interval_end": _iso(interval_end),
+            "logical_symbol": symbol.upper(),
+            "instrument_symbol": _expected_instrument_symbol(symbol.upper()),
+        }
+    }
+    if not raw_trades_pages:
+        return _observation(
+            metric_ref="AGGRESSIVE_VOLUME_DELTA_PCT",
+            value="UNAVAILABLE",
+            status="UNAVAILABLE",
+            candles=(current,),
+            reason_code="research_v1_historical_aggressive_volume_delta_unavailable:MISSING_RAW_TRADES",
+            payload={
+                "aggressive_volume_delta_pct": {
+                    **unavailable_payload_base["aggressive_volume_delta_pct"],
+                    "reason_code": "MISSING_RAW_TRADES",
+                }
+            },
+        )
+    parsed = _parse_aggressive_raw_trades_pages(
+        raw_trades_pages,
+        logical_symbol=symbol.upper(),
+        interval_start=interval_start,
+        interval_end=interval_end,
+    )
+    if parsed["status"] != "AVAILABLE":
+        return _observation(
+            metric_ref="AGGRESSIVE_VOLUME_DELTA_PCT",
+            value="UNAVAILABLE",
+            status="UNAVAILABLE",
+            candles=(current,),
+            reason_code=f"research_v1_historical_aggressive_volume_delta_unavailable:{parsed['reason_code']}",
+            payload={
+                "aggressive_volume_delta_pct": {
+                    **unavailable_payload_base["aggressive_volume_delta_pct"],
+                    "reason_code": parsed["reason_code"],
+                    "page_provenance_digest": parsed.get("page_provenance_digest"),
+                }
+            },
+        )
+    trades = tuple(parsed["trades"])
+    try:
+        buy_notional = sum((Decimal(trade["notional_quote"]) for trade in trades if trade["taker_side"] == "BUY"), Decimal("0"))
+        sell_notional = sum((Decimal(trade["notional_quote"]) for trade in trades if trade["taker_side"] == "SELL"), Decimal("0"))
+        denominator = buy_notional + sell_notional
+        if denominator == 0:
+            raise NumericPolicyError("DENOMINATOR_ZERO")
+        value_fraction = exact_divide(Fraction(100) * Fraction(buy_notional - sell_notional), Fraction(denominator))
+        value = canonical_decimal_text(q36_working(value_fraction).value)
+    except (ArithmeticError, NumericPolicyError, ValueError) as exc:
+        reason = str(exc)
+        return _observation(
+            metric_ref="AGGRESSIVE_VOLUME_DELTA_PCT",
+            value="UNAVAILABLE",
+            status="UNAVAILABLE",
+            candles=(current,),
+            reason_code=f"research_v1_historical_aggressive_volume_delta_unavailable:{reason}",
+            payload={
+                "aggressive_volume_delta_pct": {
+                    **unavailable_payload_base["aggressive_volume_delta_pct"],
+                    "reason_code": reason,
+                    "buy_notional": _decimal_text(buy_notional) if "buy_notional" in locals() else "0",
+                    "sell_notional": _decimal_text(sell_notional) if "sell_notional" in locals() else "0",
+                    "denominator": _decimal_text(denominator) if "denominator" in locals() else "0",
+                    "trade_population_digest": parsed.get("trade_population_digest"),
+                    "page_provenance_digest": parsed.get("page_provenance_digest"),
+                }
+            },
+        )
+    payload = {
+        "status": "AVAILABLE",
+        "formula": "100 * (AggBuyNotional - AggSellNotional) / (AggBuyNotional + AggSellNotional)",
+        "quantity_basis": "quote_notional",
+        "interval": "[from,to)",
+        "interval_start": _iso(interval_start),
+        "interval_end": _iso(interval_end),
+        "logical_symbol": symbol.upper(),
+        "instrument_symbol": parsed["instrument_symbol"],
+        "buy_notional": _decimal_text(buy_notional),
+        "sell_notional": _decimal_text(sell_notional),
+        "denominator": _decimal_text(denominator),
+        "trade_count": len(trades),
+        "trade_population_digest": parsed["trade_population_digest"],
+        "page_provenance_digest": parsed["page_provenance_digest"],
+        "source_identity": parsed["source_identity"],
+        "pages": parsed["pages"],
+        "value": value,
+    }
+    payload = {**payload, "aggressive_volume_delta_digest": canonical_json_digest(payload)}
+    return _observation(
+        metric_ref="AGGRESSIVE_VOLUME_DELTA_PCT",
+        value=value,
+        status="AVAILABLE",
+        candles=(current,),
+        reason_code=None,
+        payload={"aggressive_volume_delta_pct": payload},
+    )
 
 
 def _atr_percentile_observation(*, candles: Sequence[HistoricalCandle]) -> HistoricalMetricObservation:
@@ -1602,10 +1727,249 @@ def _unavailable_observation(
     )
 
 
+def _parse_aggressive_raw_trades_pages(
+    raw_trades_pages: Sequence[Mapping[str, Any]],
+    *,
+    logical_symbol: str,
+    interval_start: datetime,
+    interval_end: datetime,
+) -> dict[str, Any]:
+    expected_instrument = _expected_instrument_symbol(logical_symbol)
+    pages = tuple(_iter_raw_trade_pages(raw_trades_pages))
+    if not pages:
+        return _raw_trades_unavailable("MISSING_RAW_TRADES")
+    page_provenance: list[dict[str, Any]] = []
+    by_trade_id: dict[str, dict[str, Any]] = {}
+    provenance_by_trade_id: dict[str, list[dict[str, Any]]] = {}
+    page_ids: set[str] = set()
+    selection_digest: str | None = None
+    source_identity: dict[str, str] | None = None
+    for page in pages:
+        response_symbol = page.get("_response_symbol")
+        if response_symbol is None:
+            return _raw_trades_unavailable("RAW_TRADES_LOGICAL_SYMBOL_PROVENANCE_UNAVAILABLE")
+        if str(response_symbol).upper() != logical_symbol.upper():
+            return _raw_trades_unavailable("RAW_TRADES_LOGICAL_SYMBOL_MISMATCH")
+        selection = page.get("selection")
+        payload = page.get("payload")
+        coverage_payload = page.get("coverage")
+        if not isinstance(selection, Mapping) or not isinstance(payload, Mapping) or not isinstance(coverage_payload, Mapping):
+            return _raw_trades_unavailable("RAW_TRADES_PAGE_MALFORMED")
+        if selection.get("dataset") != "RAW_TRADES" or selection.get("mode") != "INTERVAL":
+            return _raw_trades_unavailable("RAW_TRADES_SELECTOR_MISMATCH")
+        try:
+            selected_from = _parse_iso(str(selection.get("range_from")))
+            selected_to = _parse_iso(str(selection.get("range_to")))
+        except (TypeError, ValueError):
+            return _raw_trades_unavailable("RAW_TRADES_SELECTOR_MALFORMED")
+        if selected_from != interval_start.astimezone(UTC) or selected_to != interval_end.astimezone(UTC):
+            return _raw_trades_unavailable("RAW_TRADES_INTERVAL_MISMATCH")
+        if selection.get("completed_only") not in {False, None} or selection.get("timeframe") is not None:
+            return _raw_trades_unavailable("RAW_TRADES_SELECTOR_MISMATCH")
+        missing_ranges = coverage_payload.get("missing_ranges")
+        if (
+            coverage_payload.get("coverage_complete") is not True
+            or coverage_payload.get("source_finality_confirmed") is not True
+            or coverage_payload.get("pagination_complete") is not True
+            or missing_ranges not in ((), [])
+        ):
+            return _raw_trades_unavailable("RAW_TRADES_COVERAGE_INCOMPLETE")
+        expected_page_ids = tuple(str(item) for item in coverage_payload.get("expected_page_ids") or ())
+        page_id = str(page.get("page_id") or "")
+        source_snapshot_id = str(page.get("source_snapshot_id") or "")
+        if not page_id or not source_snapshot_id or page_id not in expected_page_ids:
+            return _raw_trades_unavailable("RAW_TRADES_PAGE_PROVENANCE_UNAVAILABLE")
+        if page_id in page_ids:
+            return _raw_trades_unavailable("RAW_TRADES_DUPLICATE_PAGE_ID")
+        page_ids.add(page_id)
+        current_selection_digest = str(page.get("selection_digest") or "")
+        if not current_selection_digest:
+            return _raw_trades_unavailable("RAW_TRADES_PAGE_PROVENANCE_UNAVAILABLE")
+        if selection_digest is None:
+            selection_digest = current_selection_digest
+        elif current_selection_digest != selection_digest:
+            return _raw_trades_unavailable("RAW_TRADES_PAGE_SET_INCONSISTENT")
+        dataset_payload = payload.get("RAW_TRADES")
+        if not isinstance(dataset_payload, Mapping):
+            return _raw_trades_unavailable("RAW_TRADES_PAYLOAD_MALFORMED")
+        if dataset_payload.get("status") != "AVAILABLE":
+            return _raw_trades_unavailable("RAW_TRADES_PAYLOAD_UNAVAILABLE")
+        source_endpoint = str(dataset_payload.get("source_endpoint") or "")
+        if not source_endpoint:
+            return _raw_trades_unavailable("RAW_TRADES_SOURCE_PROVENANCE_UNAVAILABLE")
+        endpoint_logical = _source_endpoint_token(source_endpoint, "logical")
+        endpoint_instrument = _source_endpoint_token(source_endpoint, "instrument")
+        endpoint_revision = _source_endpoint_token(source_endpoint, "revision")
+        endpoint_manifest = _source_endpoint_token(source_endpoint, "manifest_digest")
+        if endpoint_logical is None:
+            return _raw_trades_unavailable("RAW_TRADES_LOGICAL_SYMBOL_PROVENANCE_UNAVAILABLE")
+        if endpoint_instrument is None:
+            return _raw_trades_unavailable("RAW_TRADES_INSTRUMENT_PROVENANCE_UNAVAILABLE")
+        if endpoint_revision is None or endpoint_manifest is None:
+            return _raw_trades_unavailable("RAW_TRADES_SOURCE_PROVENANCE_UNAVAILABLE")
+        if endpoint_logical.upper() != logical_symbol.upper():
+            return _raw_trades_unavailable("RAW_TRADES_LOGICAL_SYMBOL_MISMATCH")
+        if endpoint_instrument.upper() != expected_instrument:
+            return _raw_trades_unavailable("RAW_TRADES_INSTRUMENT_SYMBOL_MISMATCH")
+        current_source_identity = {
+            "logical_symbol": endpoint_logical.upper(),
+            "instrument_symbol": endpoint_instrument.upper(),
+            "source_revision": endpoint_revision,
+            "manifest_digest": endpoint_manifest,
+        }
+        if source_identity is None:
+            source_identity = current_source_identity
+        elif current_source_identity != source_identity:
+            return _raw_trades_unavailable("RAW_TRADES_PAGE_SET_INCONSISTENT")
+        data = dataset_payload.get("data")
+        if not isinstance(data, Sequence) or isinstance(data, (str, bytes)):
+            return _raw_trades_unavailable("RAW_TRADES_PAYLOAD_MALFORMED")
+        page_provenance.append(
+            {
+                "page_id": page_id,
+                "page_index": page.get("page_index"),
+                "selection_digest": page.get("selection_digest"),
+                "source_snapshot_id": source_snapshot_id,
+                "source_endpoint": source_endpoint,
+                "coverage_digest": canonical_json_digest(coverage_payload),
+            }
+        )
+        for raw_trade in data:
+            trade, trade_provenance, reason = _parse_aggressive_raw_trade(
+                raw_trade,
+                page_id=page_id,
+                source_snapshot_id=source_snapshot_id,
+                source_endpoint=source_endpoint,
+                interval_start=interval_start,
+                interval_end=interval_end,
+            )
+            if reason is not None:
+                return _raw_trades_unavailable(reason)
+            assert trade is not None
+            assert trade_provenance is not None
+            existing = by_trade_id.get(trade["trade_id"])
+            if existing is None:
+                by_trade_id[trade["trade_id"]] = trade
+                provenance_by_trade_id[trade["trade_id"]] = [trade_provenance]
+                continue
+            if existing != trade:
+                return _raw_trades_unavailable("RAW_TRADES_DUPLICATE_CONFLICT")
+            if trade_provenance not in provenance_by_trade_id[trade["trade_id"]]:
+                provenance_by_trade_id[trade["trade_id"]].append(trade_provenance)
+    trades = tuple(sorted(by_trade_id.values(), key=lambda item: (item["occurred_at"], item["trade_id"])))
+    trade_population = tuple(
+        {
+            **trade,
+            "source_provenance": tuple(
+                sorted(
+                    provenance_by_trade_id[trade["trade_id"]],
+                    key=lambda item: (item["source_snapshot_id"], item["page_id"], item["source_endpoint"]),
+                )
+            ),
+        }
+        for trade in trades
+    )
+    trade_population_digest = canonical_json_digest(trade_population)
+    page_provenance_ordered = tuple(sorted(page_provenance, key=lambda item: (str(item["page_index"]), item["page_id"])))
+    return {
+        "status": "AVAILABLE",
+        "instrument_symbol": expected_instrument,
+        "trades": trades,
+        "trade_population": trade_population,
+        "trade_population_digest": trade_population_digest,
+        "page_provenance_digest": canonical_json_digest(page_provenance_ordered),
+        "pages": page_provenance_ordered,
+        "source_identity": source_identity or {},
+    }
+
+
+def _iter_raw_trade_pages(raw_trades_pages: Sequence[Mapping[str, Any]]) -> tuple[Mapping[str, Any], ...]:
+    pages: list[Mapping[str, Any]] = []
+    for item in raw_trades_pages:
+        response = item.get("market_data_response")
+        if isinstance(response, Mapping):
+            response_symbol = response.get("symbol")
+            results = response.get("selection_results")
+            if isinstance(results, Sequence) and not isinstance(results, (str, bytes)):
+                pages.extend(
+                    {**page, "_response_symbol": response_symbol}
+                    for page in results
+                    if isinstance(page, Mapping)
+                )
+            continue
+        results = item.get("selection_results")
+        if isinstance(results, Sequence) and not isinstance(results, (str, bytes)):
+            pages.extend(page for page in results if isinstance(page, Mapping))
+            continue
+        pages.append(item)
+    return tuple(pages)
+
+
+def _parse_aggressive_raw_trade(
+    raw_trade: Any,
+    *,
+    page_id: str,
+    source_snapshot_id: str,
+    source_endpoint: str,
+    interval_start: datetime,
+    interval_end: datetime,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None, str | None]:
+    if not isinstance(raw_trade, Mapping):
+        return None, None, "RAW_TRADES_ROW_MALFORMED"
+    trade_id = str(raw_trade.get("trade_id") or "")
+    if not trade_id:
+        return None, None, "RAW_TRADES_ROW_MALFORMED"
+    try:
+        occurred_at = _parse_iso(str(raw_trade.get("occurred_at")))
+    except (TypeError, ValueError):
+        return None, None, "RAW_TRADES_ROW_MALFORMED"
+    if not (interval_start.astimezone(UTC) <= occurred_at < interval_end.astimezone(UTC)):
+        return None, None, "RAW_TRADES_ROW_OUT_OF_INTERVAL"
+    side = str(raw_trade.get("taker_side") or "").upper()
+    if side not in {"BUY", "SELL"}:
+        return None, None, "RAW_TRADES_TAKER_SIDE_UNAVAILABLE"
+    try:
+        price = Decimal(str(raw_trade.get("price")))
+        quantity = Decimal(str(raw_trade.get("quantity_base")))
+        notional = Decimal(str(raw_trade.get("notional_quote")))
+    except Exception:
+        return None, None, "RAW_TRADES_ROW_MALFORMED"
+    if price <= 0 or quantity <= 0 or notional <= 0:
+        return None, None, "RAW_TRADES_ROW_MALFORMED"
+    return {
+        "trade_id": trade_id,
+        "occurred_at": _iso(occurred_at),
+        "taker_side": side,
+        "price": _decimal_text(price),
+        "quantity_base": _decimal_text(quantity),
+        "notional_quote": _decimal_text(notional),
+    }, {
+        "trade_id": trade_id,
+        "page_id": page_id,
+        "source_snapshot_id": source_snapshot_id,
+        "source_endpoint": source_endpoint,
+    }, None
+
+
+def _raw_trades_unavailable(reason_code: str) -> dict[str, Any]:
+    return {"status": "UNAVAILABLE", "reason_code": reason_code}
+
+
+def _source_endpoint_token(source_endpoint: str, token: str) -> str | None:
+    for separator in ("#", ";"):
+        for chunk in source_endpoint.split(separator):
+            for part in chunk.split(";"):
+                key, sep, value = part.partition("=")
+                if sep and key == token:
+                    return value
+    return None
+
+
 def _metric_source_timeframe(metric_ref: str) -> str:
     if metric_ref in {
         "F-001 trigger_result",
         "F-002 trigger_result",
+        "AGGRESSIVE_VOLUME_DELTA_PCT",
         "RETURN(asset,5m)",
         "DE",
         "ATR percentile",
@@ -1628,6 +1992,8 @@ def _metric_context_window(metric_ref: str) -> str:
     if metric_ref == "RELATIVE_RETURN_15m":
         return "15m"
     if metric_ref == "TOD_REL_TURNOVER":
+        return "5m"
+    if metric_ref == "AGGRESSIVE_VOLUME_DELTA_PCT":
         return "5m"
     if metric_ref == "SWING_SEQUENCE_STATE(asset,1h)":
         return "1h"

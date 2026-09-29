@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 import gzip
 import io
@@ -12,6 +12,7 @@ import uuid
 import pytest
 
 from triggertrade.contracts import parse_contract
+from triggertrade.backtest.models import HistoricalCandle
 from triggertrade.market_data import (
     BYBIT_PUBLIC_TRADE_ARCHIVE_SCHEMA,
     RAW_TRADES_UNAVAILABLE_ARCHIVE_COMPLETENESS_UNATTESTED,
@@ -366,7 +367,7 @@ def test_raw_trade_normalization_rejects_ohlcv_proxy_and_candle_direction_fields
         )
 
 
-def test_aggressive_volume_delta_metric_remains_fail_closed_without_raw_trades():
+def test_aggressive_volume_delta_metric_is_ready_but_unavailable_without_raw_trades():
     rule = RuleDefinition(
         rule_id="TR-R-AGG-TEST",
         version="1.0.0",
@@ -384,14 +385,33 @@ def test_aggressive_volume_delta_metric_remains_fail_closed_without_raw_trades()
         provenance="unit-test",
     )
 
-    assert metric_readiness("AGGRESSIVE_VOLUME_DELTA_PCT") == "IMPLEMENTATION_MISSING"
-    with pytest.raises(ResearchV1HistoricalTriggerInputUnavailable):
-        produce_research_v1_historical_metric(
-            metric_ref="AGGRESSIVE_VOLUME_DELTA_PCT",
-            rule=rule,
-            candles=(),
+    candles = tuple(
+        HistoricalCandle(
             symbol="BTCUSDT",
+            category="linear",
+            timeframe="1m",
+            open_time=START + timedelta(minutes=index),
+            close_time=START + timedelta(minutes=index + 1),
+            open=Decimal("10"),
+            high=Decimal("10"),
+            low=Decimal("10"),
+            close=Decimal("10"),
+            volume=Decimal("1"),
+            turnover=Decimal("10"),
+            completed=True,
         )
+        for index in range(5)
+    )
+
+    assert metric_readiness("AGGRESSIVE_VOLUME_DELTA_PCT") == "HISTORICAL_READY"
+    observation = produce_research_v1_historical_metric(
+        metric_ref="AGGRESSIVE_VOLUME_DELTA_PCT",
+        rule=rule,
+        candles=candles,
+        symbol="BTCUSDT",
+    )
+    assert observation.status == "UNAVAILABLE"
+    assert observation.reason_code == "research_v1_historical_aggressive_volume_delta_unavailable:MISSING_RAW_TRADES"
 
 
 def _archive_row(

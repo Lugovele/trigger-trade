@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -11,6 +12,11 @@ import pytest
 
 from triggertrade.backtest.models import HistoricalCandle
 from triggertrade.instruments import FuturesInstrument
+from triggertrade.market_data.raw_trades import (
+    RawTradeRecord,
+    build_raw_trades_response,
+    instrument_symbol_for_logical_symbol,
+)
 import triggertrade.research_v1_historical_triggers as historical_triggers
 from triggertrade.research_v1_execution import RESEARCH_V1_SYMBOLS
 from triggertrade.research_v1_historical_triggers import (
@@ -995,42 +1001,39 @@ def test_vnm_5m_z_trigger_remains_fail_closed_without_stale_observation_fallback
 def test_remaining_phase4_metrics_stay_fail_closed_without_factual_sources():
     candles = _vnm_5m_source_minutes(days=16, extra_buckets=1)
 
-    for trigger_id, metric_ref in (
-        ("TR-R-004", "classifier_direction"),
-        ("TR-R-013", "AGGRESSIVE_VOLUME_DELTA_PCT"),
+    with pytest.raises(
+        ResearchV1HistoricalTriggerInputUnavailable,
+        match="research_v1_historical_trigger_input_unavailable:TR-R-004",
     ):
-        with pytest.raises(
-            ResearchV1HistoricalTriggerInputUnavailable,
-            match=f"research_v1_historical_trigger_input_unavailable:{trigger_id}",
-        ):
-            evaluate_research_v1_historical_triggers(
-                rules=(_rule(trigger_id),),
-                candles=candles,
-                symbol="BTCUSDT",
-                trigger_set_id="SET-R-UNIT",
-                trigger_set_version="v1",
-            )
-        assert metric_readiness(metric_ref) == "IMPLEMENTATION_MISSING"
+        evaluate_research_v1_historical_triggers(
+            rules=(_rule("TR-R-004"),),
+            candles=candles,
+            symbol="BTCUSDT",
+            trigger_set_id="SET-R-UNIT",
+            trigger_set_version="v1",
+        )
+    assert metric_readiness("classifier_direction") == "IMPLEMENTATION_MISSING"
+    assert metric_readiness("AGGRESSIVE_VOLUME_DELTA_PCT") == "HISTORICAL_READY"
 
 
-def test_aggressive_volume_delta_pct_remains_fail_closed_without_raw_trades():
+def test_aggressive_volume_delta_pct_is_unavailable_without_raw_trades():
     candles = tuple(
         _candle(index, close=str(100 + index), high=str(101 + index), low=str(99 + index), volume="100000")
         for index in range(30)
     )
 
-    with pytest.raises(
-        ResearchV1HistoricalTriggerInputUnavailable,
-        match="research_v1_historical_metric_unavailable:AGGRESSIVE_VOLUME_DELTA_PCT",
-    ):
-        produce_research_v1_historical_metric(
-            metric_ref="AGGRESSIVE_VOLUME_DELTA_PCT",
-            rule=_rule("TR-R-013"),
-            candles=candles,
-            symbol="BTCUSDT",
-        )
-    assert "AGGRESSIVE_VOLUME_DELTA_PCT" not in HISTORICAL_READY_METRICS
-    assert metric_readiness("AGGRESSIVE_VOLUME_DELTA_PCT") == "IMPLEMENTATION_MISSING"
+    observation = produce_research_v1_historical_metric(
+        metric_ref="AGGRESSIVE_VOLUME_DELTA_PCT",
+        rule=_rule("TR-R-013"),
+        candles=candles,
+        symbol="BTCUSDT",
+    )
+
+    assert observation.status == "UNAVAILABLE"
+    assert observation.value == "UNAVAILABLE"
+    assert observation.reason_code == "research_v1_historical_aggressive_volume_delta_unavailable:MISSING_RAW_TRADES"
+    assert "AGGRESSIVE_VOLUME_DELTA_PCT" in HISTORICAL_READY_METRICS
+    assert metric_readiness("AGGRESSIVE_VOLUME_DELTA_PCT") == "HISTORICAL_READY"
 
 
 def test_aggressive_volume_delta_pct_does_not_use_candle_direction_or_ohlcv_proxy():
@@ -1044,17 +1047,474 @@ def test_aggressive_volume_delta_pct_does_not_use_candle_direction_or_ohlcv_prox
     )
 
     for trigger_id, candles in (("TR-R-013", green_candles), ("TR-R-014", red_candles)):
-        with pytest.raises(
-            ResearchV1HistoricalTriggerInputUnavailable,
-            match=f"research_v1_historical_trigger_input_unavailable:{trigger_id}",
-        ):
-            evaluate_research_v1_historical_triggers(
-                rules=(_rule(trigger_id),),
-                candles=candles,
-                symbol="BTCUSDT",
-                trigger_set_id="SET-R-UNIT",
-                trigger_set_version="v1",
-            )
+        evaluation = evaluate_research_v1_historical_triggers(
+            rules=(_rule(trigger_id),),
+            candles=candles,
+            symbol="BTCUSDT",
+            trigger_set_id="SET-R-UNIT",
+            trigger_set_version="v1",
+        )[0]
+
+        assert evaluation.metric_value == "UNAVAILABLE"
+        assert evaluation.condition_result is False
+
+
+def test_aggressive_volume_delta_pct_uses_factual_raw_trades_formula_and_boundaries():
+    candles = tuple(_candle(index, close="100") for index in range(30))
+    interval_start = candles[-1].close_time - timedelta(minutes=5)
+    interval_end = candles[-1].close_time
+    response = _raw_trade_response(
+        logical_symbol="BTCUSDT",
+        interval_start=interval_start,
+        interval_end=interval_end,
+        records=(
+            _raw_trade("left-buy", interval_start, side="BUY", notional="60"),
+            _raw_trade("inside-sell", interval_start + timedelta(minutes=2), side="SELL", notional="20"),
+            _raw_trade("right-excluded", interval_end, side="SELL", notional="999"),
+            _raw_trade("future-excluded", interval_end + timedelta(seconds=1), side="BUY", notional="999"),
+        ),
+    )
+
+    observation = produce_research_v1_historical_metric(
+        metric_ref="AGGRESSIVE_VOLUME_DELTA_PCT",
+        rule=_rule("TR-R-013"),
+        candles=candles,
+        symbol="BTCUSDT",
+        raw_trades_pages=(response,),
+    )
+    evaluation = evaluate_research_v1_historical_triggers(
+        rules=(_rule("TR-R-013"),),
+        candles=candles,
+        symbol="BTCUSDT",
+        trigger_set_id="SET-R-UNIT",
+        trigger_set_version="v1",
+        raw_trades_pages=(response,),
+    )[0]
+
+    payload = observation.payload["aggressive_volume_delta_pct"]
+    assert observation.status == "AVAILABLE"
+    assert observation.value == "50"
+    assert payload["buy_notional"] == "60"
+    assert payload["sell_notional"] == "20"
+    assert payload["trade_count"] == 2
+    assert evaluation.trigger_id == "TR-R-013"
+    assert evaluation.trigger_version == "1.0.0"
+    assert evaluation.condition_result is True
+
+
+def test_aggressive_volume_delta_pct_handles_buy_only_sell_only_and_zero_denominator():
+    candles = tuple(_candle(index, close="100") for index in range(30))
+    interval_start = candles[-1].close_time - timedelta(minutes=5)
+    interval_end = candles[-1].close_time
+    buy_only = _raw_trade_response(
+        logical_symbol="BTCUSDT",
+        interval_start=interval_start,
+        interval_end=interval_end,
+        records=(_raw_trade("buy", interval_start, side="BUY", notional="100"),),
+    )
+    sell_only = _raw_trade_response(
+        logical_symbol="BTCUSDT",
+        interval_start=interval_start,
+        interval_end=interval_end,
+        records=(_raw_trade("sell", interval_start, side="SELL", notional="100"),),
+    )
+    zero = _raw_trade_response(
+        logical_symbol="BTCUSDT",
+        interval_start=interval_start,
+        interval_end=interval_end,
+        records=(),
+    )
+
+    assert produce_research_v1_historical_metric(
+        metric_ref="AGGRESSIVE_VOLUME_DELTA_PCT",
+        rule=_rule("TR-R-013"),
+        candles=candles,
+        symbol="BTCUSDT",
+        raw_trades_pages=(buy_only,),
+    ).value == "100"
+    assert produce_research_v1_historical_metric(
+        metric_ref="AGGRESSIVE_VOLUME_DELTA_PCT",
+        rule=_rule("TR-R-014"),
+        candles=candles,
+        symbol="BTCUSDT",
+        raw_trades_pages=(sell_only,),
+    ).value == "-100"
+    zero_observation = produce_research_v1_historical_metric(
+        metric_ref="AGGRESSIVE_VOLUME_DELTA_PCT",
+        rule=_rule("TR-R-013"),
+        candles=candles,
+        symbol="BTCUSDT",
+        raw_trades_pages=(zero,),
+    )
+    assert zero_observation.status == "UNAVAILABLE"
+    assert zero_observation.reason_code == "research_v1_historical_aggressive_volume_delta_unavailable:DENOMINATOR_ZERO"
+
+
+@pytest.mark.parametrize(
+    ("coverage_patch", "reason"),
+    (
+        ({"coverage_complete": False}, "RAW_TRADES_COVERAGE_INCOMPLETE"),
+        ({"source_finality_confirmed": False}, "RAW_TRADES_COVERAGE_INCOMPLETE"),
+        ({"missing_ranges": [{"from": "2026-09-05T13:25:00Z", "to": "2026-09-05T13:26:00Z"}]}, "RAW_TRADES_COVERAGE_INCOMPLETE"),
+    ),
+)
+def test_aggressive_volume_delta_pct_requires_complete_final_raw_trade_coverage(coverage_patch, reason):
+    candles = tuple(_candle(index, close="100") for index in range(30))
+    interval_start = candles[-1].close_time - timedelta(minutes=5)
+    interval_end = candles[-1].close_time
+    response = deepcopy(
+        _raw_trade_response(
+            logical_symbol="BTCUSDT",
+            interval_start=interval_start,
+            interval_end=interval_end,
+            records=(_raw_trade("buy", interval_start, side="BUY", notional="100"),),
+        )
+    )
+    response["market_data_response"]["selection_results"][0]["coverage"].update(coverage_patch)
+
+    observation = produce_research_v1_historical_metric(
+        metric_ref="AGGRESSIVE_VOLUME_DELTA_PCT",
+        rule=_rule("TR-R-013"),
+        candles=candles,
+        symbol="BTCUSDT",
+        raw_trades_pages=(response,),
+    )
+
+    assert observation.status == "UNAVAILABLE"
+    assert observation.reason_code == f"research_v1_historical_aggressive_volume_delta_unavailable:{reason}"
+
+
+def test_aggressive_volume_delta_pct_dedupes_reversed_trades_and_rejects_conflicts():
+    candles = tuple(_candle(index, close="100") for index in range(30))
+    interval_start = candles[-1].close_time - timedelta(minutes=5)
+    interval_end = candles[-1].close_time
+    response = _raw_trade_response(
+        logical_symbol="BTCUSDT",
+        interval_start=interval_start,
+        interval_end=interval_end,
+        records=(
+            _raw_trade("buy", interval_start, side="BUY", notional="100"),
+            _raw_trade("sell", interval_start + timedelta(minutes=1), side="SELL", notional="25"),
+        ),
+    )
+    reversed_response = deepcopy(response)
+    data = reversed_response["market_data_response"]["selection_results"][0]["payload"]["RAW_TRADES"]["data"]
+    reversed_response["market_data_response"]["selection_results"][0]["payload"]["RAW_TRADES"]["data"] = list(reversed(data)) + [data[0]]
+    first = produce_research_v1_historical_metric(
+        metric_ref="AGGRESSIVE_VOLUME_DELTA_PCT",
+        rule=_rule("TR-R-013"),
+        candles=candles,
+        symbol="BTCUSDT",
+        raw_trades_pages=(response,),
+    )
+    second = produce_research_v1_historical_metric(
+        metric_ref="AGGRESSIVE_VOLUME_DELTA_PCT",
+        rule=_rule("TR-R-013"),
+        candles=candles,
+        symbol="BTCUSDT",
+        raw_trades_pages=(reversed_response,),
+    )
+    conflicted = deepcopy(response)
+    conflicted_trade = deepcopy(data[0])
+    conflicted_trade["notional_quote"] = "101"
+    conflicted["market_data_response"]["selection_results"][0]["payload"]["RAW_TRADES"]["data"].append(conflicted_trade)
+    conflict = produce_research_v1_historical_metric(
+        metric_ref="AGGRESSIVE_VOLUME_DELTA_PCT",
+        rule=_rule("TR-R-013"),
+        candles=candles,
+        symbol="BTCUSDT",
+        raw_trades_pages=(conflicted,),
+    )
+
+    assert first.value == second.value == "60"
+    assert first.evidence_digest == second.evidence_digest
+    assert conflict.status == "UNAVAILABLE"
+    assert conflict.reason_code == "research_v1_historical_aggressive_volume_delta_unavailable:RAW_TRADES_DUPLICATE_CONFLICT"
+
+
+def test_aggressive_volume_delta_pct_dedupes_same_factual_trade_across_pages_and_binds_both_pages():
+    candles = tuple(_candle(index, close="100") for index in range(30))
+    interval_start = candles[-1].close_time - timedelta(minutes=5)
+    interval_end = candles[-1].close_time
+    endpoint = "https://public.bybit.com/trading/BTCUSDT#manifest_digest=same;logical=BTCUSDT;instrument=BTCUSDT;revision=test"
+    first = _raw_trade_response(
+        logical_symbol="BTCUSDT",
+        interval_start=interval_start,
+        interval_end=interval_end,
+        records=(_raw_trade("same", interval_start, side="BUY", notional="100"),),
+        source_snapshot_id="snapshot-a",
+        source_endpoint=endpoint,
+    )
+    second = _raw_trade_response(
+        logical_symbol="BTCUSDT",
+        interval_start=interval_start,
+        interval_end=interval_end,
+        records=(_raw_trade("same", interval_start, side="BUY", notional="100"),),
+        source_snapshot_id="snapshot-b",
+        source_endpoint=endpoint,
+    )
+    forward = produce_research_v1_historical_metric(
+        metric_ref="AGGRESSIVE_VOLUME_DELTA_PCT",
+        rule=_rule("TR-R-013"),
+        candles=candles,
+        symbol="BTCUSDT",
+        raw_trades_pages=(first, second),
+    )
+    reversed_pages = produce_research_v1_historical_metric(
+        metric_ref="AGGRESSIVE_VOLUME_DELTA_PCT",
+        rule=_rule("TR-R-013"),
+        candles=candles,
+        symbol="BTCUSDT",
+        raw_trades_pages=(second, first),
+    )
+
+    payload = forward.payload["aggressive_volume_delta_pct"]
+    assert forward.status == "AVAILABLE"
+    assert forward.value == "100"
+    assert payload["trade_count"] == 1
+    assert {page["source_snapshot_id"] for page in payload["pages"]} == {"snapshot-a", "snapshot-b"}
+    assert forward.evidence_digest == reversed_pages.evidence_digest
+
+
+def test_aggressive_volume_delta_pct_rejects_conflicting_cross_page_duplicate_and_duplicate_page_ids():
+    candles = tuple(_candle(index, close="100") for index in range(30))
+    interval_start = candles[-1].close_time - timedelta(minutes=5)
+    interval_end = candles[-1].close_time
+    endpoint = "https://public.bybit.com/trading/BTCUSDT#manifest_digest=same;logical=BTCUSDT;instrument=BTCUSDT;revision=test"
+    first = _raw_trade_response(
+        logical_symbol="BTCUSDT",
+        interval_start=interval_start,
+        interval_end=interval_end,
+        records=(_raw_trade("same", interval_start, side="BUY", notional="100"),),
+        source_snapshot_id="snapshot-a",
+        source_endpoint=endpoint,
+    )
+    conflicted = _raw_trade_response(
+        logical_symbol="BTCUSDT",
+        interval_start=interval_start,
+        interval_end=interval_end,
+        records=(_raw_trade("same", interval_start, side="SELL", notional="100"),),
+        source_snapshot_id="snapshot-b",
+        source_endpoint=endpoint,
+    )
+    conflict = produce_research_v1_historical_metric(
+        metric_ref="AGGRESSIVE_VOLUME_DELTA_PCT",
+        rule=_rule("TR-R-013"),
+        candles=candles,
+        symbol="BTCUSDT",
+        raw_trades_pages=(first, conflicted),
+    )
+    duplicate_page = deepcopy(first)
+    duplicate = produce_research_v1_historical_metric(
+        metric_ref="AGGRESSIVE_VOLUME_DELTA_PCT",
+        rule=_rule("TR-R-013"),
+        candles=candles,
+        symbol="BTCUSDT",
+        raw_trades_pages=(first, duplicate_page),
+    )
+
+    assert conflict.status == "UNAVAILABLE"
+    assert conflict.reason_code == "research_v1_historical_aggressive_volume_delta_unavailable:RAW_TRADES_DUPLICATE_CONFLICT"
+    assert duplicate.status == "UNAVAILABLE"
+    assert duplicate.reason_code == "research_v1_historical_aggressive_volume_delta_unavailable:RAW_TRADES_DUPLICATE_PAGE_ID"
+
+
+def test_aggressive_volume_delta_pct_requires_strict_logical_and_factual_source_identity():
+    candles = tuple(_candle(index, close="100") for index in range(30))
+    interval_start = candles[-1].close_time - timedelta(minutes=5)
+    interval_end = candles[-1].close_time
+    base = _raw_trade_response(
+        logical_symbol="BTCUSDT",
+        interval_start=interval_start,
+        interval_end=interval_end,
+        records=(_raw_trade("buy", interval_start, side="BUY", notional="100"),),
+    )
+    page = base["market_data_response"]["selection_results"][0]
+    bare_page = produce_research_v1_historical_metric(
+        metric_ref="AGGRESSIVE_VOLUME_DELTA_PCT",
+        rule=_rule("TR-R-013"),
+        candles=candles,
+        symbol="BTCUSDT",
+        raw_trades_pages=(page,),
+    )
+    missing_logical = deepcopy(base)
+    missing_logical["market_data_response"]["selection_results"][0]["payload"]["RAW_TRADES"]["source_endpoint"] = (
+        "https://public.bybit.com/trading/BTCUSDT#manifest_digest=x;instrument=BTCUSDT;revision=x"
+    )
+    missing_instrument = deepcopy(base)
+    missing_instrument["market_data_response"]["selection_results"][0]["payload"]["RAW_TRADES"]["source_endpoint"] = (
+        "https://public.bybit.com/trading/BTCUSDT#manifest_digest=x;logical=BTCUSDT;revision=x"
+    )
+    wrong_instrument = deepcopy(base)
+    wrong_instrument["market_data_response"]["selection_results"][0]["payload"]["RAW_TRADES"]["source_endpoint"] = (
+        "https://public.bybit.com/trading/ETHUSDT#manifest_digest=x;logical=BTCUSDT;instrument=ETHUSDT;revision=x"
+    )
+
+    results = [
+        produce_research_v1_historical_metric(
+            metric_ref="AGGRESSIVE_VOLUME_DELTA_PCT",
+            rule=_rule("TR-R-013"),
+            candles=candles,
+            symbol="BTCUSDT",
+            raw_trades_pages=(payload,),
+        )
+        for payload in (missing_logical, missing_instrument, wrong_instrument)
+    ]
+
+    assert bare_page.status == "UNAVAILABLE"
+    assert bare_page.reason_code == (
+        "research_v1_historical_aggressive_volume_delta_unavailable:"
+        "RAW_TRADES_LOGICAL_SYMBOL_PROVENANCE_UNAVAILABLE"
+    )
+    assert results[0].reason_code == (
+        "research_v1_historical_aggressive_volume_delta_unavailable:"
+        "RAW_TRADES_LOGICAL_SYMBOL_PROVENANCE_UNAVAILABLE"
+    )
+    assert results[1].reason_code == (
+        "research_v1_historical_aggressive_volume_delta_unavailable:"
+        "RAW_TRADES_INSTRUMENT_PROVENANCE_UNAVAILABLE"
+    )
+    assert results[2].reason_code == (
+        "research_v1_historical_aggressive_volume_delta_unavailable:"
+        "RAW_TRADES_INSTRUMENT_SYMBOL_MISMATCH"
+    )
+
+
+def test_aggressive_volume_delta_pct_rejects_unrelated_page_source_sets_and_malformed_rows():
+    candles = tuple(_candle(index, close="100") for index in range(30))
+    interval_start = candles[-1].close_time - timedelta(minutes=5)
+    interval_end = candles[-1].close_time
+    first = _raw_trade_response(
+        logical_symbol="BTCUSDT",
+        interval_start=interval_start,
+        interval_end=interval_end,
+        records=(_raw_trade("buy", interval_start, side="BUY", notional="100"),),
+        source_endpoint="https://public.bybit.com/trading/BTCUSDT#manifest_digest=a;logical=BTCUSDT;instrument=BTCUSDT;revision=test",
+    )
+    unrelated = _raw_trade_response(
+        logical_symbol="BTCUSDT",
+        interval_start=interval_start,
+        interval_end=interval_end,
+        records=(_raw_trade("sell", interval_start, side="SELL", notional="100"),),
+        source_endpoint="https://public.bybit.com/trading/BTCUSDT#manifest_digest=b;logical=BTCUSDT;instrument=BTCUSDT;revision=test",
+    )
+    malformed = deepcopy(first)
+    malformed["market_data_response"]["selection_results"][0]["payload"]["RAW_TRADES"]["data"][0].pop("price")
+
+    inconsistent = produce_research_v1_historical_metric(
+        metric_ref="AGGRESSIVE_VOLUME_DELTA_PCT",
+        rule=_rule("TR-R-013"),
+        candles=candles,
+        symbol="BTCUSDT",
+        raw_trades_pages=(first, unrelated),
+    )
+    malformed_result = produce_research_v1_historical_metric(
+        metric_ref="AGGRESSIVE_VOLUME_DELTA_PCT",
+        rule=_rule("TR-R-013"),
+        candles=candles,
+        symbol="BTCUSDT",
+        raw_trades_pages=(malformed,),
+    )
+
+    assert inconsistent.status == "UNAVAILABLE"
+    assert inconsistent.reason_code == "research_v1_historical_aggressive_volume_delta_unavailable:RAW_TRADES_PAGE_SET_INCONSISTENT"
+    assert malformed_result.status == "UNAVAILABLE"
+    assert malformed_result.reason_code == "research_v1_historical_aggressive_volume_delta_unavailable:RAW_TRADES_ROW_MALFORMED"
+
+
+def test_aggressive_volume_delta_pct_evidence_binds_trade_and_source_provenance():
+    candles = tuple(_candle(index, close="100") for index in range(30))
+    interval_start = candles[-1].close_time - timedelta(minutes=5)
+    interval_end = candles[-1].close_time
+    base = _raw_trade_response(
+        logical_symbol="BTCUSDT",
+        interval_start=interval_start,
+        interval_end=interval_end,
+        records=(_raw_trade("trade", interval_start, side="BUY", notional="100"),),
+        source_snapshot_id="snapshot-a",
+        source_endpoint="https://public.bybit.com/trading/BTCUSDT#manifest_digest=a;logical=BTCUSDT;instrument=BTCUSDT;revision=a",
+    )
+    changed_side = _raw_trade_response(
+        logical_symbol="BTCUSDT",
+        interval_start=interval_start,
+        interval_end=interval_end,
+        records=(_raw_trade("trade", interval_start, side="SELL", notional="100"),),
+        source_snapshot_id="snapshot-a",
+        source_endpoint="https://public.bybit.com/trading/BTCUSDT#manifest_digest=a;logical=BTCUSDT;instrument=BTCUSDT;revision=a",
+    )
+    changed_notional = _raw_trade_response(
+        logical_symbol="BTCUSDT",
+        interval_start=interval_start,
+        interval_end=interval_end,
+        records=(_raw_trade("trade", interval_start, side="BUY", notional="101"),),
+        source_snapshot_id="snapshot-a",
+        source_endpoint="https://public.bybit.com/trading/BTCUSDT#manifest_digest=a;logical=BTCUSDT;instrument=BTCUSDT;revision=a",
+    )
+    changed_source = _raw_trade_response(
+        logical_symbol="BTCUSDT",
+        interval_start=interval_start,
+        interval_end=interval_end,
+        records=(_raw_trade("trade", interval_start, side="BUY", notional="100"),),
+        source_snapshot_id="snapshot-b",
+        source_endpoint="https://public.bybit.com/trading/BTCUSDT#manifest_digest=b;logical=BTCUSDT;instrument=BTCUSDT;revision=b",
+    )
+
+    observations = [
+        produce_research_v1_historical_metric(
+            metric_ref="AGGRESSIVE_VOLUME_DELTA_PCT",
+            rule=_rule("TR-R-013"),
+            candles=candles,
+            symbol="BTCUSDT",
+            raw_trades_pages=(payload,),
+        )
+        for payload in (base, changed_side, changed_notional, changed_source)
+    ]
+
+    assert observations[0].value == "100"
+    assert observations[1].value == "-100"
+    assert observations[2].value == "100"
+    assert len({item.evidence_digest for item in observations}) == 4
+
+
+def test_aggressive_volume_delta_pct_preserves_pepe_logical_and_factual_binding():
+    candles = tuple(_candle(index, symbol="PEPEUSDT", close="0.00001") for index in range(30))
+    interval_start = candles[-1].close_time - timedelta(minutes=5)
+    interval_end = candles[-1].close_time
+    response = _raw_trade_response(
+        logical_symbol="PEPEUSDT",
+        interval_start=interval_start,
+        interval_end=interval_end,
+        records=(_raw_trade("pepe-buy", interval_start, side="BUY", notional="100", logical_symbol="PEPEUSDT"),),
+    )
+
+    observation = produce_research_v1_historical_metric(
+        metric_ref="AGGRESSIVE_VOLUME_DELTA_PCT",
+        rule=_rule("TR-R-013"),
+        candles=candles,
+        symbol="PEPEUSDT",
+        raw_trades_pages=(response,),
+    )
+
+    payload = observation.payload["aggressive_volume_delta_pct"]
+    assert payload["logical_symbol"] == "PEPEUSDT"
+    assert payload["instrument_symbol"] == "1000PEPEUSDT"
+    assert observation.value == "100"
+
+    wrong_binding = _raw_trade_response(
+        logical_symbol="BTCUSDT",
+        interval_start=interval_start,
+        interval_end=interval_end,
+        records=(_raw_trade("btc-buy", interval_start, side="BUY", notional="100", logical_symbol="BTCUSDT"),),
+    )
+    rejected = produce_research_v1_historical_metric(
+        metric_ref="AGGRESSIVE_VOLUME_DELTA_PCT",
+        rule=_rule("TR-R-013"),
+        candles=candles,
+        symbol="PEPEUSDT",
+        raw_trades_pages=(wrong_binding,),
+    )
+    assert rejected.status == "UNAVAILABLE"
+    assert rejected.reason_code == "research_v1_historical_aggressive_volume_delta_unavailable:RAW_TRADES_LOGICAL_SYMBOL_MISMATCH"
 
 
 def test_swing_sequence_state_requires_factual_tick_metadata():
@@ -1442,9 +1902,9 @@ def test_deterministic_replay_produces_same_metric_and_trigger_evidence():
 def test_unsupported_required_metric_fails_closed_and_no_set_formation_occurs():
     candles = tuple(_candle(index, close="100") for index in range(6))
 
-    unsupported_rule = _rule("TR-R-013")
+    unsupported_rule = _rule("TR-R-004")
 
-    with pytest.raises(ResearchV1HistoricalTriggerInputUnavailable, match="research_v1_historical_trigger_input_unavailable:TR-R-013"):
+    with pytest.raises(ResearchV1HistoricalTriggerInputUnavailable, match="research_v1_historical_trigger_input_unavailable:TR-R-004"):
         evaluate_research_v1_historical_triggers(
             rules=(unsupported_rule,),
             candles=candles,
@@ -1462,8 +1922,9 @@ def test_unsupported_required_metric_fails_closed_and_no_set_formation_occurs():
     assert "BTC_CONTEXT_SCORE" in HISTORICAL_READY_METRICS
     assert "RELATIVE_RETURN_15m" in HISTORICAL_READY_METRICS
     assert "TOD_REL_TURNOVER" in HISTORICAL_READY_METRICS
+    assert "AGGRESSIVE_VOLUME_DELTA_PCT" in HISTORICAL_READY_METRICS
     assert "VNM_5m_z" not in HISTORICAL_READY_METRICS
-    assert metric_readiness("AGGRESSIVE_VOLUME_DELTA_PCT") == "IMPLEMENTATION_MISSING"
+    assert metric_readiness("AGGRESSIVE_VOLUME_DELTA_PCT") == "HISTORICAL_READY"
 
 
 def _rule(trigger_id: str) -> RuleDefinition:
@@ -1548,6 +2009,60 @@ def _ohlcv_candle(
         volume=Decimal(volume),
         turnover=Decimal(turnover),
         completed=True,
+    )
+
+
+def _raw_trade(
+    trade_id: str,
+    executed_at: datetime,
+    *,
+    side: str,
+    notional: str,
+    logical_symbol: str = "BTCUSDT",
+) -> RawTradeRecord:
+    instrument = instrument_symbol_for_logical_symbol(logical_symbol)
+    return RawTradeRecord(
+        venue="BYBIT",
+        logical_symbol=logical_symbol,
+        instrument_symbol=instrument,
+        trade_id=trade_id,
+        executed_at=executed_at,
+        taker_side=side,
+        price=Decimal("1"),
+        quantity_base=Decimal(notional),
+        notional_quote=Decimal(notional),
+        source_endpoint=(
+            f"https://public.bybit.com/trading/{instrument}"
+            f"#logical={logical_symbol};instrument={instrument};revision=test"
+        ),
+        source_revision="test_raw_trades_revision",
+    )
+
+
+def _raw_trade_response(
+    *,
+    logical_symbol: str,
+    interval_start: datetime,
+    interval_end: datetime,
+    records: tuple[RawTradeRecord, ...],
+    source_snapshot_id: str = "raw-trades-snapshot",
+    source_endpoint: str | None = None,
+) -> dict[str, object]:
+    instrument = instrument_symbol_for_logical_symbol(logical_symbol)
+    endpoint = source_endpoint or (
+        f"https://public.bybit.com/trading/{instrument}"
+        f"#manifest_digest=test;logical={logical_symbol};instrument={instrument};revision=test"
+    )
+    return build_raw_trades_response(
+        logical_symbol=logical_symbol,
+        records=records,
+        range_from=interval_start,
+        range_to=interval_end,
+        request_id=f"req-{logical_symbol}-{interval_start.isoformat()}",
+        response_id=f"resp-{logical_symbol}-{interval_end.isoformat()}",
+        selection_id=f"sel-{logical_symbol}",
+        source_snapshot_id=source_snapshot_id,
+        source_endpoint=endpoint,
     )
 
 
