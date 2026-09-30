@@ -108,6 +108,34 @@ def test_b7a_initial_approve_requires_exact_gross_risk_reward_boundary():
     assert rejected["opportunity_checks"]["minimum_rr"] == "FAIL"
 
 
+def test_b7a_nonterminating_atr_distance_uses_governed_report_quantizer():
+    result = PositionOpportunityHandler().evaluate(
+        command_for(
+            handoff=handoff(
+                reference_price="100",
+                atr="3",
+                tick="0.1",
+                levels=[
+                    level("entry-low", "SWING_LOW_15M", "99", "BELOW_REFERENCE"),
+                    level("target-high", "SWING_HIGH_15M", "102.5", "ABOVE_REFERENCE"),
+                ],
+            ),
+            rules=rules_version(
+                take_profit_mode=TakeProfitMode.DYNAMIC,
+                stop_loss_pct=Decimal("0.05"),
+                minimum_risk_reward_enabled=False,
+            ),
+        )
+    )
+
+    evaluation = result.to_state_payload()["position_opportunity_state"]["evaluation"]
+
+    assert evaluation["entry"]["status"] == "AVAILABLE"
+    assert evaluation["entry"]["traversal"][0]["distance_atr"] == "0.333333333333333333"
+    assert evaluation["entry"]["distance_atr"] == "0.333333333333333333"
+    assert evaluation["decision"] == "APPROVE"
+
+
 def test_b7a_disabled_minimum_risk_reward_does_not_reject_retained_value():
     command = command_for(
         handoff=handoff(

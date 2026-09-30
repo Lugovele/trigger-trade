@@ -67,7 +67,7 @@ class HistoricalMarketHandoff:
 
 
 @dataclass(frozen=True)
-class _TickerReference:
+class _LastTradedPriceReference:
     price: str
     observed_at: str
     source_endpoint: str
@@ -89,7 +89,7 @@ def produce_research_v1_historical_market_handoff(
     candles: Sequence[HistoricalCandle],
     symbol: str,
     instrument_metadata: FuturesInstrument,
-    ticker_responses: Sequence[Mapping[str, Any]],
+    last_traded_price_responses: Sequence[Mapping[str, Any]],
 ) -> HistoricalMarketHandoff | None:
     """Produce one canonical historical MARKET_HANDOFF for a MATCHED Set result."""
 
@@ -129,13 +129,17 @@ def produce_research_v1_historical_market_handoff(
         raise ResearchV1HistoricalMarketHandoffUnavailable(
             f"research_v1_historical_market_handoff_unavailable:{metadata_reason or 'INSTRUMENT_METADATA_UNAVAILABLE'}"
         )
-    ticker = _ticker_reference(ticker_responses=ticker_responses, symbol=logical_symbol, matched_at=decision_slot)
+    reference_price = _last_traded_price_reference(
+        last_traded_price_responses=last_traded_price_responses,
+        symbol=logical_symbol,
+        matched_at=decision_slot,
+    )
     atr = _atr_reference(candles=candles, matched_at=decision_slot)
     levels = _reference_levels(
         candles=candles,
         symbol=logical_symbol,
         matched_at=decision_slot,
-        reference_price=ticker.price,
+        reference_price=reference_price.price,
         tick_size=metadata.tick_size,
     )
     if not levels:
@@ -147,7 +151,7 @@ def produce_research_v1_historical_market_handoff(
             "set_result_id": set_resolution.set_result_id,
             "decision_cycle_id": set_resolution.decision_cycle_id,
             "matched_at": _iso(decision_slot),
-            "ticker_evidence_digest": ticker.evidence_digest,
+            "last_traded_price_evidence_digest": reference_price.evidence_digest,
             "atr_evidence_digest": atr.evidence_digest,
             "instrument_metadata_digest": metadata.metadata_digest,
             "reference_levels": [level.to_payload() for level in levels],
@@ -159,9 +163,9 @@ def produce_research_v1_historical_market_handoff(
         matched_at=_iso(decision_slot),
         market_snapshot_at=_iso(decision_slot),
         market_snapshot_id=f"rv1-market-snapshot-{market_snapshot_digest[:24]}",
-        set_match_reference_price=ticker.price,
-        reference_price_observed_at=ticker.observed_at,
-        reference_price_source=ticker.source_endpoint,
+        set_match_reference_price=reference_price.price,
+        reference_price_observed_at=reference_price.observed_at,
+        reference_price_source=reference_price.source_endpoint,
         tick_size=metadata.tick_size,
         metadata_revision=metadata.metadata_revision,
         metadata_as_of=metadata.metadata_as_of,
@@ -228,55 +232,88 @@ def _decision_slot(set_resolution: HistoricalSetResolution) -> datetime:
     return parsed.astimezone(UTC)
 
 
-def _ticker_reference(
+def _last_traded_price_reference(
     *,
-    ticker_responses: Sequence[Mapping[str, Any]],
+    last_traded_price_responses: Sequence[Mapping[str, Any]],
     symbol: str,
     matched_at: datetime,
-) -> _TickerReference:
+) -> _LastTradedPriceReference:
     candidates: list[tuple[datetime, Mapping[str, Any], Mapping[str, Any]]] = []
-    for response in ticker_responses:
+    for response in last_traded_price_responses:
         body = contract_body(response, contract_type="MARKET_DATA_REQUEST", definition="MARKET_DATA_REQUEST.response")
         if str(body.get("symbol", "")).upper() != symbol.upper():
-            raise ResearchV1HistoricalMarketHandoffUnavailable("research_v1_historical_market_handoff_unavailable:TICKER_SYMBOL_MISMATCH")
+            raise ResearchV1HistoricalMarketHandoffUnavailable(
+                "research_v1_historical_market_handoff_unavailable:LAST_TRADED_PRICE_SYMBOL_MISMATCH"
+            )
         for result in body.get("selection_results", ()):
             selection = result.get("selection")
             payload = result.get("payload")
             coverage = result.get("coverage")
             if not isinstance(selection, Mapping) or not isinstance(payload, Mapping) or not isinstance(coverage, Mapping):
                 continue
-            if selection.get("dataset") != "TICKER" or selection.get("mode") != "AS_OF":
+            if selection.get("dataset") != "LAST_TRADED_PRICE" or selection.get("mode") != "AS_OF":
                 continue
             if not _complete_market_coverage(result):
-                raise ResearchV1HistoricalMarketHandoffUnavailable("research_v1_historical_market_handoff_unavailable:TICKER_COVERAGE_UNAVAILABLE")
-            ticker = payload.get("TICKER")
-            if not isinstance(ticker, Mapping) or ticker.get("status") != "AVAILABLE":
-                raise ResearchV1HistoricalMarketHandoffUnavailable("research_v1_historical_market_handoff_unavailable:TICKER_LAST_PRICE_UNAVAILABLE")
-            observed_at = _parse_timestamp(str(ticker.get("as_of") or ""))
+                raise ResearchV1HistoricalMarketHandoffUnavailable(
+                    "research_v1_historical_market_handoff_unavailable:LAST_TRADED_PRICE_COVERAGE_UNAVAILABLE"
+                )
+            last_traded_price = payload.get("LAST_TRADED_PRICE")
+            if not isinstance(last_traded_price, Mapping) or last_traded_price.get("status") != "AVAILABLE":
+                raise ResearchV1HistoricalMarketHandoffUnavailable(
+                    "research_v1_historical_market_handoff_unavailable:LAST_TRADED_PRICE_UNAVAILABLE"
+                )
+            data = last_traded_price.get("data")
+            if not isinstance(data, Mapping) or data.get("price") in {None, ""}:
+                raise ResearchV1HistoricalMarketHandoffUnavailable(
+                    "research_v1_historical_market_handoff_unavailable:LAST_TRADED_PRICE_UNAVAILABLE"
+                )
+            observed_at = _parse_timestamp(str(data.get("observed_at") or ""))
             if observed_at > matched_at:
-                raise ResearchV1HistoricalMarketHandoffUnavailable("research_v1_historical_market_handoff_unavailable:TICKER_FUTURE_LEAKAGE")
-            data = ticker.get("data")
-            if not isinstance(data, Mapping) or data.get("last_price") in {None, ""}:
-                raise ResearchV1HistoricalMarketHandoffUnavailable("research_v1_historical_market_handoff_unavailable:TICKER_LAST_PRICE_UNAVAILABLE")
+                raise ResearchV1HistoricalMarketHandoffUnavailable(
+                    "research_v1_historical_market_handoff_unavailable:LAST_TRADED_PRICE_FUTURE_LEAKAGE"
+                )
             try:
-                price = canonical_decimal_text(parse_decimal_text(str(data["last_price"])))
+                price = canonical_decimal_text(parse_decimal_text(str(data["price"])))
             except NumericPolicyError as exc:
-                raise ResearchV1HistoricalMarketHandoffUnavailable("research_v1_historical_market_handoff_unavailable:TICKER_LAST_PRICE_UNAVAILABLE") from exc
+                raise ResearchV1HistoricalMarketHandoffUnavailable(
+                    "research_v1_historical_market_handoff_unavailable:LAST_TRADED_PRICE_UNAVAILABLE"
+                ) from exc
             if parse_decimal_text(price) <= 0:
-                raise ResearchV1HistoricalMarketHandoffUnavailable("research_v1_historical_market_handoff_unavailable:TICKER_LAST_PRICE_UNAVAILABLE")
-            candidates.append((observed_at, result, {"price": price, "source_endpoint": str(ticker.get("source_endpoint") or "")}))
+                raise ResearchV1HistoricalMarketHandoffUnavailable(
+                    "research_v1_historical_market_handoff_unavailable:LAST_TRADED_PRICE_UNAVAILABLE"
+                )
+            candidates.append(
+                (
+                    observed_at,
+                    result,
+                    {
+                        "price": price,
+                        "source_endpoint": str(last_traded_price.get("source_endpoint") or ""),
+                        "source_record_id": str(data.get("source_record_id") or ""),
+                        "instrument_symbol": str(data.get("instrument_symbol") or ""),
+                        "venue": str(data.get("venue") or ""),
+                    },
+                )
+            )
     if not candidates:
-        raise ResearchV1HistoricalMarketHandoffUnavailable("research_v1_historical_market_handoff_unavailable:TICKER_LAST_PRICE_UNAVAILABLE")
-    observed_at, result, parsed = max(candidates, key=lambda item: item[0])
+        raise ResearchV1HistoricalMarketHandoffUnavailable(
+            "research_v1_historical_market_handoff_unavailable:LAST_TRADED_PRICE_UNAVAILABLE"
+        )
+    observed_at, result, parsed = max(candidates, key=lambda item: (item[0], str(item[1].get("page_id", ""))))
     if not parsed["source_endpoint"]:
-        raise ResearchV1HistoricalMarketHandoffUnavailable("research_v1_historical_market_handoff_unavailable:TICKER_SOURCE_UNAVAILABLE")
+        raise ResearchV1HistoricalMarketHandoffUnavailable(
+            "research_v1_historical_market_handoff_unavailable:LAST_TRADED_PRICE_SOURCE_UNAVAILABLE"
+        )
     digest = canonical_json_digest(
         {
-            "dataset": "TICKER",
+            "dataset": "LAST_TRADED_PRICE",
             "symbol": symbol.upper(),
             "matched_at": _iso(matched_at),
             "observed_at": _iso(observed_at),
             "price": parsed["price"],
+            "source_record_id": parsed["source_record_id"],
+            "instrument_symbol": parsed["instrument_symbol"],
+            "venue": parsed["venue"],
             "selection_digest": result.get("selection_digest"),
             "page_id": result.get("page_id"),
             "source_snapshot_id": result.get("source_snapshot_id"),
@@ -284,7 +321,7 @@ def _ticker_reference(
             "coverage": result.get("coverage"),
         }
     )
-    return _TickerReference(parsed["price"], _iso(observed_at), parsed["source_endpoint"], digest)
+    return _LastTradedPriceReference(parsed["price"], _iso(observed_at), parsed["source_endpoint"], digest)
 
 
 def _complete_market_coverage(result: Mapping[str, Any]) -> bool:

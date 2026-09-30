@@ -37,6 +37,13 @@ BYBIT_PUBLIC_TRADE_ARCHIVE_SCHEMA = (
     "homeNotional",
     "foreignNotional",
 )
+BYBIT_PUBLIC_TRADE_ARCHIVE_SCHEMA_WITH_RPI = BYBIT_PUBLIC_TRADE_ARCHIVE_SCHEMA + ("RPI",)
+_ACCEPTED_BYBIT_PUBLIC_TRADE_ARCHIVE_SCHEMAS = frozenset(
+    {
+        BYBIT_PUBLIC_TRADE_ARCHIVE_SCHEMA,
+        BYBIT_PUBLIC_TRADE_ARCHIVE_SCHEMA_WITH_RPI,
+    }
+)
 RAW_TRADES_UNAVAILABLE_MISSING_ARCHIVE_DAY = "raw_trades_archive_missing_source_day"
 RAW_TRADES_UNAVAILABLE_ARCHIVE_MANIFEST_MISMATCH = "raw_trades_archive_manifest_mismatch"
 RAW_TRADES_UNAVAILABLE_ARCHIVE_COMPLETENESS_UNATTESTED = "raw_trades_archive_completeness_unattested"
@@ -158,7 +165,7 @@ class BybitRawTradeArchiveManifest:
             raise RawTradesSourceError("archive byte_size must be positive")
         source_revision = _text(self.source_revision, field="source_revision")
         schema = _text(self.schema_identifier, field="schema_identifier")
-        if schema != ",".join(BYBIT_PUBLIC_TRADE_ARCHIVE_SCHEMA):
+        if tuple(schema.split(",")) not in _ACCEPTED_BYBIT_PUBLIC_TRADE_ARCHIVE_SCHEMAS:
             raise RawTradesSourceError("archive schema identifier does not match verified Bybit archive schema")
         status = _text(self.factual_validation_status, field="factual_validation_status").upper()
         remote_size = self.remote_byte_size
@@ -207,6 +214,13 @@ class RawTradesBackfillResult:
     missing_dates: tuple[date, ...]
 
 
+@dataclass(frozen=True)
+class LastTradedPriceBackfillResult:
+    response_payload: dict[str, Any]
+    selected_record: RawTradeRecord | None
+    available: bool
+
+
 def instrument_symbol_for_logical_symbol(logical_symbol: str) -> str:
     """Return the factual Bybit instrument symbol for a Research logical symbol."""
 
@@ -241,6 +255,7 @@ def bybit_raw_trade_archive_manifest(
     instrument = instrument_symbol_for_logical_symbol(logical)
     header, rows = _read_csv_archive(resolved)
     _validate_bybit_archive_header(header)
+    schema_identifier = ",".join(header)
     if not rows:
         raise RawTradesSourceError("archive contains no trade rows; empty-source finality requires external proof")
     records = normalize_bybit_public_trade_rows(
@@ -265,7 +280,7 @@ def bybit_raw_trade_archive_manifest(
         content_sha256=sha256(raw).hexdigest(),
         byte_size=len(raw),
         source_revision=source_revision,
-        schema_identifier=",".join(BYBIT_PUBLIC_TRADE_ARCHIVE_SCHEMA),
+        schema_identifier=schema_identifier,
         factual_validation_status=factual_validation_status,
         remote_etag=remote_etag,
         remote_last_modified=remote_last_modified,
@@ -486,6 +501,130 @@ def build_unavailable_raw_trades_response(
     ).to_payload()
 
 
+def build_last_traded_price_response_from_raw_trades(
+    *,
+    logical_symbol: str,
+    records: Sequence[RawTradeRecord],
+    as_of: datetime,
+    request_id: str,
+    response_id: str,
+    selection_id: str,
+    source_snapshot_id: str,
+    source_endpoint: str,
+    snapshot_started_at: datetime | None = None,
+    snapshot_completed_at: datetime | None = None,
+    unavailable_reason_code: str = "LAST_TRADED_PRICE_UNAVAILABLE",
+) -> LastTradedPriceBackfillResult:
+    """Build one canonical LAST_TRADED_PRICE AS_OF response from validated RAW_TRADES facts."""
+
+    logical = _symbol(logical_symbol)
+    cutoff = _utc(as_of)
+    instrument = instrument_symbol_for_logical_symbol(logical)
+    selected = _latest_trade_at_or_before(records, logical_symbol=logical, instrument_symbol=instrument, as_of=cutoff)
+    selection = market_selection(
+        selection_id=selection_id,
+        dataset="LAST_TRADED_PRICE",
+        mode="AS_OF",
+        as_of=cutoff,
+        completed_only=False,
+        page_size=1,
+    )
+    if selected is None:
+        page_id = _last_traded_price_page_id(
+            logical_symbol=logical,
+            source_snapshot_id=source_snapshot_id,
+            selection_id=selection_id,
+            selected_record=None,
+        )
+        result = market_selection_result(
+            symbol=logical,
+            selection=selection,
+            page_id=page_id,
+            page_index=0,
+            source_snapshot_id=source_snapshot_id,
+            payload=dataset_payload(
+                dataset="LAST_TRADED_PRICE",
+                status="UNAVAILABLE",
+                as_of=cutoff,
+                source_endpoint=source_endpoint,
+                data=None,
+            ),
+            coverage=coverage(
+                covered_ranges=(),
+                missing_ranges=(),
+                coverage_complete=False,
+                pagination_complete=True,
+                next_cursor=None,
+                expected_page_ids=(page_id,),
+                source_finality_confirmed=False,
+                reason_code=unavailable_reason_code,
+            ),
+        )
+        return LastTradedPriceBackfillResult(
+            response_payload=build_market_data_response(
+                request_id=request_id,
+                response_id=response_id,
+                symbol=logical,
+                snapshot_started_at=snapshot_started_at or cutoff,
+                snapshot_completed_at=snapshot_completed_at or cutoff,
+                as_of=cutoff,
+                selection_results=(result,),
+                expected_selections=(selection,),
+            ).to_payload(),
+            selected_record=None,
+            available=False,
+        )
+    page_id = _last_traded_price_page_id(
+        logical_symbol=logical,
+        source_snapshot_id=source_snapshot_id,
+        selection_id=selection_id,
+        selected_record=selected,
+    )
+    result = market_selection_result(
+        symbol=logical,
+        selection=selection,
+        page_id=page_id,
+        page_index=0,
+        source_snapshot_id=source_snapshot_id,
+        payload=dataset_payload(
+            dataset="LAST_TRADED_PRICE",
+            status="AVAILABLE",
+            as_of=cutoff,
+            source_endpoint=source_endpoint,
+            data={
+                "price": canonical_decimal_text(selected.price),
+                "observed_at": _iso(selected.executed_at),
+                "source_record_id": selected.trade_id,
+                "venue": selected.venue,
+                "instrument_symbol": selected.instrument_symbol,
+            },
+        ),
+        coverage=coverage(
+            covered_ranges=(),
+            missing_ranges=(),
+            coverage_complete=True,
+            pagination_complete=True,
+            next_cursor=None,
+            expected_page_ids=(page_id,),
+            source_finality_confirmed=True,
+        ),
+    )
+    return LastTradedPriceBackfillResult(
+        response_payload=build_market_data_response(
+            request_id=request_id,
+            response_id=response_id,
+            symbol=logical,
+            snapshot_started_at=snapshot_started_at or cutoff,
+            snapshot_completed_at=snapshot_completed_at or cutoff,
+            as_of=cutoff,
+            selection_results=(result,),
+            expected_selections=(selection,),
+        ).to_payload(),
+        selected_record=selected,
+        available=True,
+    )
+
+
 def build_bybit_archive_raw_trades_response(
     *,
     logical_symbol: str,
@@ -656,6 +795,24 @@ def _dedupe_records(records: Iterable[RawTradeRecord]) -> tuple[RawTradeRecord, 
     return tuple(sorted(by_identity.values(), key=lambda item: (item.executed_at, item.trade_id)))
 
 
+def _latest_trade_at_or_before(
+    records: Sequence[RawTradeRecord],
+    *,
+    logical_symbol: str,
+    instrument_symbol: str,
+    as_of: datetime,
+) -> RawTradeRecord | None:
+    eligible: list[RawTradeRecord] = []
+    for record in records:
+        if record.logical_symbol != logical_symbol or record.instrument_symbol != instrument_symbol:
+            raise RawTradesSourceError("LAST_TRADED_PRICE record symbol binding mismatch")
+        if record.executed_at <= as_of:
+            eligible.append(record)
+    if not eligible:
+        return None
+    return max(eligible, key=lambda item: (item.executed_at, item.trade_id))
+
+
 def _factual_trade_payload(record: RawTradeRecord) -> dict[str, Any]:
     return {
         "venue": record.venue,
@@ -685,12 +842,12 @@ def _read_csv_archive(path: Path) -> tuple[tuple[str, ...], tuple[dict[str, str]
 
 
 def _validate_bybit_archive_header(header: Sequence[str]) -> None:
-    if tuple(header) != BYBIT_PUBLIC_TRADE_ARCHIVE_SCHEMA:
+    if tuple(header) not in _ACCEPTED_BYBIT_PUBLIC_TRADE_ARCHIVE_SCHEMAS:
         raise RawTradesSourceError("Bybit archive header does not match verified public trade archive schema")
 
 
 def _validate_bybit_archive_row_schema(row: Mapping[str, Any]) -> None:
-    if tuple(row.keys()) != BYBIT_PUBLIC_TRADE_ARCHIVE_SCHEMA:
+    if tuple(row.keys()) not in _ACCEPTED_BYBIT_PUBLIC_TRADE_ARCHIVE_SCHEMAS:
         raise RawTradesSourceError("Bybit archive row does not match verified public trade archive schema")
 
 
@@ -784,6 +941,25 @@ def _page_id(
     return f"mdp-raw-trades-{digest[:24]}"
 
 
+def _last_traded_price_page_id(
+    *,
+    logical_symbol: str,
+    source_snapshot_id: str,
+    selection_id: str,
+    selected_record: RawTradeRecord | None,
+) -> str:
+    digest = canonical_json_digest(
+        {
+            "dataset": "LAST_TRADED_PRICE",
+            "logical_symbol": logical_symbol,
+            "source_snapshot_id": source_snapshot_id,
+            "selection_id": selection_id,
+            "selected_record": None if selected_record is None else selected_record.provenance_payload(),
+        }
+    )
+    return f"mdp-last-traded-price-{digest[:24]}"
+
+
 def _field(row: Mapping[str, Any], keys: Sequence[str]) -> Any:
     for key in keys:
         value = row.get(key)
@@ -836,6 +1012,14 @@ def _parse_trade_timestamp(value: Any) -> datetime:
             seconds, remainder = divmod(raw, 1_000)
             return datetime.fromtimestamp(seconds, tz=UTC) + timedelta(milliseconds=remainder)
         return datetime.fromtimestamp(raw, tz=UTC)
+    if "." in text and text.replace(".", "", 1).isdigit():
+        try:
+            raw_decimal = Decimal(text)
+        except InvalidOperation as exc:
+            raise RawTradesSourceError("invalid trade timestamp") from exc
+        seconds = int(raw_decimal)
+        microseconds = int((raw_decimal - Decimal(seconds)) * Decimal("1000000"))
+        return datetime.fromtimestamp(seconds, tz=UTC) + timedelta(microseconds=microseconds)
     normalized = text.replace("Z", "+00:00")
     try:
         return _utc(datetime.fromisoformat(normalized))

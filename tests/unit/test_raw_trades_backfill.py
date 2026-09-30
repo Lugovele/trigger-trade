@@ -20,6 +20,7 @@ from triggertrade.market_data import (
     RAW_TRADES_UNAVAILABLE_MISSING_ARCHIVE_DAY,
     RawTradesSourceError,
     build_bybit_archive_raw_trades_response,
+    build_last_traded_price_response_from_raw_trades,
     build_raw_trades_response,
     bybit_public_trade_archive_url,
     bybit_raw_trade_archive_manifest,
@@ -61,6 +62,26 @@ def test_bybit_archive_trade_normalization_preserves_taker_side_and_exact_quote_
     assert records[1].taker_side == "SELL"
     assert records[1].notional_quote == Decimal("200.50")
     assert records[1].contract_payload()["notional_quote"] == "200.5"
+
+
+def test_bybit_archive_current_rpi_schema_and_fractional_epoch_timestamp_are_supported():
+    records = normalize_bybit_public_trade_rows(
+        (
+            _archive_row(
+                "official-rpi",
+                "1786925699.2724",
+                price="62884.20",
+                qty="0.002",
+                rpi="0",
+            ),
+        ),
+        logical_symbol="BTCUSDT",
+        source_endpoint=bybit_public_trade_archive_url("BTCUSDT", date(2026, 8, 17)),
+    )
+
+    assert records[0].executed_at.isoformat().replace("+00:00", "Z") == "2026-08-17T00:14:59.272400Z"
+    assert records[0].price == Decimal("62884.20")
+    assert records[0].source_row_number == 1
 
 
 def test_duplicate_trade_ids_are_idempotent_but_conflicts_fail_closed():
@@ -108,6 +129,133 @@ def test_raw_trades_response_applies_exact_interval_boundaries_and_excludes_futu
     coverage = parsed["market_data_response"]["selection_results"][0]["coverage"]
     assert coverage["coverage_complete"] is True
     assert coverage["source_finality_confirmed"] is True
+
+
+def test_last_traded_price_response_selects_latest_factual_trade_at_or_before_cutoff():
+    records = normalize_bybit_public_trade_rows(
+        (
+            _archive_row("older", "2026-09-01T00:00:01Z", price="100"),
+            _archive_row("chosen", "2026-09-01T00:04:59Z", price="101"),
+            _archive_row("future", "2026-09-01T00:05:01Z", price="102"),
+        ),
+        logical_symbol="BTCUSDT",
+        source_endpoint="archive",
+    )
+
+    result = build_last_traded_price_response_from_raw_trades(
+        logical_symbol="BTCUSDT",
+        records=records,
+        as_of=END,
+        request_id="mdr-ltp-1",
+        response_id="mdr-ltp-response-1",
+        selection_id="sel-ltp-1",
+        source_snapshot_id="snapshot-ltp-1",
+        source_endpoint="archive#manifest_digest=abc;logical=BTCUSDT;instrument=BTCUSDT",
+    )
+    payload = parse_contract("MARKET_DATA_REQUEST", result.response_payload, definition="MARKET_DATA_REQUEST.response").to_payload()
+    page = payload["market_data_response"]["selection_results"][0]
+    data = page["payload"]["LAST_TRADED_PRICE"]["data"]
+
+    assert result.available is True
+    assert result.selected_record is not None
+    assert result.selected_record.trade_id == "chosen"
+    assert data == {
+        "price": "101",
+        "observed_at": "2026-09-01T00:04:59Z",
+        "source_record_id": "chosen",
+        "venue": "BYBIT",
+        "instrument_symbol": "BTCUSDT",
+    }
+    assert page["selection"]["dataset"] == "LAST_TRADED_PRICE"
+    assert page["selection"]["mode"] == "AS_OF"
+    assert page["coverage"]["coverage_complete"] is True
+
+
+def test_last_traded_price_equal_timestamp_selection_is_deterministic():
+    rows = (
+        _archive_row("b", "2026-09-01T00:04:59Z", price="102"),
+        _archive_row("a", "2026-09-01T00:04:59Z", price="101"),
+    )
+    first = normalize_bybit_public_trade_rows(rows, logical_symbol="BTCUSDT", source_endpoint="archive")
+    second = normalize_bybit_public_trade_rows(tuple(reversed(rows)), logical_symbol="BTCUSDT", source_endpoint="archive")
+
+    first_result = build_last_traded_price_response_from_raw_trades(
+        logical_symbol="BTCUSDT",
+        records=first,
+        as_of=END,
+        request_id="mdr-ltp-equal-1",
+        response_id="mdr-ltp-equal-response-1",
+        selection_id="sel-ltp-equal-1",
+        source_snapshot_id="snapshot-ltp-equal-1",
+        source_endpoint="archive",
+    )
+    second_result = build_last_traded_price_response_from_raw_trades(
+        logical_symbol="BTCUSDT",
+        records=second,
+        as_of=END,
+        request_id="mdr-ltp-equal-1",
+        response_id="mdr-ltp-equal-response-1",
+        selection_id="sel-ltp-equal-1",
+        source_snapshot_id="snapshot-ltp-equal-1",
+        source_endpoint="archive",
+    )
+
+    assert first_result.selected_record is not None
+    assert first_result.selected_record.trade_id == "b"
+    assert first_result.response_payload == second_result.response_payload
+
+
+def test_last_traded_price_unavailable_when_no_eligible_trade_exists():
+    records = normalize_bybit_public_trade_rows(
+        (_archive_row("future", "2026-09-01T00:05:01Z", price="102"),),
+        logical_symbol="BTCUSDT",
+        source_endpoint="archive",
+    )
+
+    result = build_last_traded_price_response_from_raw_trades(
+        logical_symbol="BTCUSDT",
+        records=records,
+        as_of=END,
+        request_id="mdr-ltp-missing-1",
+        response_id="mdr-ltp-missing-response-1",
+        selection_id="sel-ltp-missing-1",
+        source_snapshot_id="snapshot-ltp-missing-1",
+        source_endpoint="archive",
+    )
+    payload = parse_contract("MARKET_DATA_REQUEST", result.response_payload, definition="MARKET_DATA_REQUEST.response").to_payload()
+    page = payload["market_data_response"]["selection_results"][0]
+
+    assert result.available is False
+    assert result.selected_record is None
+    assert page["payload"]["LAST_TRADED_PRICE"]["status"] == "UNAVAILABLE"
+    assert page["payload"]["LAST_TRADED_PRICE"]["data"] is None
+    assert page["coverage"]["coverage_complete"] is False
+    assert page["coverage"]["source_finality_confirmed"] is False
+
+
+def test_last_traded_price_preserves_pepe_logical_and_physical_binding():
+    records = normalize_bybit_public_trade_rows(
+        (_archive_row("pepe-1", "2026-09-01T00:04:59Z", symbol="1000PEPEUSDT", price="0.0123"),),
+        logical_symbol="PEPEUSDT",
+        source_endpoint="archive",
+    )
+
+    result = build_last_traded_price_response_from_raw_trades(
+        logical_symbol="PEPEUSDT",
+        records=records,
+        as_of=END,
+        request_id="mdr-ltp-pepe-1",
+        response_id="mdr-ltp-pepe-response-1",
+        selection_id="sel-ltp-pepe-1",
+        source_snapshot_id="snapshot-ltp-pepe-1",
+        source_endpoint="archive#logical=PEPEUSDT;instrument=1000PEPEUSDT",
+    )
+    payload = parse_contract("MARKET_DATA_REQUEST", result.response_payload, definition="MARKET_DATA_REQUEST.response").to_payload()
+    body = payload["market_data_response"]
+    data = body["selection_results"][0]["payload"]["LAST_TRADED_PRICE"]["data"]
+
+    assert body["symbol"] == "PEPEUSDT"
+    assert data["instrument_symbol"] == "1000PEPEUSDT"
 
 
 def test_reversed_source_order_produces_same_normalized_order_and_page_identity():
@@ -422,8 +570,9 @@ def _archive_row(
     price: str = "10",
     qty: str = "1",
     symbol: str = "BTCUSDT",
+    rpi: str | None = None,
 ) -> dict[str, str]:
-    return {
+    row = {
         "timestamp": timestamp,
         "symbol": symbol,
         "side": side,
@@ -435,6 +584,9 @@ def _archive_row(
         "homeNotional": qty,
         "foreignNotional": str(Decimal(price) * Decimal(qty)),
     }
+    if rpi is not None:
+        row["RPI"] = rpi
+    return row
 
 
 def _raw_page(records):

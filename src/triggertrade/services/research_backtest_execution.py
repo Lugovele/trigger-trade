@@ -18,6 +18,7 @@ from triggertrade.config import AppConfig
 from triggertrade.instruments import FuturesInstrument
 from triggertrade.market_data import FuturesInstrumentMetadata
 from triggertrade.persistence.durable_messages import DurableMessageStore
+from triggertrade.persistence.market_data_fact_store import MarketDataFactStore
 from triggertrade.persistence.postgres import PostgresConnectionFactory, PostgresPersistenceError, PostgresUnitOfWork
 from triggertrade.persistence.postgres_research_registry import (
     PostgresResearchConfigurationRegistry,
@@ -25,6 +26,9 @@ from triggertrade.persistence.postgres_research_registry import (
 )
 from triggertrade.persistence.postgres_research_set_registry import PostgresResearchSetRegistry, ResearchSetVersion
 from triggertrade.persistence.postgres_trigger_registry import PostgresTriggerRegistry
+from triggertrade.portfolio_grants import PortfolioGrantPolicy, PortfolioGrantStatus, evaluate_portfolio_grant
+from triggertrade.portfolio_state import CoinPortfolioState, CommitmentBuckets, PortfolioHealth, PortfolioState
+from triggertrade.position_rules import ConstructionStatus, PositionConstructionCommand, evaluate_position_construction
 from triggertrade.position_rules import (
     PositionOpportunityCommand,
     PositionOpportunityHandler,
@@ -341,7 +345,12 @@ class CanonicalResearchBacktestExecutionExecutor:
                 candles=candles,
                 instrument=instrument,
                 portfolio_state=portfolio_state,
-                ticker_responses=_replay_sequence(replay, "ticker_responses"),
+                last_traded_price_responses=_replay_sequence(replay, "last_traded_price_responses"),
+                last_traded_price_response_loader=lambda symbol, as_of: _load_research_v1_last_traded_price_response(
+                    self._factory,
+                    symbol=symbol,
+                    as_of=as_of,
+                ),
                 companion_candles=_replay_mapping(replay, "companion_candles"),
                 companion_instrument_metadata=_replay_mapping(replay, "companion_instrument_metadata"),
                 raw_trades_pages=_replay_sequence(replay, "raw_trades_pages"),
@@ -490,7 +499,8 @@ def _run_research_v1_certified_position_backtest(
     candles: tuple[Any, ...],
     instrument: FuturesInstrumentMetadata | FuturesInstrument,
     portfolio_state: ResearchV1SharedPortfolioState,
-    ticker_responses: tuple[Mapping[str, Any], ...] = (),
+    last_traded_price_responses: tuple[Mapping[str, Any], ...] = (),
+    last_traded_price_response_loader: Callable[[str, datetime], Mapping[str, Any] | None] | None = None,
     companion_candles: Mapping[str, tuple[Any, ...]] | None = None,
     companion_instrument_metadata: Mapping[str, FuturesInstrument] | None = None,
     raw_trades_pages: tuple[Mapping[str, Any], ...] = (),
@@ -534,13 +544,18 @@ def _run_research_v1_certified_position_backtest(
             companion_instrument_metadata=companion_instrument_metadata,
             raw_trades_pages=raw_trades_pages,
         )
+        resolved_last_traded_price_responses = last_traded_price_responses
+        if not resolved_last_traded_price_responses and last_traded_price_response_loader is not None:
+            response = last_traded_price_response_loader(trigger_set.symbol, _research_v1_decision_slot(set_resolution))
+            if response is not None:
+                resolved_last_traded_price_responses = (response,)
         handoff = produce_research_v1_historical_market_handoff(
             research_set=research_set,
             set_resolution=set_resolution,
             candles=candles,
             symbol=trigger_set.symbol,
             instrument_metadata=instrument,
-            ticker_responses=ticker_responses,
+            last_traded_price_responses=resolved_last_traded_price_responses,
         )
     except (ResearchV1HistoricalSetError, ResearchV1HistoricalMarketHandoffUnavailable) as exc:
         raise HistoricalDataError(str(exc)) from exc
@@ -586,6 +601,27 @@ def _run_research_v1_certified_position_backtest(
         symbol_binding=symbol_binding,
     )
     decision = str(position_state["decision"]["decision"])
+    if decision == "APPROVE":
+        portfolio_evidence, portfolio_events = _research_v1_approved_position_to_order_spec(
+            position_state=position.to_state_payload(),
+            rules=rules,
+            instrument=instrument,
+            portfolio_state=portfolio_state,
+            as_of=handoff.payload["market_handoff"]["created_at"],
+        )
+        evidence = {
+            **evidence,
+            **portfolio_evidence,
+        }
+        return _research_v1_position_result(
+            plan=plan,
+            candles=candles,
+            evidence=evidence,
+            intents=1,
+            rejected_intents=0,
+            no_action_count=0,
+            portfolio_events=portfolio_events,
+        )
     return _research_v1_position_result(
         plan=plan,
         candles=candles,
@@ -594,6 +630,197 @@ def _run_research_v1_certified_position_backtest(
         rejected_intents=1 if decision == "REJECT" else 0,
         no_action_count=0,
     )
+
+
+def _research_v1_approved_position_to_order_spec(
+    *,
+    position_state: Mapping[str, Any],
+    rules: TradingRulesVersion,
+    instrument: FuturesInstrument,
+    portfolio_state: ResearchV1SharedPortfolioState,
+    as_of: str,
+) -> tuple[dict[str, Any], tuple[dict[str, Any], ...]]:
+    state = position_state["position_opportunity_state"]
+    decision = state["decision"]
+    symbol = str(decision["symbol"]).upper()
+    base_id = canonical_json_digest(
+        {
+            "producer": "research_v1_historical_position_construction@1",
+            "position_decision_id": decision["position_decision_id"],
+            "rules_version_id": rules.rules_version_id,
+            "portfolio_snapshot": portfolio_state.snapshot(),
+        }
+    )[:24]
+    portfolio_eval = evaluate_portfolio_grant(
+        grant_decision_id=f"rv1-grant-decision-{base_id}",
+        capital_grant_id=f"rv1-capital-grant-{base_id}",
+        approved_decision={"position_decision": decision},
+        portfolio_state=_research_v1_portfolio_state(portfolio_state, symbol=symbol, as_of=as_of),
+        policy=_research_v1_portfolio_grant_policy(rules=rules, portfolio_state=portfolio_state, symbol=symbol),
+        venue_facts=_research_v1_venue_facts(rules=rules, instrument=instrument),
+        as_of=as_of,
+    )
+    grant_payload = None if portfolio_eval.capital_grant is None else portfolio_eval.capital_grant.to_payload()
+    payload: dict[str, Any] = {
+        "portfolio_boundary": "CAPITAL_AND_LIMITS_EVALUATED",
+        "portfolio_grant_status": portfolio_eval.status.value,
+        "portfolio_grant_reason": portfolio_eval.primary_reason,
+        "portfolio_grant_decision": portfolio_eval.to_payload()["portfolio_grant_decision"],
+        "capital_grant": grant_payload,
+        "construction_status": "NOT_EVALUATED",
+        "order_spec_status": "NOT_EVALUATED_REQUIRES_ALLOWED_CAPITAL_GRANT",
+        "research_v1_order_spec_evidence_digest": None,
+    }
+    if portfolio_eval.status is not PortfolioGrantStatus.ALLOWED or grant_payload is None:
+        return payload, ()
+
+    construction = evaluate_position_construction(
+        PositionConstructionCommand(
+            event_id=f"rv1-construction-event-{base_id}",
+            occurred_at=as_of,
+            construction_result_id=f"rv1-construction-{base_id}",
+            position_plan_id=f"rv1-position-plan-{base_id}",
+            tranche_id=f"rv1-tranche-{base_id}",
+            order_spec_id=f"rv1-order-spec-{base_id}",
+            capital_grant=grant_payload,
+            position_opportunity_state=position_state,
+        )
+    )
+    construction_payload = construction.to_payload()["position_construction_evaluation"]
+    order_spec_payload = None if construction.order_spec is None else construction.order_spec.to_payload()
+    evidence_payload = {
+        "producer": "research_v1_historical_order_spec@1",
+        "portfolio_grant_decision_id": portfolio_eval.grant_decision_id,
+        "capital_grant_id": grant_payload["capital_and_limits"]["capital_grant_id"],
+        "construction_result_id": construction_payload["construction_result"]["position_construction_result"][
+            "construction_result_id"
+        ],
+        "construction_status": construction.status.value,
+        "construction_result": construction_payload["construction_result"],
+        "order_spec": order_spec_payload,
+    }
+    evidence_digest = canonical_json_digest(evidence_payload)
+    payload.update(
+        {
+            "construction_status": construction.status.value,
+            "construction_reason": construction.primary_reason,
+            "position_construction": construction_payload,
+            "order_spec": order_spec_payload,
+            "order_spec_status": "CONSTRUCTED" if construction.status is ConstructionStatus.CONSTRUCTED else "REJECTED",
+            "research_v1_order_spec_evidence_digest": evidence_digest,
+        }
+    )
+    if construction.status is not ConstructionStatus.CONSTRUCTED or order_spec_payload is None:
+        return payload, ()
+    spec = order_spec_payload["order_spec"]
+    event = {
+        "action": "RESERVE",
+        "symbol": spec["symbol"],
+        "actual_committed_capital": spec["economics"]["actual_committed_capital"],
+        "canonical_source": "order_spec.economics.actual_committed_capital",
+        "position_decision_id": spec["position_decision_id"],
+        "construction_result_id": spec["construction_result_id"],
+        "order_spec_id": spec["order_spec_id"],
+        "order_spec_digest": canonical_json_digest(order_spec_payload),
+    }
+    return payload, (event,)
+
+
+def _research_v1_portfolio_state(
+    portfolio: ResearchV1SharedPortfolioState,
+    *,
+    symbol: str,
+    as_of: str,
+) -> PortfolioState:
+    committed = portfolio.committed_by_symbol_map
+    open_positions = portfolio.open_positions_by_symbol_map
+    coins = tuple(
+        CoinPortfolioState(
+            symbol=item,
+            buckets=CommitmentBuckets(
+                held_committed_capital=_decimal_text(committed.get(item, Decimal("0"))),
+                committed_tranches=open_positions.get(item, 0),
+            ),
+        )
+        for item in sorted(set(portfolio.allocation_by_symbol) | {symbol.upper()})
+    )
+    return PortfolioState(
+        portfolio_id="research-v1-backtest",
+        revision=1 + sum(open_positions.values()),
+        health=PortfolioHealth.LIVE,
+        as_of=as_of,
+        evidence_id=f"rv1-portfolio-{canonical_json_digest(portfolio.snapshot())[:24]}",
+        global_buckets=CommitmentBuckets(
+            held_committed_capital=_decimal_text(portfolio.committed_capital),
+            committed_tranches=sum(open_positions.values()),
+        ),
+        coins=coins,
+    )
+
+
+def _research_v1_portfolio_grant_policy(
+    *,
+    rules: TradingRulesVersion,
+    portfolio_state: ResearchV1SharedPortfolioState,
+    symbol: str,
+) -> PortfolioGrantPolicy:
+    draft = rules.draft
+    allocation = portfolio_state.allocation_by_symbol.get(symbol.upper())
+    if allocation is None:
+        raise HistoricalDataError("research_v1_portfolio_unavailable:COIN_ALLOCATION_UNAVAILABLE")
+    max_open = draft.max_open_positions if draft.max_open_positions_enabled and draft.max_open_positions else portfolio_state.max_open_positions
+    max_per_coin = (
+        draft.max_positions_per_coin
+        if draft.max_positions_per_coin_enabled and draft.max_positions_per_coin
+        else portfolio_state.max_positions_per_coin
+    )
+    return PortfolioGrantPolicy(
+        minimum_tranche_capital=_decimal_text(draft.minimum_tranche_capital or Decimal("0")),
+        global_position_cap=_decimal_text(portfolio_state.aggregate_capital_cap),
+        coin_allocation_cap=_decimal_text(portfolio_state.total_capital * allocation),
+        max_open_positions=max_open,
+        max_positions_per_coin=max_per_coin,
+        daily_loss_blocked=bool(draft.daily_loss_limit_enabled),
+    )
+
+
+def _research_v1_venue_facts(*, rules: TradingRulesVersion, instrument: FuturesInstrument) -> dict[str, Any]:
+    if instrument.min_notional_value is None:
+        raise HistoricalDataError("research_v1_portfolio_unavailable:INSTRUMENT_MIN_NOTIONAL_UNAVAILABLE")
+    if instrument.min_leverage is None or instrument.leverage_step is None:
+        raise HistoricalDataError("research_v1_portfolio_unavailable:INSTRUMENT_LEVERAGE_UNAVAILABLE")
+    return {
+        "instrument": {
+            "tick_size": str(instrument.tick_size),
+            "qty_step": str(instrument.qty_step),
+            "min_order_qty": str(instrument.min_order_qty),
+            "min_notional": str(instrument.min_notional_value),
+            "max_order_qty": str(instrument.max_order_qty),
+            "max_order_qty_status": "AVAILABLE",
+            "max_order_qty_source_field": "lotSizeFilter.maxOrderQty",
+            "max_leverage": str(instrument.max_leverage),
+            "contract_type": "LINEAR_USDT_PERPETUAL",
+            "metadata_revision": instrument.catalog_hash or f"{instrument.source}:{instrument.symbol}:{instrument.updated_at}",
+            "native_profile_revision": "bybit-linear-futures-catalog-v1",
+            "instrument_supported": instrument.is_tradeable,
+            "position_mode": "HEDGE_MODE",
+            "margin_mode": "ISOLATED",
+            "as_of": instrument.updated_at,
+            "source_ref": f"{instrument.source}:{instrument.symbol}",
+        },
+        "fees": {
+            "maker_fee_rate": _decimal_text(rules.draft.maker_fee_rate),
+            "taker_fee_rate": _decimal_text(rules.draft.taker_fee_rate),
+            "fee_schedule_version": f"{rules.rules_version_id}:fees",
+            "effective_at": rules.created_at,
+            "as_of": rules.created_at,
+            "source_ref": f"trading-rules:{rules.rules_version_id}",
+        },
+    }
+
+
+def _decimal_text(value: Decimal) -> str:
+    return format(value.normalize(), "f") if value != 0 else "0"
 
 
 def _load_trigger_rules_for_research_set(
@@ -609,6 +836,32 @@ def _load_trigger_rules_for_research_set(
                 raise PostgresPersistenceError(f"research_v1_trigger_version_missing:{member.trigger_id}@{member.trigger_version}")
             rules.append(rule)
         return tuple(rules)
+
+
+def _load_research_v1_last_traded_price_response(
+    factory: PostgresConnectionFactory,
+    *,
+    symbol: str,
+    as_of: datetime,
+) -> Mapping[str, Any] | None:
+    with PostgresUnitOfWork(factory) as uow:
+        return MarketDataFactStore(uow.connection).latest_last_traded_price_response_as_of(symbol=symbol, as_of=as_of)
+
+
+def _research_v1_decision_slot(set_resolution: object) -> datetime:
+    frozen_condition = getattr(set_resolution, "frozen_condition", None)
+    if not isinstance(frozen_condition, Mapping):
+        raise HistoricalDataError("research_v1_historical_market_handoff_unavailable:DECISION_SLOT_UNAVAILABLE")
+    raw = frozen_condition.get("decision_slot")
+    if not isinstance(raw, str):
+        raise HistoricalDataError("research_v1_historical_market_handoff_unavailable:DECISION_SLOT_UNAVAILABLE")
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise HistoricalDataError("research_v1_historical_market_handoff_unavailable:DECISION_SLOT_UNAVAILABLE") from exc
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 def _replay_sequence(replay: object, name: str) -> tuple[Mapping[str, Any], ...]:
@@ -693,6 +946,7 @@ def _research_v1_position_result(
     no_action_count: int = 0,
     long_trades: int = 0,
     short_trades: int = 0,
+    portfolio_events: tuple[dict[str, Any], ...] = (),
 ) -> ResearchV1CertifiedPositionBacktestResult:
     return ResearchV1CertifiedPositionBacktestResult(
         backtest_run_id=f"research-v1-position-{evidence['evidence_digest'][:24]}",
@@ -715,6 +969,7 @@ def _research_v1_position_result(
         short_trades=short_trades,
         by_regime={},
         research_v1_certified_position_evidence=evidence,
+        research_v1_portfolio_events=portfolio_events,
     )
 
 def _historical_replay_load_start(plan: BacktestPlan) -> datetime:

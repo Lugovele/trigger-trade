@@ -22,6 +22,7 @@ from triggertrade.numeric_policy import (
     canonical_decimal_text,
     exact_divide,
     parse_decimal_text,
+    qratio_floor,
     quantize,
 )
 from triggertrade.rules.trading import StopLossMode, TakeProfitMode, TradingRulesVersion
@@ -100,7 +101,7 @@ class PositionPriceResult:
             "reference_level_id": None if self.reference is None else self.reference.level_id,
             "reference_level_type": None if self.reference is None else self.reference.level_type,
             "reference_timeframe": None if self.reference is None else self.reference.timeframe,
-            "distance_atr": None if self.distance_atr is None else canonical_decimal_text(self.distance_atr),
+            "distance_atr": None if self.distance_atr is None else _ratio_report_text(self.distance_atr),
             "traversal": [dict(item) for item in self.traversal],
         }
 
@@ -137,10 +138,14 @@ class PositionOpportunityEvaluation:
                 "take_profit": self.take_profit.to_payload(),
                 "gross_risk_reward": None
                 if self.gross_risk_reward is None
-                else canonical_decimal_text(self.gross_risk_reward),
+                else _ratio_report_text(self.gross_risk_reward),
                 "report": dict(self.report),
             }
         }
+
+
+def _ratio_report_text(value: Fraction) -> str:
+    return qratio_floor(value).text
 
 
 def evaluate_initial_position_opportunity(
@@ -254,7 +259,7 @@ def _dynamic_entry(
                 "level_id": level.level_id,
                 "level_type": level.level_type,
                 "price": level.price_text,
-                "distance_atr": canonical_decimal_text(distance_atr),
+                "distance_atr": _ratio_report_text(distance_atr),
                 "accepted": accepted,
             }
         )
@@ -268,7 +273,7 @@ def _dynamic_entry(
                 return PositionPriceResult(formula_id, PositionResultStatus.FAIL, "ENTRY_ROUNDING_ERROR", traversal=tuple(traversal))
             rounded_distance_atr = exact_divide(abs(reference_price - rounded), atr)
             traversal[-1]["rounded_price"] = canonical_decimal_text(rounded)
-            traversal[-1]["rounded_distance_atr"] = canonical_decimal_text(rounded_distance_atr)
+            traversal[-1]["rounded_distance_atr"] = _ratio_report_text(rounded_distance_atr)
             if not ENTRY_MIN_ATR_DISTANCE <= rounded_distance_atr <= ENTRY_MAX_ATR_DISTANCE:
                 return PositionPriceResult(
                     formula_id,
@@ -352,7 +357,7 @@ def _dynamic_stop(
                 "raw_stop": canonical_decimal_text(raw_stop),
                 "minimum_stop": canonical_decimal_text(minimum_stop),
                 "adjusted_stop": canonical_decimal_text(adjusted_stop),
-                "distance_atr": canonical_decimal_text(distance_atr),
+                "distance_atr": _ratio_report_text(distance_atr),
                 "accepted": distance_atr <= STOP_MAX_DISTANCE_ATR,
             }
         )
@@ -371,7 +376,7 @@ def _dynamic_stop(
             return PositionPriceResult(formula_id, PositionResultStatus.FAIL, "ROUNDING_ERROR", traversal=tuple(traversal))
         post_distance_atr = exact_divide(post_rounding_risk, atr)
         traversal[-1]["rounded_stop"] = canonical_decimal_text(rounded)
-        traversal[-1]["rounded_distance_atr"] = canonical_decimal_text(post_distance_atr)
+        traversal[-1]["rounded_distance_atr"] = _ratio_report_text(post_distance_atr)
         if post_distance_atr > STOP_MAX_DISTANCE_ATR:
             return PositionPriceResult(formula_id, PositionResultStatus.UNAVAILABLE, "SL_TOO_WIDE", traversal=tuple(traversal))
         return PositionPriceResult(
@@ -460,7 +465,7 @@ def _dynamic_take_profit(
                 "level_id": level.level_id,
                 "level_type": level.level_type,
                 "price": level.price_text,
-                "distance_atr": canonical_decimal_text(distance_atr),
+                "distance_atr": _ratio_report_text(distance_atr),
                 "distance_status": distance_status,
                 "accepted": accepted,
             }
@@ -477,7 +482,7 @@ def _dynamic_take_profit(
                 return PositionPriceResult("F-010", PositionResultStatus.FAIL, "ROUNDING_ERROR", traversal=tuple(traversal))
             rounded_distance_atr = exact_divide(abs(rounded - entry.price), atr)
             traversal[-1]["rounded_price"] = canonical_decimal_text(rounded)
-            traversal[-1]["rounded_distance_atr"] = canonical_decimal_text(rounded_distance_atr)
+            traversal[-1]["rounded_distance_atr"] = _ratio_report_text(rounded_distance_atr)
             if rounded_distance_atr < TAKE_MIN_ATR_DISTANCE:
                 return PositionPriceResult(
                     "F-010",

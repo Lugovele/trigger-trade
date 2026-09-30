@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from decimal import Decimal
 import json
 from typing import Any
@@ -128,6 +130,31 @@ class MarketDataFactStore:
             rows = cursor.fetchall()
         return tuple(_record_from_row(row) for row in rows)
 
+    def latest_last_traded_price_response_as_of(self, *, symbol: str, as_of: datetime) -> dict[str, Any] | None:
+        """Return the latest eligible canonical LAST_TRADED_PRICE AS_OF response page."""
+
+        target = _timestamp(as_of)
+        with self._connection.cursor() as cursor:
+            cursor.execute(
+                _SELECT_PAGE + " WHERE symbol = %s AND dataset = %s ORDER BY source_snapshot_id, page_index, page_id",
+                (symbol.upper(), "LAST_TRADED_PRICE"),
+            )
+            rows = cursor.fetchall()
+        candidates: list[tuple[datetime, str, dict[str, Any]]] = []
+        for row in rows:
+            record = _record_from_row(row)
+            response = _response_from_page(record)
+            result = response["market_data_response"]["selection_results"][0]
+            observed_at = _eligible_last_traded_price_observed_at(record=record, result=result)
+            if observed_at is None:
+                continue
+            if observed_at > target:
+                continue
+            candidates.append((observed_at, record.page_id, response))
+        if not candidates:
+            return None
+        return deepcopy(max(candidates, key=lambda item: (item[0], item[1]))[2])
+
 
 _SELECT_PAGE = """
 SELECT
@@ -151,3 +178,80 @@ def _record_from_row(row: tuple[Any, ...]) -> MarketDataPageRecord:
         payload=json.loads(str(row[9]), parse_float=Decimal),
         payload_digest=str(row[10]),
     )
+
+
+def _response_from_page(record: MarketDataPageRecord) -> dict[str, Any]:
+    page = record.payload.get("market_data_response_page")
+    if not isinstance(page, dict):
+        raise PostgresPersistenceError("market data page payload is not a MARKET_DATA_REQUEST response page")
+    response = {
+        "market_data_response": {
+            "contract_version": page["contract_version"],
+            "request_id": page["request_id"],
+            "response_id": page["response_id"],
+            "symbol": page["symbol"],
+            "snapshot_started_at": page["snapshot_started_at"],
+            "snapshot_completed_at": page["snapshot_completed_at"],
+            "as_of": page["as_of"],
+            "source": page["source"],
+            "selection_results": [page["selection_result"]],
+        }
+    }
+    try:
+        return parse_contract("MARKET_DATA_REQUEST", response, definition="MARKET_DATA_REQUEST.response").to_payload()
+    except ContractError as exc:
+        raise PostgresPersistenceError(str(exc)) from exc
+
+
+def _eligible_last_traded_price_observed_at(*, record: MarketDataPageRecord, result: dict[str, Any]) -> datetime | None:
+    selection = result.get("selection")
+    payload = result.get("payload")
+    coverage = result.get("coverage")
+    if not isinstance(selection, dict) or not isinstance(payload, dict) or not isinstance(coverage, dict):
+        return None
+    if selection.get("dataset") != "LAST_TRADED_PRICE" or selection.get("mode") != "AS_OF":
+        return None
+    if not record.selection_digest or not record.source_snapshot_id or not result.get("page_id"):
+        return None
+    if not _complete_final_coverage(coverage):
+        return None
+    last_traded_price = payload.get("LAST_TRADED_PRICE")
+    if not isinstance(last_traded_price, dict) or last_traded_price.get("status") != "AVAILABLE":
+        return None
+    source_endpoint = last_traded_price.get("source_endpoint")
+    if not isinstance(source_endpoint, str) or not source_endpoint:
+        return None
+    data = last_traded_price.get("data")
+    if not isinstance(data, dict):
+        return None
+    if not all(isinstance(data.get(field), str) and data.get(field) for field in ("price", "observed_at", "source_record_id", "venue", "instrument_symbol")):
+        return None
+    try:
+        observed_at = _timestamp(data.get("observed_at"))
+        if _timestamp(last_traded_price.get("as_of")) < observed_at:
+            return None
+    except (TypeError, ValueError):
+        return None
+    return observed_at
+
+
+def _complete_final_coverage(coverage: dict[str, Any]) -> bool:
+    return (
+        coverage.get("coverage_complete") is True
+        and coverage.get("pagination_complete") is True
+        and coverage.get("source_finality_confirmed") is True
+        and coverage.get("next_cursor") is None
+        and not coverage.get("missing_ranges")
+    )
+
+
+def _timestamp(value: Any) -> datetime:
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str):
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    else:
+        raise TypeError("timestamp value must be datetime or ISO string")
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
