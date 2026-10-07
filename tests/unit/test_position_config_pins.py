@@ -33,7 +33,7 @@ def test_position_config_pin_binds_market_handoff_to_rules_version():
     assert pin.configuration_id == rules.rules_version_id
     assert pin.configuration_version == "v1"
     assert pin.configuration_content_digest == position_rules_content_digest(rules)
-    assert position_config_pin_digest(pin) == "720ffe67876c7f081d1be443adf0fa71b5283e49e85531c761c6b21c2b614550"
+    assert position_config_pin_digest(pin) == "78ba9d9ebf23df86c86b8aeb3f1fc80910ead9ea1c9b618fa3d61c425f021949"
 
 
 def test_position_config_pin_uses_canonical_content_not_current_pointer():

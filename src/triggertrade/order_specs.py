@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from triggertrade.canonical_json import canonical_json_digest
-from triggertrade.contracts import ContractError, TargetContract, parse_contract
+from triggertrade.contracts import ContractError, ContractType, TargetContract, parse_contract
 
 
 class OrderSpecError(ValueError):
@@ -74,7 +74,21 @@ def validate_order_spec(*, order_spec: Mapping[str, Any]) -> TargetContract:
     try:
         return parse_contract("ORDER_SPEC", order_spec)
     except ContractError as exc:
-        raise OrderSpecError(str(exc)) from exc
+        try:
+            from triggertrade.research_v2_execution import (
+                ORDER_SPEC_V2_CONTRACT_VERSION,
+                validate_research_v2_order_spec,
+            )
+
+            validated = validate_research_v2_order_spec(order_spec)
+        except Exception:
+            raise OrderSpecError(str(exc)) from exc
+        return TargetContract(
+            contract_type=ContractType.ORDER_SPEC,
+            version=ORDER_SPEC_V2_CONTRACT_VERSION,
+            definition="ORDER_SPEC.v6",
+            payload=validated,
+        )
 
 
 def validate_order_spec_for_construction(

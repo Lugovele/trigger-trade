@@ -1,0 +1,89 @@
+{
+  "artifact_type": "RESEARCH_V2_IMPLEMENTATION_MAP",
+  "program_id": "RESEARCH_V2",
+  "status": "COMPLETE_FOR_J0_J7",
+  "source_package": "docs/research-v2/",
+  "economic_runs": "NOT_STARTED",
+  "mappings": [
+    {
+      "ambiguity_id": "AMB-001",
+      "v2_concept": "RET5/RET15 signal kernel",
+      "source_spec_field": "V2-03 RET5_RET15_FREQUENCY / common_profile.features.return_windows_minutes",
+      "backend_native_contract": "triggertrade.research_v2.ret5_ret15_or_signal with explicit V2 signal version V2-SIGNAL-RET5-RET15-OR-V1",
+      "implementation_location": "src/triggertrade/research_v2.py",
+      "status": "RESOLVED_FOR_J0_J7",
+      "semantic_fit": "EXACT_NEW_REPOSITORY_NATIVE_CONTRACT",
+      "notes": "Implemented as a separate V2 signal primitive, not an alias of F-001. Thresholds are percentage-points and episode reset is explicit."
+    },
+    {
+      "ambiguity_id": "AMB-002",
+      "v2_concept": "G0/G1 stop families",
+      "source_spec_field": "common_profile.stop_G0 and common_profile.stop_G1",
+      "backend_native_contract": "triggertrade.research_v2.v2_stop_g0 and triggertrade.research_v2.v2_stop_g1",
+      "implementation_location": "src/triggertrade/research_v2.py",
+      "status": "RESOLVED_FOR_J0_J7",
+      "semantic_fit": "EXACT_NEW_REPOSITORY_NATIVE_CONTRACT",
+      "notes": "G0 preserves structural too-far rejection and too-close widening. G1 is ATR-only with price-fraction clamp. Existing trading rules are not modified."
+    },
+    {
+      "ambiguity_id": "AMB-003",
+      "v2_concept": "TTL lifecycle field",
+      "source_spec_field": "common_profile.entry.TTL_minutes",
+      "backend_native_contract": "ResearchV2JobConfig.runtime_profile.entry.ttl_minutes; later lifecycle execution must map it into canonical BACKTEST order expiry/cancel semantics",
+      "implementation_location": "src/triggertrade/research_v2.py",
+      "status": "RESOLVED_FOR_J0_J7_CONFIGURATION",
+      "semantic_fit": "EXACT_CONFIG_CONTRACT_FOR_EXECUTION_WIRING",
+      "notes": "J1 differs from J0 only by ttl_minutes=15 and time_in_force marker. No lifecycle execution was launched in this task."
+    },
+    {
+      "ambiguity_id": "AMB-004",
+      "v2_concept": "Historical mark-price source",
+      "source_spec_field": "common_profile.end_window and costs/leverage readiness notes",
+      "backend_native_contract": "research_v2_data_requirements marks historical_mark_facts_when_required as DATA_INVALID if missing",
+      "implementation_location": "src/triggertrade/research_v2.py",
+      "status": "RESOLVED_FOR_J0_J7_REQUIREMENT_CHECKS",
+      "semantic_fit": "EXPLICIT_DATA_REQUIREMENT",
+      "notes": "No mark-price downloader or 7D execution was introduced. The output/data contract fails closed via DATA_INVALID when a later run needs mark facts."
+    },
+    {
+      "ambiguity_id": "AMB-005",
+      "v2_concept": "Historical funding source adapter path",
+      "source_spec_field": "common_profile.costs.funding",
+      "backend_native_contract": "existing Research BACKTEST funding facts path in triggertrade.services.research_backtest_execution plus research_v2_data_requirements historical_funding_facts requirement",
+      "implementation_location": "src/triggertrade/services/research_backtest_execution.py and src/triggertrade/research_v2.py",
+      "status": "RESOLVED_FOR_J0_J7_REQUIREMENT_CHECKS",
+      "semantic_fit": "EXACT_REUSE_OF_EXISTING_PREFLIGHT_CONTRACT",
+      "notes": "V2 does not zero-fill funding. Later J0-J7 execution must supply factual funding facts or emit DATA_INVALID/CENSORED according to the existing preflight path."
+    },
+    {
+      "ambiguity_id": "AMB-006",
+      "v2_concept": "Daily-loss native representation",
+      "source_spec_field": "common_profile.capital_risk.daily_loss_basis and daily_loss_fraction_max",
+      "backend_native_contract": "existing portfolio grant daily-loss availability fields; V2 config carries daily_loss_fraction_max and missing != realized breach semantics",
+      "implementation_location": "src/triggertrade/portfolio_grants.py and src/triggertrade/research_v2.py",
+      "status": "RESOLVED_FOR_J0_J7_REQUIREMENT_CHECKS",
+      "semantic_fit": "EXACT_REUSE_OF_EXISTING_PREFLIGHT_CONTRACT",
+      "notes": "The V2 layer does not invent daily PnL calculation. Missing daily-loss data remains an explicit unavailable state under existing preflight semantics."
+    },
+    {
+      "ambiguity_id": "AMB-007",
+      "v2_concept": "Risk-based sizing",
+      "source_spec_field": "common_profile.capital_risk.sizing_formula",
+      "backend_native_contract": "triggertrade.research_v2.v2_risk_based_sizing",
+      "implementation_location": "src/triggertrade/research_v2.py",
+      "status": "RESOLVED_FOR_J0_J7",
+      "semantic_fit": "EXACT_NEW_REPOSITORY_NATIVE_CONTRACT",
+      "notes": "The sizing formula uses min across nominal margin, per-trade risk, free margin, coin cap, gross exposure, and portfolio stop-risk. It does not perform hidden tranche-slot division."
+    },
+    {
+      "ambiguity_id": "AMB-008",
+      "v2_concept": "Numeric config equivalence",
+      "source_spec_field": "manifest known_ambiguities and job specs",
+      "backend_native_contract": "ResearchV2JobConfig.normalized_config and config_fingerprint",
+      "implementation_location": "src/triggertrade/research_v2.py",
+      "status": "RESOLVED_FOR_J0_J7",
+      "semantic_fit": "EXACT_FINGERPRINT_CONTRACT",
+      "notes": "Operational fingerprints include job identity, signal family, stop family, entry, sizing, costs, units, window, symbols, leverage, and margin. J0/J1 and J4/J7 produce different fingerprints."
+    }
+  ]
+}

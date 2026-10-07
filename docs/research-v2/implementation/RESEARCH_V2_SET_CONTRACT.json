@@ -1,0 +1,32 @@
+{
+  "status": "IMPLEMENTED_FOR_J0_J7_BRIDGE",
+  "canonical_set_interface": "existing_generic_set_engine",
+  "v2_resolution_type": "triggertrade.research_v2.ResearchV2SetResolution",
+  "handoff_producer": "triggertrade.research_v2_handoff.produce_research_v2_market_handoff",
+  "synthetic_v1_set_required": false,
+  "identity_derivation": {
+    "included": [
+      "signal_family",
+      "signal_version",
+      "symbol",
+      "physical_symbol",
+      "observed_at",
+      "signal_status",
+      "signal_direction",
+      "signal_reason",
+      "source_feature_evidence",
+      "signal_config_fingerprint"
+    ],
+    "excluded": [
+      "entry_profile",
+      "stop_family",
+      "take_profit_profile",
+      "sizing_profile",
+      "portfolio_constraints",
+      "job_id"
+    ]
+  },
+  "common_downstream_boundary": "MARKET_HANDOFF",
+  "j4_j7_set_identity": "same_for_identical_signal_facts",
+  "position_portfolio_order_lifecycle": "unchanged"
+}

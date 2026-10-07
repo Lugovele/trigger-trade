@@ -1,0 +1,319 @@
+{
+  "artifact_type": "RESEARCH_V2_SOURCE_FILE_MAP",
+  "generated_artifacts": {
+    "docs/research-v2/RESEARCH_V2_COMMON_PROFILE.json": [
+      "common_profile.json"
+    ],
+    "docs/research-v2/RESEARCH_V2_COMMON_PROFILE.md": [
+      "common_profile.json"
+    ],
+    "docs/research-v2/RESEARCH_V2_ECONOMIC_OBJECTIVE.json": [
+      "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+      "TriggerTrade_Research_V2_Target_Model.xlsx"
+    ],
+    "docs/research-v2/RESEARCH_V2_ECONOMIC_OBJECTIVE.md": [
+      "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+      "TriggerTrade_Research_V2_Target_Model.xlsx"
+    ],
+    "docs/research-v2/RESEARCH_V2_MANIFEST.json": [
+      "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+      "common_profile.json",
+      "candidates_12.json",
+      "TriggerTrade_Research_V2_Target_Model.xlsx",
+      "checks.json",
+      "witnesses.json",
+      "utilization.json",
+      "arms_metrics.csv",
+      "unique_closed.csv"
+    ],
+    "docs/research-v2/hypotheses/V2-01_ENTRY_TTL.json": [
+      "candidates_12.json",
+      "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+      "TriggerTrade_Research_V2_Target_Model.xlsx"
+    ],
+    "docs/research-v2/hypotheses/V2-01_ENTRY_TTL.md": [
+      "candidates_12.json",
+      "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+      "TriggerTrade_Research_V2_Target_Model.xlsx"
+    ],
+    "docs/research-v2/hypotheses/V2-02_STOP_GEOMETRY.json": [
+      "candidates_12.json",
+      "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+      "TriggerTrade_Research_V2_Target_Model.xlsx"
+    ],
+    "docs/research-v2/hypotheses/V2-02_STOP_GEOMETRY.md": [
+      "candidates_12.json",
+      "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+      "TriggerTrade_Research_V2_Target_Model.xlsx"
+    ],
+    "docs/research-v2/hypotheses/V2-03_RET5_RET15_FREQUENCY.json": [
+      "candidates_12.json",
+      "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+      "TriggerTrade_Research_V2_Target_Model.xlsx"
+    ],
+    "docs/research-v2/hypotheses/V2-03_RET5_RET15_FREQUENCY.md": [
+      "candidates_12.json",
+      "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+      "TriggerTrade_Research_V2_Target_Model.xlsx"
+    ],
+    "docs/research-v2/hypotheses/V2-04_MOMENTUM_CONTINUATION.json": [
+      "candidates_12.json",
+      "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+      "TriggerTrade_Research_V2_Target_Model.xlsx"
+    ],
+    "docs/research-v2/hypotheses/V2-04_MOMENTUM_CONTINUATION.md": [
+      "candidates_12.json",
+      "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+      "TriggerTrade_Research_V2_Target_Model.xlsx"
+    ],
+    "docs/research-v2/hypotheses/V2-05_COMPRESSION_BREAKOUT.json": [
+      "candidates_12.json",
+      "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+      "TriggerTrade_Research_V2_Target_Model.xlsx"
+    ],
+    "docs/research-v2/hypotheses/V2-05_COMPRESSION_BREAKOUT.md": [
+      "candidates_12.json",
+      "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+      "TriggerTrade_Research_V2_Target_Model.xlsx"
+    ],
+    "docs/research-v2/hypotheses/V2-06_EXHAUSTION_REVERSAL.json": [
+      "candidates_12.json",
+      "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+      "TriggerTrade_Research_V2_Target_Model.xlsx"
+    ],
+    "docs/research-v2/hypotheses/V2-06_EXHAUSTION_REVERSAL.md": [
+      "candidates_12.json",
+      "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+      "TriggerTrade_Research_V2_Target_Model.xlsx"
+    ],
+    "docs/research-v2/hypotheses/V2-07_TAKE_PROFIT.json": [
+      "candidates_12.json",
+      "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+      "TriggerTrade_Research_V2_Target_Model.xlsx"
+    ],
+    "docs/research-v2/hypotheses/V2-07_TAKE_PROFIT.md": [
+      "candidates_12.json",
+      "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+      "TriggerTrade_Research_V2_Target_Model.xlsx"
+    ],
+    "docs/research-v2/hypotheses/V2-08_RISK_BASED_SIZING.json": [
+      "candidates_12.json",
+      "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+      "TriggerTrade_Research_V2_Target_Model.xlsx"
+    ],
+    "docs/research-v2/hypotheses/V2-08_RISK_BASED_SIZING.md": [
+      "candidates_12.json",
+      "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+      "TriggerTrade_Research_V2_Target_Model.xlsx"
+    ],
+    "docs/research-v2/hypotheses/V2-09_UNIVERSE_EXPANSION.json": [
+      "candidates_12.json",
+      "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+      "TriggerTrade_Research_V2_Target_Model.xlsx"
+    ],
+    "docs/research-v2/hypotheses/V2-09_UNIVERSE_EXPANSION.md": [
+      "candidates_12.json",
+      "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+      "TriggerTrade_Research_V2_Target_Model.xlsx"
+    ],
+    "docs/research-v2/hypotheses/V2-10_BTC_CONTEXT.json": [
+      "candidates_12.json",
+      "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+      "TriggerTrade_Research_V2_Target_Model.xlsx"
+    ],
+    "docs/research-v2/hypotheses/V2-10_BTC_CONTEXT.md": [
+      "candidates_12.json",
+      "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+      "TriggerTrade_Research_V2_Target_Model.xlsx"
+    ],
+    "docs/research-v2/hypotheses/V2-11_LEVERAGE.json": [
+      "candidates_12.json",
+      "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+      "TriggerTrade_Research_V2_Target_Model.xlsx"
+    ],
+    "docs/research-v2/hypotheses/V2-11_LEVERAGE.md": [
+      "candidates_12.json",
+      "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+      "TriggerTrade_Research_V2_Target_Model.xlsx"
+    ],
+    "docs/research-v2/hypotheses/V2-12_PORTFOLIO_CONCURRENCY.json": [
+      "candidates_12.json",
+      "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+      "TriggerTrade_Research_V2_Target_Model.xlsx"
+    ],
+    "docs/research-v2/hypotheses/V2-12_PORTFOLIO_CONCURRENCY.md": [
+      "candidates_12.json",
+      "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+      "TriggerTrade_Research_V2_Target_Model.xlsx"
+    ],
+    "docs/research-v2/jobs/INITIAL_7D_JOBS.json": [
+      "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+      "TriggerTrade_Research_V2_Target_Model.xlsx",
+      "common_profile.json"
+    ],
+    "docs/research-v2/jobs/J0_LEGACY_CONTROL.json": [
+      "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+      "TriggerTrade_Research_V2_Target_Model.xlsx",
+      "common_profile.json"
+    ],
+    "docs/research-v2/jobs/J0_LEGACY_CONTROL.md": [
+      "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+      "TriggerTrade_Research_V2_Target_Model.xlsx",
+      "common_profile.json"
+    ],
+    "docs/research-v2/jobs/J1_TTL_CONTROL.json": [
+      "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+      "TriggerTrade_Research_V2_Target_Model.xlsx",
+      "common_profile.json"
+    ],
+    "docs/research-v2/jobs/J1_TTL_CONTROL.md": [
+      "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+      "TriggerTrade_Research_V2_Target_Model.xlsx",
+      "common_profile.json"
+    ],
+    "docs/research-v2/jobs/J2_LEGACY_PLUS_G0.json": [
+      "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+      "TriggerTrade_Research_V2_Target_Model.xlsx",
+      "common_profile.json"
+    ],
+    "docs/research-v2/jobs/J2_LEGACY_PLUS_G0.md": [
+      "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+      "TriggerTrade_Research_V2_Target_Model.xlsx",
+      "common_profile.json"
+    ],
+    "docs/research-v2/jobs/J3_RET_OR_G0.json": [
+      "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+      "TriggerTrade_Research_V2_Target_Model.xlsx",
+      "common_profile.json"
+    ],
+    "docs/research-v2/jobs/J3_RET_OR_G0.md": [
+      "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+      "TriggerTrade_Research_V2_Target_Model.xlsx",
+      "common_profile.json"
+    ],
+    "docs/research-v2/jobs/J4_CONTINUATION_G0.json": [
+      "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+      "TriggerTrade_Research_V2_Target_Model.xlsx",
+      "common_profile.json"
+    ],
+    "docs/research-v2/jobs/J4_CONTINUATION_G0.md": [
+      "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+      "TriggerTrade_Research_V2_Target_Model.xlsx",
+      "common_profile.json"
+    ],
+    "docs/research-v2/jobs/J5_COMPRESSION_G0.json": [
+      "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+      "TriggerTrade_Research_V2_Target_Model.xlsx",
+      "common_profile.json"
+    ],
+    "docs/research-v2/jobs/J5_COMPRESSION_G0.md": [
+      "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+      "TriggerTrade_Research_V2_Target_Model.xlsx",
+      "common_profile.json"
+    ],
+    "docs/research-v2/jobs/J6_REVERSAL_G0.json": [
+      "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+      "TriggerTrade_Research_V2_Target_Model.xlsx",
+      "common_profile.json"
+    ],
+    "docs/research-v2/jobs/J6_REVERSAL_G0.md": [
+      "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+      "TriggerTrade_Research_V2_Target_Model.xlsx",
+      "common_profile.json"
+    ],
+    "docs/research-v2/jobs/J7_CONTINUATION_G1.json": [
+      "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+      "TriggerTrade_Research_V2_Target_Model.xlsx",
+      "common_profile.json"
+    ],
+    "docs/research-v2/jobs/J7_CONTINUATION_G1.md": [
+      "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+      "TriggerTrade_Research_V2_Target_Model.xlsx",
+      "common_profile.json"
+    ],
+    "docs/research-v2/provenance/PRE_FLIGHT_CORRECTIONS.md": [
+      "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+      "checks.json",
+      "witnesses.json",
+      "utilization.json",
+      "arms_metrics.csv",
+      "unique_closed.csv"
+    ],
+    "docs/research-v2/provenance/SOURCE_AMBIGUITIES.md": [
+      "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+      "checks.json",
+      "witnesses.json",
+      "utilization.json",
+      "arms_metrics.csv",
+      "unique_closed.csv"
+    ],
+    "docs/research-v2/provenance/V1_TO_V2_EVIDENCE.md": [
+      "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+      "checks.json",
+      "witnesses.json",
+      "utilization.json",
+      "arms_metrics.csv",
+      "unique_closed.csv"
+    ],
+    "docs/research-v2/screening/RESEARCH_V2_7D_SCREENING_SPEC.md": [
+      "common_profile.json",
+      "TriggerTrade_Research_V2_Economic_Redesign_RU.md"
+    ],
+    "docs/research-v2/screening/RESEARCH_V2_SCREENING_GATES.json": [
+      "common_profile.json",
+      "TriggerTrade_Research_V2_Economic_Redesign_RU.md"
+    ],
+    "docs/research-v2/screening/RESEARCH_V2_SCREENING_METRICS.md": [
+      "common_profile.json",
+      "TriggerTrade_Research_V2_Economic_Redesign_RU.md"
+    ]
+  },
+  "source_files": [
+    {
+      "bytes": 73479,
+      "file": "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+      "sha256": "4c85f4804d240171d80c31a2c05f74c77c5ee7d109c53cc5d48ecb682b50d83d"
+    },
+    {
+      "bytes": 6658,
+      "file": "common_profile.json",
+      "sha256": "a42dab3b1a81fdb9d92b7614cbec0480382cdc4f3509719517a66f991e8b80c3"
+    },
+    {
+      "bytes": 32059,
+      "file": "candidates_12.json",
+      "sha256": "5bf9bb5ce4ba99345cfabadbe867d960c94f90b77e101105ae7b8bd10bb1992c"
+    },
+    {
+      "bytes": 101035,
+      "file": "TriggerTrade_Research_V2_Target_Model.xlsx",
+      "sha256": "9e7c25f8c0750b034e330aedeb03b5f7035f36afbf3ba45026efd397a5b00554"
+    },
+    {
+      "bytes": 239,
+      "file": "checks.json",
+      "sha256": "b00bf3ac27224266ba4718988e392c3b7b1a789dd7e48612dcab4d4cea448980"
+    },
+    {
+      "bytes": 316798,
+      "file": "witnesses.json",
+      "sha256": "f2ca33aec1cf89980f841ff9ff3da1b63594f1883c70d647c092b078fe51a72c"
+    },
+    {
+      "bytes": 750,
+      "file": "utilization.json",
+      "sha256": "34b28c00fe378d1a5cb7a9bf92bf2389838410272d9506c7531f58a3e10bd1a4"
+    },
+    {
+      "bytes": 9717,
+      "file": "arms_metrics.csv",
+      "sha256": "5a193871a4ad349b7f12fbb83bb154af23bd68b6f4d0877e097e70a127e45321"
+    },
+    {
+      "bytes": 5410,
+      "file": "unique_closed.csv",
+      "sha256": "c9fdefe1d75b7889cfe0473fab9364b9928a471ec352141fad9c21abce8a3c5a"
+    }
+  ],
+  "status": "SPECIFIED_NOT_IMPLEMENTED"
+}

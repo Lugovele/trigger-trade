@@ -1,0 +1,77 @@
+{
+  "status": "IMPLEMENTED_FOR_J0_J7_BRIDGE",
+  "profile_type": "triggertrade.research_v2.ResearchV2ExecutionProfile",
+  "jobs": {
+    "J0": {
+      "set": "legacy SET-R-003-V2",
+      "execution": "legacy POS001/PR201 GTC tranche"
+    },
+    "J1": {
+      "set": "legacy SET-R-003-V2",
+      "execution": "J0 plus 15m TTL"
+    },
+    "J2": {
+      "set": "legacy SET-R-003-V2",
+      "execution": "V2 common profile, G0 stop"
+    },
+    "J3": {
+      "set": "RET5_OR_RET15",
+      "execution": "V2 common profile, G0 stop"
+    },
+    "J4": {
+      "set": "MOMENTUM_CONTINUATION",
+      "execution": "V2 common profile, G0 stop"
+    },
+    "J5": {
+      "set": "COMPRESSION_BREAKOUT",
+      "execution": "V2 common profile, G0 stop"
+    },
+    "J6": {
+      "set": "EXHAUSTION_REVERSAL",
+      "execution": "V2 common profile, G0 stop"
+    },
+    "J7": {
+      "set": "MOMENTUM_CONTINUATION",
+      "execution": "V2 common profile, G1 stop"
+    }
+  },
+  "separation": {
+    "set_layer": [
+      "signal family",
+      "signal thresholds",
+      "direction",
+      "source feature evidence",
+      "decision_cycle_id",
+      "set_result_id"
+    ],
+    "execution_layer": [
+      "entry profile",
+      "TTL",
+      "stop family",
+      "take profit",
+      "sizing",
+      "portfolio constraints",
+      "cost assumptions"
+    ]
+  },
+  "synthetic_v1_set_required": false,
+  "canonical_execution_extension": {
+    "design_document": "docs/research-v2/implementation/RESEARCH_V2_CANONICAL_EXECUTION_EXTENSION.md",
+    "machine_document": "docs/research-v2/implementation/RESEARCH_V2_CANONICAL_EXECUTION_EXTENSION.json",
+    "legacy_order_spec_version": 5,
+    "research_v2_order_spec_version": 6,
+    "db_migration_required": false,
+    "implemented_contract_fields": [
+      "entry.validity",
+      "entry.no_chase_no_reprice_no_market_fallback",
+      "stop_loss.HYBRID_STRUCTURAL",
+      "stop_loss.ATR_ONLY",
+      "take_profit.R_MULTIPLE_2R",
+      "economics.net_tp_floor_result",
+      "economics.actual_order_notional",
+      "economics.actual_committed_margin",
+      "economics.actual_stop_risk",
+      "provenance.research_v2_execution_profile_fingerprint"
+    ]
+  }
+}

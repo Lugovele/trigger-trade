@@ -1,0 +1,40 @@
+{
+  "current_behavior": "Отбор Set меняет исходы, но выборка слишком мала для оценки качества.",
+  "dependencies": [
+    "V2-03"
+  ],
+  "economic_mechanism": "Убирать импульсы против локального движения и без повышенного оборота.",
+  "expected_effect_on_capital_utilization": "Меньше слабых заявок, но риск простоя.",
+  "expected_effect_on_expectancy": "Гипотеза повышения, не факт.",
+  "expected_effect_on_frequency": "Ниже J3; сокращение допустимо только с достаточным ростом expectancy.",
+  "expected_effect_on_risk": "Корреляция с рыночным трендом; whipsaw.",
+  "fail_7d": "PF растёт, но turnover падает так, что даже допустимый scaling не достигает цели.",
+  "family": "B SIGNAL QUALITY; J TREND",
+  "hypothesis": "Продолжение импульса с трендом и относительным объёмом даёт более высокий net edge.",
+  "inherits": "common_profile.json unless explicitly overridden",
+  "parameter_values": {
+    "BTC_filter_initial": false,
+    "RVOL5_min_initial": 1.2,
+    "RVOL_grid": [
+      1.0,
+      1.2,
+      1.5
+    ],
+    "base_signal": "V2-03 initial",
+    "trend_long": "EMA20(15m)>EMA50(15m) and return15>0",
+    "trend_short": "EMA20(15m)<EMA50(15m) and return15<0"
+  },
+  "pass_7d": "Общий target gate после risk-constrained sizing; достаточное число новых filled episodes.",
+  "priority": "MUST TEST FIRST",
+  "proposed_change": "V2-03 плюс trend/RVOL, без BTC veto в первом запуске.",
+  "research_id": "V2-04",
+  "source_provenance": [
+    "candidates_12.json",
+    "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+    "TriggerTrade_Research_V2_Target_Model.xlsx:Candidates"
+  ],
+  "source_status": "PROPOSED_NOT_RUN; effects directional hypotheses, not estimated outcomes",
+  "status": "SPECIFIED_NOT_IMPLEMENTED",
+  "target_feasibility_requirement": "При фактическом notional 750 USDT: 10–14 fills/7D и необходимая net expectancy 0.6222%–0.4444% notional для +46.67 USDT; +70 требует 0.9333%–0.6667%. При меньшем notional пересчитать. Это требования, не ожидаемые доходности.",
+  "test_7d": "J4 против J3 на том же G0; J7 отдельно меняет только stop family."
+}

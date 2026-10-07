@@ -1,0 +1,41 @@
+{
+  "current_behavior": "Одна базовая заявка ждёт fill ~110 часов; одна не заполнена.",
+  "dependencies": [],
+  "economic_mechanism": "Проверить вероятность своевременного fill и оборачиваемость вместо пятидневного GTC.",
+  "expected_effect_on_capital_utilization": "Pending capital-time должен уменьшиться; нельзя подменить его filled exposure.",
+  "expected_effect_on_expectancy": "Проверяется, исчезает ли поздний adverse selection; не гарантируется улучшение.",
+  "expected_effect_on_frequency": "Fill может вырасти от близости и упасть от TTL; знак не установлен.",
+  "expected_effect_on_risk": "Более близкий вход может увеличить неблагоприятные fills.",
+  "fail_7d": "Ни одна допустимая TTL не даёт timely fills/положительный net edge; не удлинять TTL ради старого winner.",
+  "family": "C ENTRY; execution validity",
+  "hypothesis": "Близкий пассивный вход и короткая валидность устраняют запоздалые сделки и резервы без edge.",
+  "inherits": "common_profile.json unless explicitly overridden",
+  "parameter_values": {
+    "TTL_grid_minutes": [
+      5,
+      15,
+      30
+    ],
+    "TTL_minutes_initial": 15,
+    "entry_grid_ATR15": [
+      0.05,
+      0.1,
+      0.25
+    ],
+    "entry_pullback_ATR15_initial": 0.1,
+    "no_reprice": true
+  },
+  "pass_7d": "TTL исполняется, возврат капитала терминален, механизм экономически пригоден только в кандидате, проходящем общий gate.",
+  "priority": "MUST TEST FIRST",
+  "proposed_change": "Отдельный TTL-only control, затем entry scaffold. Жизнь уже открытой позиции не ограничивается TTL заявки.",
+  "research_id": "V2-01",
+  "source_provenance": [
+    "candidates_12.json",
+    "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+    "TriggerTrade_Research_V2_Target_Model.xlsx:Candidates"
+  ],
+  "source_status": "PROPOSED_NOT_RUN; effects directional hypotheses, not estimated outcomes",
+  "status": "SPECIFIED_NOT_IMPLEMENTED",
+  "target_feasibility_requirement": "При фактическом notional 750 USDT: 10–14 fills/7D и необходимая net expectancy 0.6222%–0.4444% notional для +46.67 USDT; +70 требует 0.9333%–0.6667%. При меньшем notional пересчитать. Это требования, не ожидаемые доходности.",
+  "test_7d": "J1: legacy Set/POS/50 USDT, только TTL 15m против J0; J2: legacy Set + полный G0. J2 — bundle, не оценка одной причины."
+}

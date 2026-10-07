@@ -1,0 +1,51 @@
+{
+  "current_behavior": "В архиве 32 различных MATCHED за условные 30D; полнота потока неизвестна.",
+  "dependencies": [],
+  "economic_mechanism": "Увеличить поток свежих импульсов без механического размножения Set versions.",
+  "expected_effect_on_capital_utilization": "Больше turnover лишь при реальных fills.",
+  "expected_effect_on_expectancy": "Ослабление может ухудшить expectancy; это cheap failure test.",
+  "expected_effect_on_frequency": "Требуется ~60 trades/month path; не предсказывается кратность роста.",
+  "expected_effect_on_risk": "Кластеры коррелированных сигналов и fees.",
+  "fail_7d": "Рост MATCHED без роста profitable fills либо экономика не проходит после 3x и risk caps.",
+  "family": "A SIGNAL FREQUENCY",
+  "hypothesis": "OR двух временных импульсов увеличит число новых событий, а не копий одного импульса.",
+  "inherits": "common_profile.json unless explicitly overridden",
+  "parameter_values": {
+    "cadence_seconds": 60,
+    "coarse_threshold_pairs_pct_points": [
+      [
+        0.2,
+        0.4
+      ],
+      [
+        0.3,
+        0.5
+      ],
+      [
+        0.5,
+        1.0
+      ]
+    ],
+    "first_pair": [
+      0.3,
+      0.5
+    ],
+    "logic": "LONG if r5>=0.30% OR r15>=0.50%; SHORT if r5<=-0.30% OR r15<=-0.50%; simultaneous opposing conditions=>NONE",
+    "reset": "new episode only after both absolute returns below their thresholds for 2 consecutive 1m evaluations",
+    "return15_threshold_pct_points": 0.5,
+    "return5_threshold_pct_points": 0.3
+  },
+  "pass_7d": "Канонический масштабированный replay проходит +46.67 и условие достаточного turnover.",
+  "priority": "MUST TEST FIRST",
+  "proposed_change": "Новые именованные RET5/RET15, не объявлять их тождественными существующим F-001.",
+  "research_id": "V2-03",
+  "source_provenance": [
+    "candidates_12.json",
+    "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+    "TriggerTrade_Research_V2_Target_Model.xlsx:Candidates"
+  ],
+  "source_status": "PROPOSED_NOT_RUN; effects directional hypotheses, not estimated outcomes",
+  "status": "SPECIFIED_NOT_IMPLEMENTED",
+  "target_feasibility_requirement": "При фактическом notional 750 USDT: 10–14 fills/7D и необходимая net expectancy 0.6222%–0.4444% notional для +46.67 USDT; +70 требует 0.9333%–0.6667%. При меньшем notional пересчитать. Это требования, не ожидаемые доходности.",
+  "test_7d": "J3, G0, базовая тройка; затем максимум одна соседняя пара при положительном механизме."
+}

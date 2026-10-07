@@ -1,0 +1,1 @@
+"""TriggerTrade test package."""

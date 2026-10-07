@@ -1,0 +1,72 @@
+{
+  "status": "IMPLEMENTED_FOR_J0_J7_CONTRACT_FIXTURE",
+  "legacy_order_spec_version": 5,
+  "new_order_spec_version": 6,
+  "db_migration_required": false,
+  "path": [
+    "Canonical Set Resolution",
+    "MARKET_HANDOFF",
+    "Position",
+    "Portfolio Grant",
+    "Position Construction",
+    "ORDER_SPEC",
+    "Lifecycle"
+  ],
+  "extension_locations": {
+    "execution_profile": "src/triggertrade/research_v2_execution.py",
+    "order_spec_validation": "src/triggertrade/order_specs.py",
+    "lifecycle_validity": "src/triggertrade/services/research_backtest_execution.py"
+  },
+  "requirements": [
+    {
+      "v2_requirement": "TTL / order validity",
+      "canonical_field": "order_spec.entry.validity",
+      "contract_version": 6,
+      "enforcement_component": "BACKTEST lifecycle entry fill window",
+      "evidence_output_field": "lifecycle.reason_code",
+      "backward_compatibility_rule": "v5 has no validity field and remains GTC"
+    },
+    {
+      "v2_requirement": "risk-based sizing",
+      "canonical_field": "order_spec.economics.actual_order_notional",
+      "contract_version": 6,
+      "enforcement_component": "Research V2 construction bridge",
+      "evidence_output_field": "order_spec.economics",
+      "backward_compatibility_rule": "v5 sizing unchanged"
+    },
+    {
+      "v2_requirement": "pending-inclusive portfolio caps",
+      "canonical_field": "V2PortfolioExposureState.open_pending_count",
+      "contract_version": "v6 bridge",
+      "enforcement_component": "Research V2 portfolio grant",
+      "evidence_output_field": "v2_portfolio_grant.reason_code",
+      "backward_compatibility_rule": "v1 PortfolioGrantPolicy unchanged"
+    },
+    {
+      "v2_requirement": "G0 hybrid structural stop",
+      "canonical_field": "order_spec.stop_loss.mode=HYBRID_STRUCTURAL",
+      "contract_version": 6,
+      "enforcement_component": "Research V2 construction bridge",
+      "evidence_output_field": "order_spec.stop_loss",
+      "backward_compatibility_rule": "v5 stop schema unchanged"
+    },
+    {
+      "v2_requirement": "G1 ATR-only stop",
+      "canonical_field": "order_spec.stop_loss.mode=ATR_ONLY",
+      "contract_version": 6,
+      "enforcement_component": "Research V2 construction bridge",
+      "evidence_output_field": "order_spec.stop_loss",
+      "backward_compatibility_rule": "v5 stop schema unchanged"
+    },
+    {
+      "v2_requirement": "TP 2R and conditional net TP floor",
+      "canonical_field": "order_spec.take_profit and order_spec.economics.net_tp_floor_result",
+      "contract_version": 6,
+      "enforcement_component": "Research V2 construction bridge",
+      "evidence_output_field": "order_spec.economics",
+      "backward_compatibility_rule": "v5 take-profit schema unchanged"
+    }
+  ],
+  "backtests_run": false,
+  "economic_results_produced": false
+}

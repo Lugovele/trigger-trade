@@ -82,6 +82,69 @@ def test_b8b_retains_multiple_blocked_gate_reasons_without_grant():
     assert payload["gate_results"]["global_capital"]["configured"] == "40"
 
 
+def test_b8b_daily_loss_missing_data_is_unavailable_not_limit_reached():
+    evaluation = evaluate_portfolio_grant(
+        grant_decision_id="grant-decision-1",
+        capital_grant_id="capital-grant-1",
+        approved_decision=approved_decision(),
+        portfolio_state=portfolio_state(),
+        policy=policy_for(
+            daily_loss_blocked=True,
+            daily_loss_status="UNAVAILABLE",
+            daily_loss_reason_code="DAILY_LOSS_DATA_UNAVAILABLE",
+            daily_loss_configured_threshold="2.25",
+            daily_loss_calculated=None,
+            daily_loss_availability="DATA_UNAVAILABLE",
+        ),
+        venue_facts=venue_facts(),
+        as_of=NOW,
+    )
+
+    assert evaluation.status is PortfolioGrantStatus.BLOCKED
+    assert evaluation.primary_reason == "DAILY_LOSS_DATA_UNAVAILABLE"
+    assert evaluation.gate_results["daily_loss"] == {
+        "status": "UNAVAILABLE",
+        "reason": "DAILY_LOSS_DATA_UNAVAILABLE",
+        "configured": "2.25",
+        "calculated": None,
+        "availability": "DATA_UNAVAILABLE",
+    }
+
+
+@pytest.mark.parametrize(
+    ("calculated", "status", "blocked", "reason"),
+    (
+        ("0", "PASS", False, "PASS"),
+        ("2.24", "PASS", False, "PASS"),
+        ("2.25", "FAIL", True, "DAILY_LOSS_LIMIT_REACHED"),
+        ("2.26", "FAIL", True, "DAILY_LOSS_LIMIT_REACHED"),
+    ),
+)
+def test_b8b_daily_loss_available_threshold_semantics(calculated, status, blocked, reason):
+    evaluation = evaluate_portfolio_grant(
+        grant_decision_id=f"grant-decision-{calculated}",
+        capital_grant_id=f"capital-grant-{calculated}",
+        approved_decision=approved_decision(),
+        portfolio_state=portfolio_state(),
+        policy=policy_for(
+            daily_loss_blocked=blocked,
+            daily_loss_status=status,
+            daily_loss_reason_code=None if not blocked else reason,
+            daily_loss_configured_threshold="2.25",
+            daily_loss_calculated=calculated,
+            daily_loss_availability="AVAILABLE",
+        ),
+        venue_facts=venue_facts(),
+        as_of=NOW,
+    )
+
+    assert evaluation.gate_results["daily_loss"]["status"] == status
+    assert evaluation.gate_results["daily_loss"]["reason"] == reason
+    assert evaluation.gate_results["daily_loss"]["calculated"] == calculated
+    if blocked:
+        assert evaluation.status is PortfolioGrantStatus.BLOCKED
+
+
 def test_b8b_unavailable_state_is_distinct_from_blocked():
     evaluation = evaluate_portfolio_grant(
         grant_decision_id="grant-decision-1",
@@ -409,6 +472,11 @@ def policy_for(
     max_open_positions: int = 4,
     max_positions_per_coin: int = 2,
     daily_loss_blocked: bool = False,
+    daily_loss_status: str = "PASS",
+    daily_loss_reason_code: str | None = None,
+    daily_loss_configured_threshold: str | None = None,
+    daily_loss_calculated: str | None = None,
+    daily_loss_availability: str = "NOT_CONFIGURED",
 ) -> PortfolioGrantPolicy:
     return PortfolioGrantPolicy(
         minimum_tranche_capital=minimum_tranche_capital,
@@ -417,6 +485,11 @@ def policy_for(
         max_open_positions=max_open_positions,
         max_positions_per_coin=max_positions_per_coin,
         daily_loss_blocked=daily_loss_blocked,
+        daily_loss_status=daily_loss_status,
+        daily_loss_reason_code=daily_loss_reason_code,
+        daily_loss_configured_threshold=daily_loss_configured_threshold,
+        daily_loss_calculated=daily_loss_calculated,
+        daily_loss_availability=daily_loss_availability,
     )
 
 

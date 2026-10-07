@@ -33,6 +33,11 @@ class PortfolioGrantPolicy:
     max_open_positions: int
     max_positions_per_coin: int
     daily_loss_blocked: bool = False
+    daily_loss_status: str = "PASS"
+    daily_loss_reason_code: str | None = None
+    daily_loss_configured_threshold: str | None = None
+    daily_loss_calculated: str | None = None
+    daily_loss_availability: str = "NOT_CONFIGURED"
     accounting_timezone: str = "Asia/Jerusalem"
     day_boundary_local: str = "00:00:00"
     accounting_policy_version: str = "ACCOUNTING_DAY_V1"
@@ -45,6 +50,8 @@ class PortfolioGrantPolicy:
         _nonnegative_int(self.max_positions_per_coin, field="max_positions_per_coin")
         if not isinstance(self.daily_loss_blocked, bool):
             raise PortfolioGrantError("daily_loss_blocked must be boolean")
+        if self.daily_loss_status not in {"PASS", "FAIL", "UNAVAILABLE"}:
+            raise PortfolioGrantError("daily_loss_status must be PASS, FAIL, or UNAVAILABLE")
 
     def relevant_limits_payload(self) -> dict[str, Any]:
         return {
@@ -142,13 +149,21 @@ def evaluate_portfolio_grant(
     if free_coin > 0 and remaining_coin_slots > 0:
         candidate = qcapital_floor(exact_divide(free_coin, remaining_coin_slots)).value
 
+    daily_loss_status = policy.daily_loss_status
+    if policy.daily_loss_blocked and daily_loss_status == "PASS":
+        daily_loss_status = "FAIL"
+    daily_loss_reason = policy.daily_loss_reason_code
+    if daily_loss_reason is None:
+        daily_loss_reason = "DAILY_LOSS_LIMIT_REACHED" if policy.daily_loss_blocked else "PASS"
     _record_gate(
         gate_results,
         reasons,
         gate_id="daily_loss",
-        status="FAIL" if policy.daily_loss_blocked else "PASS",
-        reason="DAILY_LOSS_LIMIT_REACHED",
-        configured=policy.daily_loss_blocked,
+        status=daily_loss_status,
+        reason=daily_loss_reason,
+        configured=policy.daily_loss_configured_threshold,
+        calculated=policy.daily_loss_calculated,
+        availability=policy.daily_loss_availability,
     )
     _record_gate(
         gate_results,
@@ -294,14 +309,24 @@ def _record_gate(
     reason: str,
     configured: Any = None,
     calculated: Any = None,
+    availability: Any = None,
 ) -> None:
-    gate_results[gate_id] = _gate(status, reason if status != "PASS" else "PASS", configured=configured, calculated=calculated)
-    if status == "FAIL":
+    gate_results[gate_id] = _gate(
+        status,
+        reason if status != "PASS" else "PASS",
+        configured=configured,
+        calculated=calculated,
+        availability=availability,
+    )
+    if status in {"FAIL", "UNAVAILABLE"}:
         reasons.append(reason)
 
 
-def _gate(status: str, reason: str, *, configured: Any = None, calculated: Any = None) -> dict[str, Any]:
-    return {"status": status, "reason": reason, "configured": configured, "calculated": calculated}
+def _gate(status: str, reason: str, *, configured: Any = None, calculated: Any = None, availability: Any = None) -> dict[str, Any]:
+    payload = {"status": status, "reason": reason, "configured": configured, "calculated": calculated}
+    if availability is not None:
+        payload["availability"] = availability
+    return payload
 
 
 def _coin_state(state: PortfolioState, symbol: str) -> CoinPortfolioState | None:

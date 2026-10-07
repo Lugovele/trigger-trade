@@ -549,7 +549,7 @@ def test_durable_backtest_worker_applies_shared_portfolio_events_and_enforces_gl
     ]
 
 
-def test_durable_backtest_worker_fails_closed_at_portfolio_lifecycle_boundary_and_preserves_pepe_binding(monkeypatch):
+def test_durable_backtest_worker_fails_closed_without_lifecycle_evidence_and_preserves_pepe_binding(monkeypatch):
     rules = _fixed_research_v1_rule("TRV-R-POS-001-PR-201")
     research = _research_v1_record("R-001")
     record = _backtest_record(research.research_id)
@@ -627,6 +627,7 @@ def test_durable_backtest_worker_fails_closed_at_portfolio_lifecycle_boundary_an
     assert updates[-1]["engine_run_id"] is None
     assert updates[-1]["unavailable_reason"] == RESEARCH_V1_PORTFOLIO_LIFECYCLE_BOUNDARY_REASON
     assert updates[-1]["metrics"]["research_v1"] is True
+    assert all(call["end"] == _plan("BTCUSDT").research_end + timedelta(minutes=1) for call in source.calls)
     pepe_fetches = [call for call in source.calls if call["symbol"] == "1000PEPEUSDT"]
     assert pepe_fetches
     pepe_runner = next(call for call in runner_calls if call["plan_symbol"] == "PEPEUSDT")

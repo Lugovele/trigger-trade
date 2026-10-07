@@ -1,0 +1,64 @@
+{
+  "candidate": "V2-04",
+  "common_profile_references": [
+    "screen_window_utc",
+    "warmup_days",
+    "symbols",
+    "physical_binding",
+    "context_only",
+    "clock",
+    "costs",
+    "end_window",
+    "screen_gates"
+  ],
+  "control_or_variant": "VARIANT",
+  "dependencies": [
+    "V2-04",
+    "V2-03",
+    "V2-01",
+    "V2-02",
+    "V2-07",
+    "V2-08"
+  ],
+  "entry_profile": "Common profile",
+  "expected_metrics": [
+    "actual_net_usdt",
+    "filled_count",
+    "accepted_count",
+    "entry_notional_turnover",
+    "fees",
+    "funding",
+    "MTM_DD",
+    "stress_net",
+    "leave_best_event_out_net",
+    "DATA_INVALID"
+  ],
+  "expected_output_contract": "Full calendar stream replay with isolated arm portfolio, end-window MTM, pending cancellation at boundary, funding facts required, DATA_INVALID not converted to zero PnL.",
+  "job_id": "J4",
+  "leverage": 1,
+  "margin_fraction": 0.25,
+  "pass_fail_source": "common_profile.screen_gates and TriggerTrade_Research_V2_Economic_Redesign_RU.md 7D_SCREENING_PLAN",
+  "purpose": "Momentum continuation quality test",
+  "signal_family": "RET_OR + local trend + RVOL>=1.2",
+  "sizing_profile": "25% nominal margin",
+  "source_provenance": [
+    "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+    "TriggerTrade_Research_V2_Target_Model.xlsx:First_8_Jobs"
+  ],
+  "status": "SPECIFIED_NOT_IMPLEMENTED",
+  "stop_family": "G0",
+  "symbols": [
+    "AVAXUSDT",
+    "SUIUSDT",
+    "PEPEUSDT"
+  ],
+  "warmup": {
+    "warmup_days": 15
+  },
+  "what_differs_from_control": "continuation filters",
+  "what_must_remain_equal": "G0 scaffold, 1x, symbols/window.",
+  "window": {
+    "end_exclusive": "2026-08-26T00:00:00Z",
+    "start_inclusive": "2026-08-19T00:00:00Z"
+  }
+}

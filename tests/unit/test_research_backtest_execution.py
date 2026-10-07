@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from copy import deepcopy
 from types import SimpleNamespace
 
 from triggertrade.backtest import BacktestResult, BacktestStatus, ExactBacktestTriggerSetResolver
 from triggertrade.backtest.data import HistoricalDataError
+from triggertrade.backtest.models import HistoricalCandle
 from triggertrade.backtest.engine import BacktestEngineError
 from triggertrade.instruments import CatalogError, FuturesInstrument
 import pytest
@@ -19,6 +21,7 @@ from triggertrade.services.research_backtest_execution import (
     _backtest_unavailable_reason,
     _load_research_v1_last_traded_price_response,
     _research_v1_approved_position_to_order_spec,
+    _research_v1_position_result,
     _run_research_v1_certified_position_backtest,
 )
 from triggertrade.services.runtime import _research_backtest_instrument
@@ -439,6 +442,7 @@ def test_research_v1_approved_position_flows_through_portfolio_grant_and_constru
             "action": "RESERVE",
             "symbol": "BTCUSDT",
             "actual_committed_capital": evidence["order_spec"]["order_spec"]["economics"]["actual_committed_capital"],
+            "event_time": "2026-09-15T00:00:00+00:00",
             "canonical_source": "order_spec.economics.actual_committed_capital",
             "position_decision_id": evidence["order_spec"]["order_spec"]["position_decision_id"],
             "construction_result_id": evidence["order_spec"]["order_spec"]["construction_result_id"],
@@ -448,6 +452,289 @@ def test_research_v1_approved_position_flows_through_portfolio_grant_and_constru
             ],
         },
     )
+
+
+def test_research_v1_backtest_lifecycle_simulates_resting_fill_tp_final_accounting():
+    rules = _research_v1_position_rules()
+    position = PositionOpportunityHandler().evaluate(command_for(handoff=handoff(), rules=rules))
+    portfolio = ResearchV1SharedPortfolioState(
+        total_capital=Decimal("1000"),
+        max_capital_in_positions_pct=Decimal("0.60"),
+        allocation_by_symbol=RESEARCH_V1_ALLOCATION_BY_SYMBOL,
+        max_open_positions=6,
+        max_positions_per_coin=2,
+    )
+
+    evidence, events = _research_v1_approved_position_to_order_spec(
+        position_state=position.to_state_payload(),
+        rules=rules,
+        instrument=replace(_catalog_instrument("BTCUSDT"), updated_at="2026-08-01T00:00:00+00:00"),
+        portfolio_state=portfolio,
+        as_of="2026-09-15T10:00:00Z",
+        lifecycle_candles=(
+            _candle("2026-09-15T10:00:00+00:00", "102", "103", "99.5", "100"),
+            _candle("2026-09-15T10:01:00+00:00", "100", "111", "100", "110"),
+        ),
+    )
+
+    lifecycle = evidence["backtest_lifecycle"]
+    closed = lifecycle["closed_result"]
+    assert lifecycle["execution_namespace"] == "BACKTEST"
+    assert lifecycle["accepted"] is True
+    assert lifecycle["filled"] is True
+    assert lifecycle["completed"] is True
+    assert lifecycle["reason_code"] == "TAKE_PROFIT"
+    assert closed["gross_pnl"] == "10"
+    assert closed["entry_fee"] == "0.0200"
+    assert closed["exit_fee"] == "0.06050"
+    assert closed["funding"] == "0"
+    assert closed["net_pnl"] == "9.91950"
+    assert events[0]["action"] == "RESERVE"
+    assert events[1]["action"] == "RELEASE"
+    assert events[1]["lifecycle_state"] == "CLOSED"
+
+
+def test_research_v1_position_result_carries_backtest_lifecycle_economics():
+    evidence = {
+        "evidence_digest": "a" * 64,
+        "order_spec_status": "CONSTRUCTED",
+        "backtest_lifecycle": {"completed": True},
+    }
+
+    result = _research_v1_position_result(
+        plan=_backtest_plan(),
+        candles=(_candle("2026-09-15T10:00:00+00:00", "1", "1", "1", "1"),),
+        evidence=evidence,
+        intents=1,
+        trades=1,
+        closed_trades=1,
+        net_pnl=Decimal("9.91950"),
+        fees=Decimal("0.08050"),
+        funding=Decimal("0"),
+    )
+
+    assert result.trades == 1
+    assert result.closed_trades == 1
+    assert result.net_pnl == Decimal("9.91950")
+    assert result.fees == Decimal("0.08050")
+
+
+def test_research_v1_backtest_lifecycle_allows_zero_and_rebate_fee_rates():
+    rules = _research_v1_position_rules()
+    position = PositionOpportunityHandler().evaluate(command_for(handoff=handoff(), rules=rules))
+    evidence, _events = _research_v1_approved_position_to_order_spec(
+        position_state=position.to_state_payload(),
+        rules=replace(
+            rules,
+            draft=replace(rules.draft, maker_fee_rate=Decimal("-0.0001"), taker_fee_rate=Decimal("0")),
+        ),
+        instrument=replace(_catalog_instrument("BTCUSDT"), updated_at="2026-08-01T00:00:00+00:00"),
+        portfolio_state=ResearchV1SharedPortfolioState(
+            total_capital=Decimal("1000"),
+            max_capital_in_positions_pct=Decimal("0.60"),
+            allocation_by_symbol=RESEARCH_V1_ALLOCATION_BY_SYMBOL,
+            max_open_positions=6,
+            max_positions_per_coin=2,
+        ),
+        as_of="2026-09-15T10:00:00Z",
+        lifecycle_candles=(
+            _candle("2026-09-15T10:00:00+00:00", "102", "103", "99.5", "100"),
+            _candle("2026-09-15T10:01:00+00:00", "100", "111", "100", "110"),
+        ),
+    )
+
+    closed = evidence["backtest_lifecycle"]["closed_result"]
+    assert evidence["backtest_lifecycle"]["completed"] is True
+    assert closed["entry_fee"] == "-0.0100"
+    assert closed["exit_fee"] == "0"
+    assert closed["net_pnl"] == "10.0100"
+
+
+def test_research_v1_backtest_lifecycle_rejects_marketable_post_only_order():
+    rules = _research_v1_position_rules()
+    position_state = PositionOpportunityHandler().evaluate(command_for(handoff=handoff(), rules=rules)).to_state_payload()
+    adjusted = deepcopy(position_state)
+    adjusted["position_opportunity_state"]["source_contracts"]["market_handoff"]["market_handoff"]["snapshot"][
+        "set_match_reference_price"
+    ] = "99"
+    evidence, _events = _research_v1_approved_position_to_order_spec(
+        position_state=adjusted,
+        rules=rules,
+        instrument=replace(_catalog_instrument("BTCUSDT"), updated_at="2026-08-01T00:00:00+00:00"),
+        portfolio_state=ResearchV1SharedPortfolioState(
+            total_capital=Decimal("1000"),
+            max_capital_in_positions_pct=Decimal("0.60"),
+            allocation_by_symbol=RESEARCH_V1_ALLOCATION_BY_SYMBOL,
+            max_open_positions=6,
+            max_positions_per_coin=2,
+        ),
+        as_of="2026-09-15T10:00:00Z",
+        lifecycle_candles=(_candle("2026-09-15T10:00:00+00:00", "102", "103", "99", "100"),),
+    )
+
+    assert evidence["backtest_lifecycle"]["status"] == "SIMULATED_REJECTED"
+    assert evidence["backtest_lifecycle"]["reason_code"] == "POST_ONLY_MARKETABLE_AT_SUBMISSION"
+    assert evidence["backtest_lifecycle"]["accepted"] is False
+    assert evidence["backtest_lifecycle"]["completed"] is False
+
+
+def test_research_v1_backtest_lifecycle_censors_unresolved_tp_sl_same_candle():
+    rules = _research_v1_position_rules()
+    position = PositionOpportunityHandler().evaluate(command_for(handoff=handoff(), rules=rules))
+    evidence, events = _research_v1_approved_position_to_order_spec(
+        position_state=position.to_state_payload(),
+        rules=rules,
+        instrument=replace(_catalog_instrument("BTCUSDT"), updated_at="2026-08-01T00:00:00+00:00"),
+        portfolio_state=ResearchV1SharedPortfolioState(
+            total_capital=Decimal("1000"),
+            max_capital_in_positions_pct=Decimal("0.60"),
+            allocation_by_symbol=RESEARCH_V1_ALLOCATION_BY_SYMBOL,
+            max_open_positions=6,
+            max_positions_per_coin=2,
+        ),
+        as_of="2026-09-15T10:00:00Z",
+        lifecycle_candles=(
+            _candle("2026-09-15T10:00:00+00:00", "102", "103", "99", "100"),
+            _candle("2026-09-15T10:01:00+00:00", "100", "111", "94", "100"),
+        ),
+    )
+
+    assert evidence["backtest_lifecycle"]["status"] == "CENSORED"
+    assert evidence["backtest_lifecycle"]["reason_code"] == "ENTRY_PROTECTION_INTRABAR_SEQUENCE_UNRESOLVED"
+    assert evidence["backtest_lifecycle"]["completed"] is False
+    assert tuple(event["action"] for event in events) == ("RESERVE",)
+
+
+def test_research_v1_backtest_lifecycle_censors_funding_boundary_without_source_facts():
+    rules = _research_v1_position_rules()
+    position = PositionOpportunityHandler().evaluate(command_for(handoff=handoff(), rules=rules))
+    evidence, _events = _research_v1_approved_position_to_order_spec(
+        position_state=position.to_state_payload(),
+        rules=rules,
+        instrument=replace(_catalog_instrument("BTCUSDT"), updated_at="2026-08-01T00:00:00+00:00"),
+        portfolio_state=ResearchV1SharedPortfolioState(
+            total_capital=Decimal("1000"),
+            max_capital_in_positions_pct=Decimal("0.60"),
+            allocation_by_symbol=RESEARCH_V1_ALLOCATION_BY_SYMBOL,
+            max_open_positions=6,
+            max_positions_per_coin=2,
+        ),
+        as_of="2026-09-15T07:59:00+00:00",
+        lifecycle_candles=(
+            _candle("2026-09-15T07:59:00+00:00", "102", "103", "99.5", "100"),
+            _candle("2026-09-15T08:00:00+00:00", "100", "111", "100", "110"),
+        ),
+    )
+
+    assert evidence["backtest_lifecycle"]["status"] == "CENSORED"
+    assert evidence["backtest_lifecycle"]["reason_code"] == "FUNDING_BOUNDARY_REQUIRES_HISTORICAL_FUNDING_FACTS"
+    assert evidence["backtest_lifecycle"]["completed"] is False
+
+
+def test_research_v1_backtest_lifecycle_applies_single_funding_boundary_fact():
+    rules = _research_v1_position_rules()
+    position = PositionOpportunityHandler().evaluate(command_for(handoff=handoff(), rules=rules))
+    evidence, _events = _research_v1_approved_position_to_order_spec(
+        position_state=position.to_state_payload(),
+        rules=rules,
+        instrument=replace(_catalog_instrument("BTCUSDT"), updated_at="2026-08-01T00:00:00+00:00"),
+        portfolio_state=ResearchV1SharedPortfolioState(
+            total_capital=Decimal("1000"),
+            max_capital_in_positions_pct=Decimal("0.60"),
+            allocation_by_symbol=RESEARCH_V1_ALLOCATION_BY_SYMBOL,
+            max_open_positions=6,
+            max_positions_per_coin=2,
+        ),
+        as_of="2026-09-15T07:59:00+00:00",
+        lifecycle_candles=(
+            _candle("2026-09-15T07:59:00+00:00", "102", "103", "99.5", "100"),
+            _candle("2026-09-15T08:00:00+00:00", "100", "111", "100", "110"),
+        ),
+        funding_facts=(
+            {
+                "symbol": "BTCUSDT",
+                "funding_time": "2026-09-15T08:00:00+00:00",
+                "funding_rate": "0.001",
+                "funding_basis_notional": "100",
+            },
+        ),
+    )
+
+    closed = evidence["backtest_lifecycle"]["closed_result"]
+    assert evidence["backtest_lifecycle"]["completed"] is True
+    assert closed["funding"] == "-0.100"
+    assert closed["net_pnl"] == "9.81950"
+
+
+def test_research_v1_backtest_lifecycle_applies_multiple_funding_boundary_facts_once_each():
+    rules = _research_v1_position_rules()
+    position = PositionOpportunityHandler().evaluate(command_for(handoff=handoff(), rules=rules))
+    evidence, _events = _research_v1_approved_position_to_order_spec(
+        position_state=position.to_state_payload(),
+        rules=rules,
+        instrument=replace(_catalog_instrument("BTCUSDT"), updated_at="2026-08-01T00:00:00+00:00"),
+        portfolio_state=ResearchV1SharedPortfolioState(
+            total_capital=Decimal("1000"),
+            max_capital_in_positions_pct=Decimal("0.60"),
+            allocation_by_symbol=RESEARCH_V1_ALLOCATION_BY_SYMBOL,
+            max_open_positions=6,
+            max_positions_per_coin=2,
+        ),
+        as_of="2026-09-15T07:59:00+00:00",
+        lifecycle_candles=(
+            _candle("2026-09-15T07:59:00+00:00", "102", "103", "99.5", "100"),
+            _candle("2026-09-15T16:00:00+00:00", "100", "111", "100", "110"),
+        ),
+        funding_facts=(
+            {
+                "symbol": "BTCUSDT",
+                "funding_time": "2026-09-15T08:00:00+00:00",
+                "signed_funding": "-0.10",
+            },
+            {
+                "symbol": "BTCUSDT",
+                "funding_time": "2026-09-15T16:00:00+00:00",
+                "signed_funding": "0.03",
+            },
+        ),
+    )
+
+    closed = evidence["backtest_lifecycle"]["closed_result"]
+    assert evidence["backtest_lifecycle"]["completed"] is True
+    assert closed["funding"] == "-0.07"
+    assert closed["net_pnl"] == "9.84950"
+
+
+def test_research_v1_backtest_lifecycle_censors_when_one_required_funding_fact_missing():
+    rules = _research_v1_position_rules()
+    position = PositionOpportunityHandler().evaluate(command_for(handoff=handoff(), rules=rules))
+    evidence, _events = _research_v1_approved_position_to_order_spec(
+        position_state=position.to_state_payload(),
+        rules=rules,
+        instrument=replace(_catalog_instrument("BTCUSDT"), updated_at="2026-08-01T00:00:00+00:00"),
+        portfolio_state=ResearchV1SharedPortfolioState(
+            total_capital=Decimal("1000"),
+            max_capital_in_positions_pct=Decimal("0.60"),
+            allocation_by_symbol=RESEARCH_V1_ALLOCATION_BY_SYMBOL,
+            max_open_positions=6,
+            max_positions_per_coin=2,
+        ),
+        as_of="2026-09-15T07:59:00+00:00",
+        lifecycle_candles=(
+            _candle("2026-09-15T07:59:00+00:00", "102", "103", "99.5", "100"),
+            _candle("2026-09-15T16:00:00+00:00", "100", "111", "100", "110"),
+        ),
+        funding_facts=(
+            {
+                "symbol": "BTCUSDT",
+                "funding_time": "2026-09-15T08:00:00+00:00",
+                "signed_funding": "-0.10",
+            },
+        ),
+    )
+
+    assert evidence["backtest_lifecycle"]["status"] == "CENSORED"
+    assert evidence["backtest_lifecycle"]["reason_code"] == "FUNDING_BOUNDARY_REQUIRES_HISTORICAL_FUNDING_FACTS"
 
 
 def test_research_v1_portfolio_grant_blocks_without_order_spec_when_coin_cap_is_full():
@@ -520,6 +807,24 @@ def _research_v1_position_rules():
             max_open_positions=6,
             max_positions_per_coin=2,
         ),
+    )
+
+
+def _candle(stamp: str, open_: str, high: str, low: str, close: str, *, symbol: str = "BTCUSDT") -> HistoricalCandle:
+    opened = datetime.fromisoformat(stamp).astimezone(UTC)
+    return HistoricalCandle(
+        symbol=symbol,
+        category="linear",
+        timeframe="1m",
+        open_time=opened,
+        close_time=opened + timedelta(minutes=1),
+        open=Decimal(open_),
+        high=Decimal(high),
+        low=Decimal(low),
+        close=Decimal(close),
+        volume=Decimal("1"),
+        turnover=Decimal("1"),
+        completed=True,
     )
 
 

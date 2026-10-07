@@ -1,0 +1,59 @@
+{
+  "candidate": "V2-01 TTL-only",
+  "common_profile_references": [
+    "screen_window_utc",
+    "warmup_days",
+    "symbols",
+    "physical_binding",
+    "context_only",
+    "clock",
+    "costs",
+    "end_window",
+    "screen_gates"
+  ],
+  "control_or_variant": "VARIANT",
+  "dependencies": [
+    "V2-01"
+  ],
+  "entry_profile": "J0 except entry TTL=15 minutes",
+  "expected_metrics": [
+    "actual_net_usdt",
+    "filled_count",
+    "accepted_count",
+    "entry_notional_turnover",
+    "fees",
+    "funding",
+    "MTM_DD",
+    "stress_net",
+    "leave_best_event_out_net",
+    "DATA_INVALID"
+  ],
+  "expected_output_contract": "Full calendar stream replay with isolated arm portfolio, end-window MTM, pending cancellation at boundary, funding facts required, DATA_INVALID not converted to zero PnL.",
+  "job_id": "J1",
+  "leverage": 1,
+  "margin_fraction": 0.05,
+  "pass_fail_source": "common_profile.screen_gates and TriggerTrade_Research_V2_Economic_Redesign_RU.md 7D_SCREENING_PLAN",
+  "purpose": "TTL-only control",
+  "signal_family": "Legacy SET-R-003-V2",
+  "sizing_profile": "approx 50 USDT actual tranche / 5%",
+  "source_provenance": [
+    "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+    "TriggerTrade_Research_V2_Target_Model.xlsx:First_8_Jobs"
+  ],
+  "status": "SPECIFIED_NOT_IMPLEMENTED",
+  "stop_family": "Legacy",
+  "symbols": [
+    "AVAXUSDT",
+    "SUIUSDT",
+    "PEPEUSDT"
+  ],
+  "warmup": {
+    "warmup_days": 15
+  },
+  "what_differs_from_control": "entry TTL=15 minutes only",
+  "what_must_remain_equal": "All other J0 rules unchanged.",
+  "window": {
+    "end_exclusive": "2026-08-26T00:00:00Z",
+    "start_inclusive": "2026-08-19T00:00:00Z"
+  }
+}

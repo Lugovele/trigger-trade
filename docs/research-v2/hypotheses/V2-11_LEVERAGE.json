@@ -1,0 +1,42 @@
+{
+  "current_behavior": "R021 удваивает отрицательный baseline net; это не новый edge.",
+  "dependencies": [
+    "positive_unit_edge_required",
+    "V2-08"
+  ],
+  "economic_mechanism": "Увеличить notional при той же выделенной margin, сохраняя risk caps.",
+  "expected_effect_on_capital_utilization": "Леверидж меняет margin efficiency; не значит полную загрузку кошелька.",
+  "expected_effect_on_expectancy": "Leverage не меняет исходный edge при том же notional; fees растут только если растёт notional.",
+  "expected_effect_on_frequency": "Сигналы прежние; sizing/concurrency могут сократить fills.",
+  "expected_effect_on_risk": "Liquidation uses mark price; LTP-only backtest не достаточен.",
+  "fail_7d": "e_net<=0 на 1x, отсутствует margin model, или edge исчезает под stress.",
+  "family": "H LEVERAGE",
+  "hypothesis": "2x/3x полезны только для уже положительного net/notional с полной risk-моделью.",
+  "inherits": "common_profile.json unless explicitly overridden",
+  "parameter_values": {
+    "first_grid_excludes": 5,
+    "gross_exposure_fraction_max": 1.8,
+    "leverage": [
+      1,
+      2,
+      3
+    ],
+    "margin_mode": "ISOLATED, auto-add-margin disabled for research assumption; actual venue support/metadata checked",
+    "nominal_margin_fraction": 0.25,
+    "risk_fraction_max": 0.0075,
+    "total_stop_risk_max": 0.015
+  },
+  "pass_7d": "Фактический risk-capped профиль проходит общий +46.67 gate, stress net>0 и MTM DD<=6%.",
+  "priority": "MUST TEST AFTER POSITIVE UNIT EDGE",
+  "proposed_change": "Раздельные 1x/2x/3x канонические прогоны, не умножение итогового PnL.",
+  "research_id": "V2-11",
+  "source_provenance": [
+    "candidates_12.json",
+    "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+    "TriggerTrade_Research_V2_Target_Model.xlsx:Candidates"
+  ],
+  "source_status": "PROPOSED_NOT_RUN; effects directional hypotheses, not estimated outcomes",
+  "status": "SPECIFIED_NOT_IMPLEMENTED",
+  "target_feasibility_requirement": "При фактическом notional 750 USDT: 10–14 fills/7D и необходимая net expectancy 0.6222%–0.4444% notional для +46.67 USDT; +70 требует 0.9333%–0.6667%. При меньшем notional пересчитать. Это требования, не ожидаемые доходности.",
+  "test_7d": "Максимум 2 positive-edge families × [2,3] => 4 runs; fee/funding/mark-margin replay required."
+}

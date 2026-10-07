@@ -78,7 +78,7 @@ def test_research_persists_exact_set_and_rules_pins_and_survives_restart(tmp_pat
     assert restarted.rules_version_id == current.rules_version_id
     assert restarted.rules_display_version == "v1"
     assert restarted.pin_digest == research_pin_digest(restarted.pin_payload)
-    assert restarted.pin_payload["methodology_package_revision"] == "v1.2.15"
+    assert restarted.pin_payload["methodology_package_revision"] == "v1.2.16"
     assert restarted.pin_payload["config_pins"]["trigger_set"]["set_id"] == "triggertrade-futures-core"
     assert restarted.pin_payload["config_pins"]["trading_rules"]["rules_version_id"] == current.rules_version_id
     assert "MARKET_HANDOFF" in restarted.pin_payload["contract_versions"]
@@ -194,7 +194,7 @@ def test_research_service_create_research_v1_works_with_postgres_before_insert_h
     assert len(client.list_research()) == 1
 
 
-def test_research_pin_defaults_to_v1_2_15_and_preserves_explicit_historical_revision():
+def test_research_pin_defaults_to_v1_2_16_and_preserves_explicit_historical_revision():
     current = research_pin_payload(config_pins={"config": "current"}, created_source="unit")
     historical = research_pin_payload(
         config_pins={"config": "historical"},
@@ -202,7 +202,7 @@ def test_research_pin_defaults_to_v1_2_15_and_preserves_explicit_historical_revi
         methodology_package_revision="v1.2.14",
     )
 
-    assert current["methodology_package_revision"] == "v1.2.15"
+    assert current["methodology_package_revision"] == "v1.2.16"
     assert historical["methodology_package_revision"] == "v1.2.14"
     assert research_pin_digest(historical) != research_pin_digest(current)
 

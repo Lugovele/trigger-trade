@@ -205,12 +205,12 @@ def test_research_diagnostic_report_rejects_conflict_missing_dataset_and_feedbac
             )
 
 
-def test_current_historical_downloader_remains_limited_to_bybit_linear_btcusdt_1m():
+def test_current_historical_downloader_remains_limited_to_research_v1_linear_1m():
     source = BybitHistoricalDataSource(_NoNetworkClient(), retry_sleep_seconds=0, cache=None)
 
-    with pytest.raises(HistoricalDataError, match="BTCUSDT only"):
-        source.load(symbol="ETHUSDT", category="linear", timeframe="1m", start=START, end=END, use_cache=False)
-    with pytest.raises(HistoricalDataError, match="1m historical timeframe"):
+    with pytest.raises(HistoricalDataError, match="Research V1 linear perpetual instruments only"):
+        source.load(symbol="NOTINUNIVERSEUSDT", category="linear", timeframe="1m", start=START, end=END, use_cache=False)
+    with pytest.raises(HistoricalDataError, match="only 1m historical timeframe is supported"):
         source.load(symbol="BTCUSDT", category="linear", timeframe="5m", start=START, end=END, use_cache=False)
     with pytest.raises(HistoricalDataError, match="linear perpetual only"):
         source.load(symbol="BTCUSDT", category="spot", timeframe="1m", start=START, end=END, use_cache=False)

@@ -1,0 +1,37 @@
+{
+  "current_behavior": "Текущее LONG/SHORT переключение не доказывает наличие reversal edge.",
+  "dependencies": [],
+  "economic_mechanism": "Поймать exhaustion после retracement, отдельно от стратегии продолжения.",
+  "expected_effect_on_capital_utilization": "Независимый по механизму, но не гарантированно по рыночным событиям поток.",
+  "expected_effect_on_expectancy": "Знак неизвестен; сильный trend может систематически вредить.",
+  "expected_effect_on_frequency": "Добавляет другие события; допустимая частота должна пройти target filter.",
+  "expected_effect_on_risk": "Контртрендовые последовательные SL; никаких martingale/averaging.",
+  "fail_7d": "Убыток/непроходимый economic envelope; не менять направление только ради известного эпизода.",
+  "family": "B REVERSAL; J DIRECTION",
+  "hypothesis": "Возврат после истощения — независимый механизм относительно momentum continuation.",
+  "inherits": "common_profile.json unless explicitly overridden",
+  "parameter_values": {
+    "buy_after_down_impulse": "r15<=-1%; latest close>=15m low+0.5ATR; last two 1m closes rising",
+    "confirm_bars_1m": 2,
+    "extreme_lookback_minutes": 15,
+    "impulse_abs_return15_pct_points": 1.0,
+    "reset": "abs(r15)<0.50% for 2 completed minutes",
+    "retrace_from_extreme_ATR15": 0.5,
+    "sell_after_up_impulse": "r15>=1%; latest close<=15m high-0.5ATR; last two 1m closes falling",
+    "turnover_acceleration_max": 1.0,
+    "validity_minutes": 15
+  },
+  "pass_7d": "Общий gate, stress positive; нет зависимости от одной сделки.",
+  "priority": "MUST TEST FIRST",
+  "proposed_change": "Новый reversal Set с подтверждённым возвратом, не немедленное контртрендовое усреднение.",
+  "research_id": "V2-06",
+  "source_provenance": [
+    "candidates_12.json",
+    "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+    "TriggerTrade_Research_V2_Target_Model.xlsx:Candidates"
+  ],
+  "source_status": "PROPOSED_NOT_RUN; effects directional hypotheses, not estimated outcomes",
+  "status": "SPECIFIED_NOT_IMPLEMENTED",
+  "target_feasibility_requirement": "При фактическом notional 750 USDT: 10–14 fills/7D и необходимая net expectancy 0.6222%–0.4444% notional для +46.67 USDT; +70 требует 0.9333%–0.6667%. При меньшем notional пересчитать. Это требования, не ожидаемые доходности.",
+  "test_7d": "J6 G0; LONG/SHORT reported separately, без выбора стороны по старым выигрышам."
+}

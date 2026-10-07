@@ -1,0 +1,45 @@
+{
+  "current_behavior": "10% coin budget / 2 slots даёт ~50; 3 slots даёт ~33.33.",
+  "dependencies": [
+    "V2-01",
+    "V2-02",
+    "V2-03",
+    "V2-04",
+    "V2-05",
+    "V2-06"
+  ],
+  "economic_mechanism": "Увеличить account impact положительного edge, сохраняя заранее заданную потерю.",
+  "expected_effect_on_capital_utilization": "Фактический margin 20–33% только если не ограничен риском; не автоматически номинальное значение.",
+  "expected_effect_on_expectancy": "Не создаёт edge; в исправном constant-price replay net/notional сохраняется.",
+  "expected_effect_on_frequency": "Сигналы не меняются; actual accepted count может измениться от concurrency.",
+  "expected_effect_on_risk": "Плановый риск <=0.75% per trade; gaps могут превысить.",
+  "fail_7d": "Только номинальное увеличение, а fills/Q остаются малы или risk cap нарушен.",
+  "family": "F SIZING",
+  "hypothesis": "Размер должен зависеть от риска и фактического ордера, а не скрытого деления coin allocation.",
+  "inherits": "common_profile.json unless explicitly overridden",
+  "parameter_values": {
+    "formula": "common.capital_risk.sizing_formula",
+    "initial": 0.25,
+    "margin_fraction_values": [
+      0.2,
+      0.25,
+      0.33
+    ],
+    "max_coin_margin_fraction": 0.33,
+    "min_tranche_usdt": 25,
+    "risk_fraction_max": 0.0075
+  },
+  "pass_7d": "Фактический Q, equity, caps и target согласованы.",
+  "priority": "MUST TEST FIRST AS ECONOMIC ENVELOPE; CANONICAL SCALE AFTER EDGE",
+  "proposed_change": "Явный nominal margin + risk-based Q; убрать только исследовательское автоматическое дробление.",
+  "research_id": "V2-08",
+  "source_provenance": [
+    "candidates_12.json",
+    "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+    "TriggerTrade_Research_V2_Target_Model.xlsx:Candidates"
+  ],
+  "source_status": "PROPOSED_NOT_RUN; effects directional hypotheses, not estimated outcomes",
+  "status": "SPECIFIED_NOT_IMPLEMENTED",
+  "target_feasibility_requirement": "При фактическом notional 750 USDT: 10–14 fills/7D и необходимая net expectancy 0.6222%–0.4444% notional для +46.67 USDT; +70 требует 0.9333%–0.6667%. При меньшем notional пересчитать. Это требования, не ожидаемые доходности.",
+  "test_7d": "Сначала J2–J7 nominal25%/1x; затем у максимум 2 положительных семей risk-capped 2x/3x."
+}

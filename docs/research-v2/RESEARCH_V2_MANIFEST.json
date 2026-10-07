@@ -1,0 +1,1236 @@
+{
+  "common_profile": "docs/research-v2/RESEARCH_V2_COMMON_PROFILE.json",
+  "economic_target": {
+    "primary_screen_window_days": 7,
+    "program_id": "RESEARCH_V2",
+    "reverse_engineering_formula": "frequency × actual margin × leverage × net expectancy",
+    "scenario_count_in_excel": 392,
+    "scenario_policy": "Target scenarios are arithmetic provenance and are not materialized as research jobs.",
+    "screening_lower_threshold_formula": "1000 * 0.20 * 7 / 30 = 46.666667 USDT",
+    "screening_lower_threshold_usdt": 46.666667,
+    "screening_stretch_reference_usdt": 70.0,
+    "screening_threshold_interpretation": "Economic screening threshold, not proof of stable monthly income.",
+    "source_provenance": [
+      "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+      "TriggerTrade_Research_V2_Target_Model.xlsx"
+    ],
+    "starting_capital_usdt": 1000,
+    "status": "SPECIFIED_NOT_IMPLEMENTED",
+    "target_net_month_fraction_range": [
+      0.2,
+      0.3
+    ],
+    "target_net_month_usdt_range": [
+      200,
+      300
+    ],
+    "target_window_days": 30,
+    "workbook_summary": {
+      "Candidates": [
+        [
+          "RESEARCH V2 / 12 CANDIDATES",
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        [
+          "PROPOSED / NOT RUN. Complete inherited defaults: common_profile.json. Native backend compatibility has not been validated.",
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        [
+          "Research ID",
+          "Family",
+          "Priority",
+          "Hypothesis",
+          "Parameters",
+          "Economic mechanism",
+          "Frequency / risk",
+          "7D test",
+          "PASS",
+          "FAIL"
+        ],
+        [
+          "V2-01",
+          "C ENTRY; execution validity",
+          "MUST TEST FIRST",
+          "Близкий пассивный вход и короткая валидность устраняют запоздалые сделки и резервы без edge.",
+          "{\"TTL_minutes_initial\": 15, \"TTL_grid_minutes\": [5, 15, 30], \"entry_pullback_ATR15_initial\": 0.1, \"entry_grid_ATR15\": [0.05, 0.1, 0.25], \"no_reprice\": true}",
+          "Проверить вероятность своевременного fill и оборачиваемость вместо пятидневного GTC.",
+          "Fill может вырасти от близости и упасть от TTL; знак не установлен. | Более близкий вход может увеличить неблагоприятные fills.",
+          "J1: legacy Set/POS/50 USDT, только TTL 15m против J0; J2: legacy Set + полный G0. J2 — bundle, не оценка одной причины.",
+          "TTL исполняется, возврат капитала терминален, механизм экономически пригоден только в кандидате, проходящем общий gate.",
+          "Ни одна допустимая TTL не даёт timely fills/положительный net edge; не удлинять TTL ради старого winner."
+        ],
+        [
+          "V2-02",
+          "D STOP; C ENTRY",
+          "MUST TEST FIRST",
+          "Свежая структурная геометрия или отдельный ATR-stop дадут иной trade set, чем слепое расширение стопа.",
+          "{\"G0\": \"common.stop_G0\", \"G1\": \"common.stop_G1\", \"age_grid_minutes\": [30, 60, 120], \"ATR_only_grid\": [0.75, 1.0, 1.5], \"initial_age_minutes\": 60, \"initial_ATR_only\": 1.0}",
+          "Связать горизонт свежего триггера с reference/ATR; ограничить account risk через sizing, а не только ширину стопа.",
+          "APPROVE может увеличиться; число и прибыльность fills неизвестны. | Меньший stop повышает частоту stop-out; широкий уменьшает Q при risk cap.",
+          "J4 G0 против J7 G1 при одинаковом momentum signal. Возраст/ATR grid — позже не более 2 альтернатив.",
+          "Нет цензуры; кандидат проходит общий экономический gate; преимущество существует не только за счёт одного эпизода.",
+          "Больше approvals при net expectancy <=0 либо target недостижим при risk-capped Q."
+        ],
+        [
+          "V2-03",
+          "A SIGNAL FREQUENCY",
+          "MUST TEST FIRST",
+          "OR двух временных импульсов увеличит число новых событий, а не копий одного импульса.",
+          "{\"return5_threshold_pct_points\": 0.3, \"return15_threshold_pct_points\": 0.5, \"logic\": \"LONG if r5>=0.30% OR r15>=0.50%; SHORT if r5<=-0.30% OR r15<=-0.50%; simultaneous opposing conditions=>NONE\", \"reset\": \"new episode only after both absolute returns below their thresholds for 2 consecutive 1m evaluations\", \"cadence_seconds\": 60, \"coarse_threshold_pairs_pct_points\": [[0.2, 0.4], [0.3, 0.5], [0.5, 1.0]], \"first_pair\": [0.3, 0.5]}",
+          "Увеличить поток свежих импульсов без механического размножения Set versions.",
+          "Требуется ~60 trades/month path; не предсказывается кратность роста. | Кластеры коррелированных сигналов и fees.",
+          "J3, G0, базовая тройка; затем максимум одна соседняя пара при положительном механизме.",
+          "Канонический масштабированный replay проходит +46.67 и условие достаточного turnover.",
+          "Рост MATCHED без роста profitable fills либо экономика не проходит после 3x и risk caps."
+        ]
+      ],
+      "First_8_Jobs": [
+        [
+          "FIRST WAVE / 8 JOBS",
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        [
+          "Run only after causality / funding / config preflight. Full calendar signal recomputation is required; the old MATCHED cohort is insufficient.",
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        [
+          "Job",
+          "Candidate",
+          "Exact profile",
+          "Signal",
+          "Stop",
+          "Leverage",
+          "Margin/equity",
+          "UTC start incl.",
+          "UTC end excl.",
+          "Universe",
+          "Status"
+        ],
+        [
+          "J0",
+          "CONTROL",
+          "SET-R-003-V2 + POS001/PR201; 50 USDT actual tranche, 1x; old GTC",
+          "Legacy",
+          "Legacy",
+          1,
+          0.05,
+          46253,
+          46260,
+          "AVAXUSDT, SUIUSDT, PEPEUSDT",
+          "NOT_RUN"
+        ],
+        [
+          "J1",
+          "V2-01 TTL-only",
+          "J0 except entry TTL=15 minutes; all other rules unchanged",
+          "Legacy",
+          "Legacy",
+          1,
+          0.05,
+          46253,
+          46260,
+          "AVAXUSDT, SUIUSDT, PEPEUSDT",
+          "NOT_RUN"
+        ],
+        [
+          "J2",
+          "V2-01/V2-02 bridge",
+          "Legacy SET-R-003-V2, new common G0 entry/stop/TP/risk scaffold; bundle, not single-factor",
+          "Legacy",
+          "G0",
+          1,
+          0.25,
+          46253,
+          46260,
+          "AVAXUSDT, SUIUSDT, PEPEUSDT",
+          "NOT_RUN"
+        ]
+      ],
+      "Flow": [
+        [
+          "7D FLOW REQUIREMENTS",
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        [
+          "Trade count and expectancy below are required hurdles, not predicted realized frequency or profit.",
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        [
+          "Unique fills / 7D",
+          "Leverage",
+          "Actual notional",
+          "Required net / 7D",
+          "Required mean net / trade",
+          "Required edge / notional",
+          "Accepted @ assumed fill",
+          "Arithmetic net / 30D"
+        ],
+        [
+          10,
+          1,
+          250,
+          46.666666666666664,
+          4.666666666666666,
+          0.018666666666666665,
+          15,
+          0.19999999999999998
+        ],
+        [
+          10,
+          2,
+          500,
+          46.666666666666664,
+          4.666666666666666,
+          0.009333333333333332,
+          15,
+          0.19999999999999998
+        ],
+        [
+          10,
+          3,
+          750,
+          46.666666666666664,
+          4.666666666666666,
+          0.006222222222222221,
+          15,
+          0.19999999999999998
+        ]
+      ],
+      "Inputs": [
+        [
+          "MODEL INPUTS / ASSUMPTIONS",
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        [
+          "Blue = inputs; black = formulas; green = cross-sheet references. All targets are requirements, not forecasts.",
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        [
+          "Input",
+          "Value",
+          "Unit",
+          "Source / status",
+          null,
+          null,
+          null,
+          null
+        ],
+        [
+          "Starting equity",
+          1000,
+          "USDT",
+          "User target; pasted request 20261003-020124, starting capital.",
+          null,
+          null,
+          null,
+          null
+        ],
+        [
+          "Target 30D — lower",
+          0.2,
+          "fraction",
+          "User target: 20% net per 30D.",
+          null,
+          null,
+          null,
+          null
+        ],
+        [
+          "Target 30D — upper",
+          0.3,
+          "fraction",
+          "User target: 30% net per 30D.",
+          null,
+          null,
+          null,
+          null
+        ]
+      ],
+      "Scenarios": [
+        [
+          "TARGET REVERSE ENGINEERING / 392 CASES",
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        [
+          "* Fixed illustrative gross win 1.6%, gross stop 0.8%, cost 0.1%. Risk flags do not auto-resize these arithmetic scenarios.",
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        [
+          "Trades / 30D",
+          "Margin / equity",
+          "Leverage",
+          "Target net / 30D",
+          "Net required / trade",
+          "Required return / margin",
+          "Net expectancy / notional",
+          "Win probability required*",
+          "Geometry possible*",
+          "Stop risk / equity*",
+          "Within 0.75% risk*",
+          "Status"
+        ],
+        [
+          4,
+          0.1,
+          1,
+          0.2,
+          50,
+          0.5,
+          0.5,
+          21.208333333333332,
+          "NO",
+          0.0009000000000000002,
+          "YES",
+          "REQUIRED; NOT PREDICTED"
+        ],
+        [
+          4,
+          0.1,
+          1,
+          0.3,
+          75,
+          0.7499999999999999,
+          0.7499999999999999,
+          31.624999999999996,
+          "NO",
+          0.0009000000000000002,
+          "YES",
+          "REQUIRED; NOT PREDICTED"
+        ],
+        [
+          4,
+          0.1,
+          2,
+          0.2,
+          50,
+          0.5,
+          0.25,
+          10.791666666666666,
+          "NO",
+          0.0018000000000000004,
+          "YES",
+          "REQUIRED; NOT PREDICTED"
+        ]
+      ],
+      "Sources": [
+        [
+          "SOURCES / MODEL LIMITATIONS",
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        [
+          "All amounts in USDT. Percentages in cells are fractions. Date: 3 October 2026.",
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        [
+          "Topic",
+          "Source / local evidence",
+          "Limitation / interpretation",
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        [
+          "Archive",
+          "research_v1_cells_corrected_20261003-013354(1).zip",
+          "1016 JSONL + CSV checked; full 1.43GB JSON not independently compared.",
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        [
+          "Funnel / arm data",
+          "tt_v2/arms_metrics.csv; checks.json; source_summary.json",
+          "Cell executions overlap; not summable portfolio profit.",
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        [
+          "Causality witness",
+          "tt_v2/witnesses.json; timeline_conflicts.csv",
+          "R014 index246 affected by future pending contexts40/65; diagnostic, not a corrected rerun.",
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      ],
+      "file": "TriggerTrade_Research_V2_Target_Model.xlsx",
+      "sheets": [
+        "Dashboard",
+        "Inputs",
+        "Scenarios",
+        "Risk",
+        "Flow",
+        "Replay_Arms",
+        "Candidates",
+        "First_8_Jobs",
+        "Events_32",
+        "Sources"
+      ]
+    }
+  },
+  "hypotheses": [
+    {
+      "dependencies": [],
+      "family": "C ENTRY; execution validity",
+      "initial_test_job_ids": [
+        "J1",
+        "J2",
+        "J3",
+        "J4",
+        "J5",
+        "J6",
+        "J7"
+      ],
+      "json_path": "docs/research-v2/hypotheses/V2-01_ENTRY_TTL.json",
+      "md_path": "docs/research-v2/hypotheses/V2-01_ENTRY_TTL.md",
+      "priority": "MUST TEST FIRST",
+      "referenced_common_profile_sections": [
+        "features",
+        "entry",
+        "stop_G0",
+        "stop_G1",
+        "take_profit",
+        "capital_risk",
+        "costs",
+        "screen_gates"
+      ],
+      "research_id": "V2-01",
+      "source_provenance": [
+        "candidates_12.json",
+        "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+        "TriggerTrade_Research_V2_Target_Model.xlsx:Candidates"
+      ],
+      "status": "SPECIFIED_NOT_IMPLEMENTED",
+      "title": "ENTRY_TTL"
+    },
+    {
+      "dependencies": [
+        "V2-01"
+      ],
+      "family": "D STOP; C ENTRY",
+      "initial_test_job_ids": [
+        "J2",
+        "J3",
+        "J4",
+        "J5",
+        "J6",
+        "J7"
+      ],
+      "json_path": "docs/research-v2/hypotheses/V2-02_STOP_GEOMETRY.json",
+      "md_path": "docs/research-v2/hypotheses/V2-02_STOP_GEOMETRY.md",
+      "priority": "MUST TEST FIRST",
+      "referenced_common_profile_sections": [
+        "features",
+        "entry",
+        "stop_G0",
+        "stop_G1",
+        "take_profit",
+        "capital_risk",
+        "costs",
+        "screen_gates"
+      ],
+      "research_id": "V2-02",
+      "source_provenance": [
+        "candidates_12.json",
+        "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+        "TriggerTrade_Research_V2_Target_Model.xlsx:Candidates"
+      ],
+      "status": "SPECIFIED_NOT_IMPLEMENTED",
+      "title": "STOP_GEOMETRY"
+    },
+    {
+      "dependencies": [],
+      "family": "A SIGNAL FREQUENCY",
+      "initial_test_job_ids": [
+        "J3",
+        "J4",
+        "J7"
+      ],
+      "json_path": "docs/research-v2/hypotheses/V2-03_RET5_RET15_FREQUENCY.json",
+      "md_path": "docs/research-v2/hypotheses/V2-03_RET5_RET15_FREQUENCY.md",
+      "priority": "MUST TEST FIRST",
+      "referenced_common_profile_sections": [
+        "features",
+        "entry",
+        "stop_G0",
+        "stop_G1",
+        "take_profit",
+        "capital_risk",
+        "costs",
+        "screen_gates"
+      ],
+      "research_id": "V2-03",
+      "source_provenance": [
+        "candidates_12.json",
+        "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+        "TriggerTrade_Research_V2_Target_Model.xlsx:Candidates"
+      ],
+      "status": "SPECIFIED_NOT_IMPLEMENTED",
+      "title": "RET5_RET15_FREQUENCY"
+    },
+    {
+      "dependencies": [
+        "V2-03"
+      ],
+      "family": "B SIGNAL QUALITY; J TREND",
+      "initial_test_job_ids": [
+        "J4",
+        "J7"
+      ],
+      "json_path": "docs/research-v2/hypotheses/V2-04_MOMENTUM_CONTINUATION.json",
+      "md_path": "docs/research-v2/hypotheses/V2-04_MOMENTUM_CONTINUATION.md",
+      "priority": "MUST TEST FIRST",
+      "referenced_common_profile_sections": [
+        "features",
+        "entry",
+        "stop_G0",
+        "stop_G1",
+        "take_profit",
+        "capital_risk",
+        "costs",
+        "screen_gates"
+      ],
+      "research_id": "V2-04",
+      "source_provenance": [
+        "candidates_12.json",
+        "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+        "TriggerTrade_Research_V2_Target_Model.xlsx:Candidates"
+      ],
+      "status": "SPECIFIED_NOT_IMPLEMENTED",
+      "title": "MOMENTUM_CONTINUATION"
+    },
+    {
+      "dependencies": [],
+      "family": "A FREQUENCY; B VOLATILITY",
+      "initial_test_job_ids": [
+        "J5"
+      ],
+      "json_path": "docs/research-v2/hypotheses/V2-05_COMPRESSION_BREAKOUT.json",
+      "md_path": "docs/research-v2/hypotheses/V2-05_COMPRESSION_BREAKOUT.md",
+      "priority": "MUST TEST FIRST",
+      "referenced_common_profile_sections": [
+        "features",
+        "entry",
+        "stop_G0",
+        "stop_G1",
+        "take_profit",
+        "capital_risk",
+        "costs",
+        "screen_gates"
+      ],
+      "research_id": "V2-05",
+      "source_provenance": [
+        "candidates_12.json",
+        "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+        "TriggerTrade_Research_V2_Target_Model.xlsx:Candidates"
+      ],
+      "status": "SPECIFIED_NOT_IMPLEMENTED",
+      "title": "COMPRESSION_BREAKOUT"
+    },
+    {
+      "dependencies": [],
+      "family": "B REVERSAL; J DIRECTION",
+      "initial_test_job_ids": [
+        "J6"
+      ],
+      "json_path": "docs/research-v2/hypotheses/V2-06_EXHAUSTION_REVERSAL.json",
+      "md_path": "docs/research-v2/hypotheses/V2-06_EXHAUSTION_REVERSAL.md",
+      "priority": "MUST TEST FIRST",
+      "referenced_common_profile_sections": [
+        "features",
+        "entry",
+        "stop_G0",
+        "stop_G1",
+        "take_profit",
+        "capital_risk",
+        "costs",
+        "screen_gates"
+      ],
+      "research_id": "V2-06",
+      "source_provenance": [
+        "candidates_12.json",
+        "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+        "TriggerTrade_Research_V2_Target_Model.xlsx:Candidates"
+      ],
+      "status": "SPECIFIED_NOT_IMPLEMENTED",
+      "title": "EXHAUSTION_REVERSAL"
+    },
+    {
+      "dependencies": [
+        "V2-02"
+      ],
+      "family": "E TAKE PROFIT",
+      "initial_test_job_ids": [
+        "J2",
+        "J3",
+        "J4",
+        "J5",
+        "J6",
+        "J7"
+      ],
+      "json_path": "docs/research-v2/hypotheses/V2-07_TAKE_PROFIT.json",
+      "md_path": "docs/research-v2/hypotheses/V2-07_TAKE_PROFIT.md",
+      "priority": "SECONDARY",
+      "referenced_common_profile_sections": [
+        "features",
+        "entry",
+        "stop_G0",
+        "stop_G1",
+        "take_profit",
+        "capital_risk",
+        "costs",
+        "screen_gates"
+      ],
+      "research_id": "V2-07",
+      "source_provenance": [
+        "candidates_12.json",
+        "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+        "TriggerTrade_Research_V2_Target_Model.xlsx:Candidates"
+      ],
+      "status": "SPECIFIED_NOT_IMPLEMENTED",
+      "title": "TAKE_PROFIT"
+    },
+    {
+      "dependencies": [
+        "V2-01",
+        "V2-02",
+        "V2-03",
+        "V2-04",
+        "V2-05",
+        "V2-06"
+      ],
+      "family": "F SIZING",
+      "initial_test_job_ids": [
+        "J2",
+        "J3",
+        "J4",
+        "J5",
+        "J6",
+        "J7"
+      ],
+      "json_path": "docs/research-v2/hypotheses/V2-08_RISK_BASED_SIZING.json",
+      "md_path": "docs/research-v2/hypotheses/V2-08_RISK_BASED_SIZING.md",
+      "priority": "MUST TEST FIRST AS ECONOMIC ENVELOPE; CANONICAL SCALE AFTER EDGE",
+      "referenced_common_profile_sections": [
+        "features",
+        "entry",
+        "stop_G0",
+        "stop_G1",
+        "take_profit",
+        "capital_risk",
+        "costs",
+        "screen_gates"
+      ],
+      "research_id": "V2-08",
+      "source_provenance": [
+        "candidates_12.json",
+        "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+        "TriggerTrade_Research_V2_Target_Model.xlsx:Candidates"
+      ],
+      "status": "SPECIFIED_NOT_IMPLEMENTED",
+      "title": "RISK_BASED_SIZING"
+    },
+    {
+      "dependencies": [],
+      "family": "I UNIVERSE",
+      "initial_test_job_ids": [],
+      "json_path": "docs/research-v2/hypotheses/V2-09_UNIVERSE_EXPANSION.json",
+      "md_path": "docs/research-v2/hypotheses/V2-09_UNIVERSE_EXPANSION.md",
+      "priority": "SECONDARY",
+      "referenced_common_profile_sections": [
+        "features",
+        "entry",
+        "stop_G0",
+        "stop_G1",
+        "take_profit",
+        "capital_risk",
+        "costs",
+        "screen_gates"
+      ],
+      "research_id": "V2-09",
+      "source_provenance": [
+        "candidates_12.json",
+        "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+        "TriggerTrade_Research_V2_Target_Model.xlsx:Candidates"
+      ],
+      "status": "SPECIFIED_NOT_IMPLEMENTED",
+      "title": "UNIVERSE_EXPANSION"
+    },
+    {
+      "dependencies": [
+        "V2-03",
+        "V2-04"
+      ],
+      "family": "J DIRECTION / REGIME; B BTC",
+      "initial_test_job_ids": [],
+      "json_path": "docs/research-v2/hypotheses/V2-10_BTC_CONTEXT.json",
+      "md_path": "docs/research-v2/hypotheses/V2-10_BTC_CONTEXT.md",
+      "priority": "SECONDARY",
+      "referenced_common_profile_sections": [
+        "features",
+        "entry",
+        "stop_G0",
+        "stop_G1",
+        "take_profit",
+        "capital_risk",
+        "costs",
+        "screen_gates"
+      ],
+      "research_id": "V2-10",
+      "source_provenance": [
+        "candidates_12.json",
+        "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+        "TriggerTrade_Research_V2_Target_Model.xlsx:Candidates"
+      ],
+      "status": "SPECIFIED_NOT_IMPLEMENTED",
+      "title": "BTC_CONTEXT"
+    },
+    {
+      "dependencies": [
+        "positive_unit_edge_required",
+        "V2-08"
+      ],
+      "family": "H LEVERAGE",
+      "initial_test_job_ids": [],
+      "json_path": "docs/research-v2/hypotheses/V2-11_LEVERAGE.json",
+      "md_path": "docs/research-v2/hypotheses/V2-11_LEVERAGE.md",
+      "priority": "MUST TEST AFTER POSITIVE UNIT EDGE",
+      "referenced_common_profile_sections": [
+        "features",
+        "entry",
+        "stop_G0",
+        "stop_G1",
+        "take_profit",
+        "capital_risk",
+        "costs",
+        "screen_gates"
+      ],
+      "research_id": "V2-11",
+      "source_provenance": [
+        "candidates_12.json",
+        "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+        "TriggerTrade_Research_V2_Target_Model.xlsx:Candidates"
+      ],
+      "status": "SPECIFIED_NOT_IMPLEMENTED",
+      "title": "LEVERAGE"
+    },
+    {
+      "dependencies": [
+        "measurable_concurrency_blocks_required"
+      ],
+      "family": "G PORTFOLIO UTILIZATION",
+      "initial_test_job_ids": [],
+      "json_path": "docs/research-v2/hypotheses/V2-12_PORTFOLIO_CONCURRENCY.json",
+      "md_path": "docs/research-v2/hypotheses/V2-12_PORTFOLIO_CONCURRENCY.md",
+      "priority": "LOW PRIORITY UNTIL MEASURABLE BLOCKS",
+      "referenced_common_profile_sections": [
+        "features",
+        "entry",
+        "stop_G0",
+        "stop_G1",
+        "take_profit",
+        "capital_risk",
+        "costs",
+        "screen_gates"
+      ],
+      "research_id": "V2-12",
+      "source_provenance": [
+        "candidates_12.json",
+        "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+        "TriggerTrade_Research_V2_Target_Model.xlsx:Candidates"
+      ],
+      "status": "SPECIFIED_NOT_IMPLEMENTED",
+      "title": "PORTFOLIO_CONCURRENCY"
+    }
+  ],
+  "implementation_status": {
+    "backend_behavior": "J0_J7_PRIMITIVES_IMPLEMENTED_NOT_RUN",
+    "backtests_run": false,
+    "economic_runs": "NOT_STARTED",
+    "implementation_map": "docs/research-v2/implementation/RESEARCH_V2_IMPLEMENTATION_MAP.json",
+    "j0_j7_implemented": true,
+    "production_approval": false,
+    "shared_primitives_implemented": true,
+    "specification_materialized": true,
+    "trading_logic_changed": false
+  },
+  "initial_jobs": [
+    {
+      "control_or_variant": "CONTROL",
+      "dependencies": [],
+      "entry_profile": "Legacy geometry/GTC",
+      "expected_output_contract": "Full calendar stream replay, isolated arm portfolio, funding required, end-window MTM, DATA_INVALID explicit.",
+      "job_id": "J0",
+      "json_path": "docs/research-v2/jobs/J0_LEGACY_CONTROL.json",
+      "leverage": 1,
+      "md_path": "docs/research-v2/jobs/J0_LEGACY_CONTROL.md",
+      "purpose": "Legacy control",
+      "signal_family": "Legacy SET-R-003-V2",
+      "sizing_profile": "approx 50 USDT actual tranche / 5%",
+      "status": "SPECIFIED_NOT_IMPLEMENTED",
+      "stop_family": "Legacy",
+      "symbols": [
+        "AVAXUSDT",
+        "SUIUSDT",
+        "PEPEUSDT"
+      ],
+      "window": {
+        "end_exclusive": "2026-08-26T00:00:00Z",
+        "start_inclusive": "2026-08-19T00:00:00Z"
+      }
+    },
+    {
+      "control_or_variant": "VARIANT",
+      "dependencies": [
+        "V2-01"
+      ],
+      "entry_profile": "J0 except entry TTL=15 minutes",
+      "expected_output_contract": "Full calendar stream replay, isolated arm portfolio, funding required, end-window MTM, DATA_INVALID explicit.",
+      "job_id": "J1",
+      "json_path": "docs/research-v2/jobs/J1_TTL_CONTROL.json",
+      "leverage": 1,
+      "md_path": "docs/research-v2/jobs/J1_TTL_CONTROL.md",
+      "purpose": "TTL-only control",
+      "signal_family": "Legacy SET-R-003-V2",
+      "sizing_profile": "approx 50 USDT actual tranche / 5%",
+      "status": "SPECIFIED_NOT_IMPLEMENTED",
+      "stop_family": "Legacy",
+      "symbols": [
+        "AVAXUSDT",
+        "SUIUSDT",
+        "PEPEUSDT"
+      ],
+      "window": {
+        "end_exclusive": "2026-08-26T00:00:00Z",
+        "start_inclusive": "2026-08-19T00:00:00Z"
+      }
+    },
+    {
+      "control_or_variant": "VARIANT",
+      "dependencies": [
+        "V2-01",
+        "V2-02",
+        "V2-07",
+        "V2-08"
+      ],
+      "entry_profile": "Common G0 entry/stop/TP/risk scaffold",
+      "expected_output_contract": "Full calendar stream replay, isolated arm portfolio, funding required, end-window MTM, DATA_INVALID explicit.",
+      "job_id": "J2",
+      "json_path": "docs/research-v2/jobs/J2_LEGACY_PLUS_G0.json",
+      "leverage": 1,
+      "md_path": "docs/research-v2/jobs/J2_LEGACY_PLUS_G0.md",
+      "purpose": "Bridge from legacy signal to common G0 scaffold",
+      "signal_family": "Legacy SET-R-003-V2",
+      "sizing_profile": "25% nominal margin",
+      "status": "SPECIFIED_NOT_IMPLEMENTED",
+      "stop_family": "G0",
+      "symbols": [
+        "AVAXUSDT",
+        "SUIUSDT",
+        "PEPEUSDT"
+      ],
+      "window": {
+        "end_exclusive": "2026-08-26T00:00:00Z",
+        "start_inclusive": "2026-08-19T00:00:00Z"
+      }
+    },
+    {
+      "control_or_variant": "VARIANT",
+      "dependencies": [
+        "V2-03",
+        "V2-01",
+        "V2-02",
+        "V2-07",
+        "V2-08"
+      ],
+      "entry_profile": "Common profile",
+      "expected_output_contract": "Full calendar stream replay, isolated arm portfolio, funding required, end-window MTM, DATA_INVALID explicit.",
+      "job_id": "J3",
+      "json_path": "docs/research-v2/jobs/J3_RET_OR_G0.json",
+      "leverage": 1,
+      "md_path": "docs/research-v2/jobs/J3_RET_OR_G0.md",
+      "purpose": "RET5 OR RET15 signal frequency test",
+      "signal_family": "RET5 OR RET15",
+      "sizing_profile": "25% nominal margin",
+      "status": "SPECIFIED_NOT_IMPLEMENTED",
+      "stop_family": "G0",
+      "symbols": [
+        "AVAXUSDT",
+        "SUIUSDT",
+        "PEPEUSDT"
+      ],
+      "window": {
+        "end_exclusive": "2026-08-26T00:00:00Z",
+        "start_inclusive": "2026-08-19T00:00:00Z"
+      }
+    },
+    {
+      "control_or_variant": "VARIANT",
+      "dependencies": [
+        "V2-04",
+        "V2-03",
+        "V2-01",
+        "V2-02",
+        "V2-07",
+        "V2-08"
+      ],
+      "entry_profile": "Common profile",
+      "expected_output_contract": "Full calendar stream replay, isolated arm portfolio, funding required, end-window MTM, DATA_INVALID explicit.",
+      "job_id": "J4",
+      "json_path": "docs/research-v2/jobs/J4_CONTINUATION_G0.json",
+      "leverage": 1,
+      "md_path": "docs/research-v2/jobs/J4_CONTINUATION_G0.md",
+      "purpose": "Momentum continuation quality test",
+      "signal_family": "RET_OR + local trend + RVOL>=1.2",
+      "sizing_profile": "25% nominal margin",
+      "status": "SPECIFIED_NOT_IMPLEMENTED",
+      "stop_family": "G0",
+      "symbols": [
+        "AVAXUSDT",
+        "SUIUSDT",
+        "PEPEUSDT"
+      ],
+      "window": {
+        "end_exclusive": "2026-08-26T00:00:00Z",
+        "start_inclusive": "2026-08-19T00:00:00Z"
+      }
+    },
+    {
+      "control_or_variant": "VARIANT",
+      "dependencies": [
+        "V2-05",
+        "V2-01",
+        "V2-02",
+        "V2-07",
+        "V2-08"
+      ],
+      "entry_profile": "Common profile",
+      "expected_output_contract": "Full calendar stream replay, isolated arm portfolio, funding required, end-window MTM, DATA_INVALID explicit.",
+      "job_id": "J5",
+      "json_path": "docs/research-v2/jobs/J5_COMPRESSION_G0.json",
+      "leverage": 1,
+      "md_path": "docs/research-v2/jobs/J5_COMPRESSION_G0.md",
+      "purpose": "Compression breakout family test",
+      "signal_family": "Compression breakout + turnover acceleration",
+      "sizing_profile": "25% nominal margin",
+      "status": "SPECIFIED_NOT_IMPLEMENTED",
+      "stop_family": "G0",
+      "symbols": [
+        "AVAXUSDT",
+        "SUIUSDT",
+        "PEPEUSDT"
+      ],
+      "window": {
+        "end_exclusive": "2026-08-26T00:00:00Z",
+        "start_inclusive": "2026-08-19T00:00:00Z"
+      }
+    },
+    {
+      "control_or_variant": "VARIANT",
+      "dependencies": [
+        "V2-06",
+        "V2-01",
+        "V2-02",
+        "V2-07",
+        "V2-08"
+      ],
+      "entry_profile": "Common profile",
+      "expected_output_contract": "Full calendar stream replay, isolated arm portfolio, funding required, end-window MTM, DATA_INVALID explicit.",
+      "job_id": "J6",
+      "json_path": "docs/research-v2/jobs/J6_REVERSAL_G0.json",
+      "leverage": 1,
+      "md_path": "docs/research-v2/jobs/J6_REVERSAL_G0.md",
+      "purpose": "Confirmed exhaustion/reversal family test",
+      "signal_family": "Confirmed exhaustion/reversal",
+      "sizing_profile": "25% nominal margin",
+      "status": "SPECIFIED_NOT_IMPLEMENTED",
+      "stop_family": "G0",
+      "symbols": [
+        "AVAXUSDT",
+        "SUIUSDT",
+        "PEPEUSDT"
+      ],
+      "window": {
+        "end_exclusive": "2026-08-26T00:00:00Z",
+        "start_inclusive": "2026-08-19T00:00:00Z"
+      }
+    },
+    {
+      "control_or_variant": "VARIANT",
+      "dependencies": [
+        "V2-02",
+        "V2-04",
+        "V2-03",
+        "V2-01",
+        "V2-07",
+        "V2-08"
+      ],
+      "entry_profile": "Common profile",
+      "expected_output_contract": "Full calendar stream replay, isolated arm portfolio, funding required, end-window MTM, DATA_INVALID explicit.",
+      "job_id": "J7",
+      "json_path": "docs/research-v2/jobs/J7_CONTINUATION_G1.json",
+      "leverage": 1,
+      "md_path": "docs/research-v2/jobs/J7_CONTINUATION_G1.md",
+      "purpose": "G1 stop comparison against J4",
+      "signal_family": "Same as J4",
+      "sizing_profile": "25% nominal margin",
+      "status": "SPECIFIED_NOT_IMPLEMENTED",
+      "stop_family": "G1",
+      "symbols": [
+        "AVAXUSDT",
+        "SUIUSDT",
+        "PEPEUSDT"
+      ],
+      "window": {
+        "end_exclusive": "2026-08-26T00:00:00Z",
+        "start_inclusive": "2026-08-19T00:00:00Z"
+      }
+    }
+  ],
+  "known_ambiguities": [
+    {
+      "detail": "Sources define threshold logic and reset semantics but do not identify final native backend formula/config field names.",
+      "id": "AMB-001",
+      "source_files": [
+        "candidates_12.json",
+        "TriggerTrade_Research_V2_Economic_Redesign_RU.md"
+      ],
+      "status": "IMPLEMENTATION_MAPPING_PENDING",
+      "topic": "RET5/RET15 backend mapping"
+    },
+    {
+      "detail": "Sources define stop geometry values but not the final repository-native config field mapping.",
+      "id": "AMB-002",
+      "source_files": [
+        "common_profile.json",
+        "candidates_12.json"
+      ],
+      "status": "IMPLEMENTATION_MAPPING_PENDING",
+      "topic": "G0/G1 native config fields"
+    },
+    {
+      "detail": "Sources require TTL=15m and terminal cancellation semantics; exact lifecycle field/wire mapping remains pending.",
+      "id": "AMB-003",
+      "source_files": [
+        "common_profile.json",
+        "candidates_12.json"
+      ],
+      "status": "IMPLEMENTATION_MAPPING_PENDING",
+      "topic": "TTL lifecycle contract field"
+    },
+    {
+      "detail": "Sources require end-window mark valuation and leverage margin/liquidation readiness but do not provide a concrete historical mark-price adapter path.",
+      "id": "AMB-004",
+      "source_files": [
+        "common_profile.json",
+        "TriggerTrade_Research_V2_Economic_Redesign_RU.md"
+      ],
+      "status": "IMPLEMENTATION_MAPPING_PENDING",
+      "topic": "Historical mark-price source"
+    },
+    {
+      "detail": "Sources require factual funding; latest implementation report says a funding-facts path exists, but source package does not specify the repository adapter/file path for sourcing those facts.",
+      "id": "AMB-005",
+      "source_files": [
+        "common_profile.json",
+        "TriggerTrade_Research_V2_Economic_Redesign_RU.md"
+      ],
+      "status": "IMPLEMENTATION_MAPPING_PENDING",
+      "topic": "Historical funding source adapter path"
+    },
+    {
+      "detail": "Sources define daily-loss basis and missing-data semantics; final native representation for V2 campaign configs is not specified.",
+      "id": "AMB-006",
+      "source_files": [
+        "common_profile.json",
+        "TriggerTrade_Research_V2_Economic_Redesign_RU.md"
+      ],
+      "status": "IMPLEMENTATION_MAPPING_PENDING",
+      "topic": "V2 daily-loss native representation"
+    },
+    {
+      "detail": "Sources give sizing formula and caps; exact canonical sizing component split remains pending.",
+      "id": "AMB-007",
+      "source_files": [
+        "common_profile.json",
+        "candidates_12.json"
+      ],
+      "status": "IMPLEMENTATION_MAPPING_PENDING",
+      "topic": "Risk-based sizing implementation mapping"
+    },
+    {
+      "detail": "Evidence says some config IDs share exported numeric drafts while metadata differs; do not collapse them without operational fingerprints and discriminator fixtures.",
+      "id": "AMB-008",
+      "source_files": [
+        "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+        "witnesses.json"
+      ],
+      "status": "IMPLEMENTATION_MAPPING_PENDING",
+      "topic": "Numeric config equivalence"
+    }
+  ],
+  "program_id": "RESEARCH_V2",
+  "screening": {
+    "confirmation30": {
+      "end_exclusive": "2026-10-02T00:00:00Z",
+      "start_inclusive": "2026-09-02T00:00:00Z"
+    },
+    "gates_path": "docs/research-v2/screening/RESEARCH_V2_SCREENING_GATES.json",
+    "holdout7": {
+      "end_exclusive": "2026-09-02T00:00:00Z",
+      "start_inclusive": "2026-08-26T00:00:00Z"
+    },
+    "primary_window": {
+      "end_exclusive": "2026-08-26T00:00:00Z",
+      "start_inclusive": "2026-08-19T00:00:00Z"
+    },
+    "status": "SPECIFIED_NOT_IMPLEMENTED"
+  },
+  "source_files": [
+    {
+      "bytes": 73479,
+      "file": "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+      "sha256": "4c85f4804d240171d80c31a2c05f74c77c5ee7d109c53cc5d48ecb682b50d83d"
+    },
+    {
+      "bytes": 6658,
+      "file": "common_profile.json",
+      "sha256": "a42dab3b1a81fdb9d92b7614cbec0480382cdc4f3509719517a66f991e8b80c3"
+    },
+    {
+      "bytes": 32059,
+      "file": "candidates_12.json",
+      "sha256": "5bf9bb5ce4ba99345cfabadbe867d960c94f90b77e101105ae7b8bd10bb1992c"
+    },
+    {
+      "bytes": 101035,
+      "file": "TriggerTrade_Research_V2_Target_Model.xlsx",
+      "sha256": "9e7c25f8c0750b034e330aedeb03b5f7035f36afbf3ba45026efd397a5b00554"
+    },
+    {
+      "bytes": 239,
+      "file": "checks.json",
+      "sha256": "b00bf3ac27224266ba4718988e392c3b7b1a789dd7e48612dcab4d4cea448980"
+    },
+    {
+      "bytes": 316798,
+      "file": "witnesses.json",
+      "sha256": "f2ca33aec1cf89980f841ff9ff3da1b63594f1883c70d647c092b078fe51a72c"
+    },
+    {
+      "bytes": 750,
+      "file": "utilization.json",
+      "sha256": "34b28c00fe378d1a5cb7a9bf92bf2389838410272d9506c7531f58a3e10bd1a4"
+    },
+    {
+      "bytes": 9717,
+      "file": "arms_metrics.csv",
+      "sha256": "5a193871a4ad349b7f12fbb83bb154af23bd68b6f4d0877e097e70a127e45321"
+    },
+    {
+      "bytes": 5410,
+      "file": "unique_closed.csv",
+      "sha256": "c9fdefe1d75b7889cfe0473fab9364b9928a471ec352141fad9c21abce8a3c5a"
+    }
+  ],
+  "status": "J0_J7_IMPLEMENTED_NOT_RUN"
+}

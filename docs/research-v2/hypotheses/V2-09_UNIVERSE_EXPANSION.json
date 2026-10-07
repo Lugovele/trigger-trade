@@ -1,0 +1,48 @@
+{
+  "current_behavior": "Фактический поток AVAX/SUI/PEPE; остальные в config не равны проверенным рынкам.",
+  "dependencies": [],
+  "economic_mechanism": "Больше независимых по времени/структуре эпизодов; численность сама не гарантирует независимость.",
+  "expected_effect_on_capital_utilization": "Более частое использование свободного капитала без static 70% неиспользуемых budgets.",
+  "expected_effect_on_expectancy": "Нужна проверка incremental net по новым инструментам.",
+  "expected_effect_on_frequency": "Не закладывать автоматически 10/3 кратность.",
+  "expected_effect_on_risk": "Одновременные коррелированные losses; лимит basket-risk общий.",
+  "fail_7d": "Увеличились только коррелированные сигналы/fees либо экономическая нижняя граница не достигнута.",
+  "family": "I UNIVERSE",
+  "hypothesis": "Дополнительные инструменты увеличат различные прибыльные возможности, а не только BTC-копии.",
+  "inherits": "common_profile.json unless explicitly overridden",
+  "parameter_values": {
+    "base": [
+      "AVAXUSDT",
+      "SUIUSDT",
+      "PEPEUSDT"
+    ],
+    "expanded": [
+      "BTCUSDT",
+      "ETHUSDT",
+      "SOLUSDT",
+      "XRPUSDT",
+      "DOGEUSDT",
+      "SUIUSDT",
+      "PEPEUSDT",
+      "AVAXUSDT",
+      "LINKUSDT",
+      "BNBUSDT"
+    ],
+    "fixed_equal_allocation": false,
+    "risk_budget_common": 0.015,
+    "single_margin_cap_per_coin": 0.33
+  },
+  "pass_7d": "Добавленные fills и combined net помогают пройти target без нарушения risk.",
+  "priority": "SECONDARY",
+  "proposed_change": "Парное расширение тройки до исходных десяти при том же signal, параметрах и общем risk budget.",
+  "research_id": "V2-09",
+  "source_provenance": [
+    "candidates_12.json",
+    "TriggerTrade_Research_V2_Economic_Redesign_RU.md",
+    "TriggerTrade_Research_V2_Target_Model.xlsx:Candidates"
+  ],
+  "source_status": "PROPOSED_NOT_RUN; effects directional hypotheses, not estimated outcomes",
+  "status": "SPECIFIED_NOT_IMPLEMENTED",
+  "target_feasibility_requirement": "При фактическом notional 750 USDT: 10–14 fills/7D и необходимая net expectancy 0.6222%–0.4444% notional для +46.67 USDT; +70 требует 0.9333%–0.6667%. При меньшем notional пересчитать. Это требования, не ожидаемые доходности.",
+  "test_7d": "Один выживший signal: 3 vs10 symbols, тот же период; не выбирать монеты после просмотра PnL."
+}
