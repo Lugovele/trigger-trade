@@ -831,11 +831,12 @@ def compression_breakout_signal(
     prior_range_low: Decimal,
     rvol5_value: Decimal,
     turnover_acceleration_value: Decimal,
+    compression_ratio_max: Decimal = Decimal("0.80"),
 ) -> V2SignalResult:
     if len(preceding_atr15_values) < 96:
         return V2SignalResult(V2DecisionStatus.UNAVAILABLE, V2Direction.NONE, V2_SIGNAL_COMPRESSION_VERSION, "INSUFFICIENT_ATR_MEDIAN_HISTORY")
     median = _median_decimal(preceding_atr15_values[-96:])
-    if median <= 0 or atr15_value / median > Decimal("0.80"):
+    if median <= 0 or atr15_value / median > compression_ratio_max:
         return V2SignalResult(V2DecisionStatus.NONE, V2Direction.NONE, V2_SIGNAL_COMPRESSION_VERSION, "COMPRESSION_FILTER_FAILED")
     if rvol5_value < Decimal("1.5"):
         return V2SignalResult(V2DecisionStatus.NONE, V2Direction.NONE, V2_SIGNAL_COMPRESSION_VERSION, "RVOL5_BELOW_1_5")

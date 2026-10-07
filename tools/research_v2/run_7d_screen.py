@@ -42,12 +42,14 @@ from triggertrade.research_v2 import (  # noqa: E402
     ResearchV2SetResolution,
     V2DecisionStatus,
     V2Direction,
+    V2SignalResult,
     aggregate_completed_bars,
     atr15,
     compression_breakout_signal,
     continuation_signal,
     ema15,
     latest_protective_swing5,
+    load_common_profile,
     load_research_v2_jobs,
     physical_symbol_for_research_v2,
     ret5_ret15_or_signal,
@@ -66,6 +68,7 @@ from triggertrade.research_v2_execution import (  # noqa: E402
     VenueConstraints,
     build_research_v2_canonical_execution_profile,
     construct_research_v2_order_spec,
+    evaluate_research_v2_g0_structural_eligibility,
     evaluate_research_v2_portfolio_grant,
 )
 from triggertrade.research_v2_handoff import produce_research_v2_market_handoff  # noqa: E402
@@ -75,7 +78,7 @@ from triggertrade.services.research_backtest_execution import (  # noqa: E402
     _research_v1_backtest_funding_amount,
     _simulate_research_v1_backtest_lifecycle,
 )
-from triggertrade.set_engine import HandoffContext, HandoffFacts, HandoffReferenceLevel, q18_export_text  # noqa: E402
+from triggertrade.set_engine import HandoffContext, HandoffFacts, HandoffReferenceLevel, directional_efficiency, q18_export_text  # noqa: E402
 
 
 EXPECTED_DATASET_ID = "research-v2-7d-20260819-20260826-v1"
@@ -1057,6 +1060,14 @@ def materialize_research_v2_set_population(
             reset_buffer: list[tuple[Decimal, Decimal]] = []
             for observed_at in _job_calendar_cutoffs(job, timeline.candles):
                 signal, evidence = _evaluate_job_signal_from_timeline(job, timeline=timeline, cutoff=observed_at, venue=venue)
+                _append_candidate_census(
+                    output_dir=output_dir,
+                    job=job,
+                    symbol=symbol,
+                    observed_at=observed_at,
+                    signal=signal,
+                    evidence=evidence,
+                )
                 diagnostics["calendar_slots_evaluated"] += 1
                 done += 1
                 if progress is not None:
@@ -1106,6 +1117,7 @@ def materialize_research_v2_set_population(
                     "set_family": str(job.runtime_profile["signal"]["family"]),
                     "set_scan_key": _set_scan_key(job),
                     "applicable_jobs": [item.job_id for item in jobs if _set_scan_key(item) == _set_scan_key(job)],
+                    "research_identity": _research_identity_payload(job),
                     "symbol": symbol,
                     "physical_symbol": physical,
                     "observed_at": resolution.observed_at,
@@ -1317,6 +1329,26 @@ def _evaluate_job_signal_from_timeline(
     family = str(job.runtime_profile["signal"]["family"])
     if family in {"RET5_RET15_OR", "RET5_OR_RET15"}:
         signal = base
+    elif family == "RET_OR_TREND_ONLY":
+        ema20_value = _latest_at_or_before(timeline.ema20, cutoff)
+        ema50_value = _latest_at_or_before(timeline.ema50, cutoff)
+        evidence.update({"ema20": _text_or_none(ema20_value), "ema50": _text_or_none(ema50_value), "rvol5_gate": "DISABLED"})
+        if ema20_value is None or ema50_value is None:
+            signal = _unavailable_signal(job, "TREND_ONLY_TIMELINE_FEATURE_UNAVAILABLE")
+        else:
+            signal = _trend_only_signal(job=job, base=base, ema20=ema20_value, ema50=ema50_value, return15_pct_points=r15)
+    elif family == "RET_OR_RVOL_ONLY":
+        rv = _latest_at_or_before(timeline.rvol5, cutoff)
+        min_rv = _decimal(job.runtime_profile["signal"].get("rvol5_min", "1.2"))
+        evidence.update({"rvol5": _text_or_none(rv), "trend_gate": "DISABLED", "rvol5_min": str(min_rv)})
+        if rv is None:
+            signal = _unavailable_signal(job, "RVOL_ONLY_TIMELINE_FEATURE_UNAVAILABLE")
+        elif base.status is not V2DecisionStatus.PASS:
+            signal = V2SignalResult(V2DecisionStatus.NONE, V2Direction.NONE, "V2-SIGNAL-RET5-RET15-OR-RVOL-ONLY-V1", base.reason)
+        elif rv < min_rv:
+            signal = V2SignalResult(V2DecisionStatus.NONE, V2Direction.NONE, "V2-SIGNAL-RET5-RET15-OR-RVOL-ONLY-V1", "RVOL5_BELOW_THRESHOLD")
+        else:
+            signal = V2SignalResult(V2DecisionStatus.PASS, base.direction, "V2-SIGNAL-RET5-RET15-OR-RVOL-ONLY-V1")
     elif family == "MOMENTUM_CONTINUATION":
         ema20_value = _latest_at_or_before(timeline.ema20, cutoff)
         ema50_value = _latest_at_or_before(timeline.ema50, cutoff)
@@ -1326,6 +1358,48 @@ def _evaluate_job_signal_from_timeline(
             signal = _unavailable_signal(job, "CONTINUATION_TIMELINE_FEATURE_UNAVAILABLE")
         else:
             signal = continuation_signal(base=base, ema20=ema20_value, ema50=ema50_value, return15_pct_points=r15, rvol5_value=rv)
+    elif family == "MOMENTUM_CONTINUATION_SHORT_DE":
+        ema20_value = _latest_at_or_before(timeline.ema20, cutoff)
+        ema50_value = _latest_at_or_before(timeline.ema50, cutoff)
+        rv = _latest_at_or_before(timeline.rvol5, cutoff)
+        de_result = _directional_efficiency5_from_timeline(timeline=timeline, cutoff=cutoff)
+        evidence.update(
+            {
+                "ema20": _text_or_none(ema20_value),
+                "ema50": _text_or_none(ema50_value),
+                "rvol5": _text_or_none(rv),
+                "directional_efficiency_5m": de_result["value"],
+                "directional_efficiency_source_closes": de_result["source_closes"],
+                "directional_efficiency_source_close_times": de_result["source_close_times"],
+            }
+        )
+        if ema20_value is None or ema50_value is None or rv is None:
+            signal = _unavailable_signal(job, "CONTINUATION_TIMELINE_FEATURE_UNAVAILABLE")
+        else:
+            signal = continuation_signal(base=base, ema20=ema20_value, ema50=ema50_value, return15_pct_points=r15, rvol5_value=rv)
+            if signal.status is V2DecisionStatus.PASS and signal.direction is V2Direction.SHORT:
+                threshold = _decimal(job.runtime_profile["signal"].get("short_directional_efficiency_min", "0.30"))
+                evidence["short_directional_efficiency_min"] = str(threshold)
+                if de_result["value"] is None:
+                    signal = V2SignalResult(V2DecisionStatus.UNAVAILABLE, V2Direction.NONE, "V2-SIGNAL-CONTINUATION-SHORT-DE-V1", "DIRECTIONAL_EFFICIENCY_UNAVAILABLE")
+                elif _decimal(de_result["value"]) < threshold:
+                    signal = V2SignalResult(V2DecisionStatus.NONE, V2Direction.NONE, "V2-SIGNAL-CONTINUATION-SHORT-DE-V1", "DIRECTIONAL_EFFICIENCY_BELOW_0_30")
+                else:
+                    signal = V2SignalResult(V2DecisionStatus.PASS, V2Direction.SHORT, "V2-SIGNAL-CONTINUATION-SHORT-DE-V1")
+    elif family == "MOMENTUM_CONTINUATION_TURNOVER":
+        ema20_value = _latest_at_or_before(timeline.ema20, cutoff)
+        ema50_value = _latest_at_or_before(timeline.ema50, cutoff)
+        rv = _latest_at_or_before(timeline.rvol5, cutoff)
+        accel = _latest_at_or_before(timeline.turnover_acceleration, cutoff)
+        evidence.update({"ema20": _text_or_none(ema20_value), "ema50": _text_or_none(ema50_value), "rvol5": _text_or_none(rv), "turnover_acceleration": _text_or_none(accel)})
+        if ema20_value is None or ema50_value is None or rv is None or accel is None:
+            signal = _unavailable_signal(job, "CONTINUATION_TURNOVER_TIMELINE_FEATURE_UNAVAILABLE")
+        else:
+            signal = continuation_signal(base=base, ema20=ema20_value, ema50=ema50_value, return15_pct_points=r15, rvol5_value=rv)
+            threshold = _decimal(job.runtime_profile["signal"].get("turnover_acceleration_min", "1.2"))
+            evidence["turnover_acceleration_min"] = str(threshold)
+            if signal.status is V2DecisionStatus.PASS and accel < threshold:
+                signal = V2SignalResult(V2DecisionStatus.NONE, V2Direction.NONE, "V2-SIGNAL-CONTINUATION-TURNOVER-V1", "TURNOVER_ACCELERATION_BELOW_THRESHOLD")
     elif family == "COMPRESSION_BREAKOUT":
         rv = _latest_at_or_before(timeline.rvol5, cutoff)
         accel = _latest_at_or_before(timeline.turnover_acceleration, cutoff)
@@ -1343,7 +1417,11 @@ def _evaluate_job_signal_from_timeline(
                 prior_range_low=range_pair[1],
                 rvol5_value=rv,
                 turnover_acceleration_value=accel,
+                compression_ratio_max=_decimal(job.runtime_profile["signal"].get("compression_ratio_max", "0.80")),
             )
+            evidence["compression_ratio"] = None if median == 0 else str(atr_value / median)
+            evidence["compression_ratio_max"] = str(job.runtime_profile["signal"].get("compression_ratio_max", "0.80"))
+            evidence["compression_ratio_bucket"] = _compression_ratio_bucket(atr_value=atr_value, median=median)
     elif family == "EXHAUSTION_REVERSAL":
         accel = _latest_at_or_before(timeline.turnover_acceleration, cutoff)
         right = bisect_left(timeline.close_times, cutoff + timedelta(microseconds=1))
@@ -1364,6 +1442,7 @@ def _evaluate_job_signal_from_timeline(
             )
     else:
         signal = _unavailable_signal(job, f"UNSUPPORTED_SIGNAL_FAMILY:{family}")
+    signal = _apply_direction_mode(job, signal)
     evidence["signal_status"] = signal.status.value
     evidence["signal_direction"] = signal.direction.value
     evidence["signal_reason"] = signal.reason
@@ -1377,6 +1456,54 @@ def _evaluate_job_signal_from_timeline(
         evidence["structural_reference_available_at"] = None if swing is None else _iso(swing.available_at)
         evidence["structural_reference_age_seconds"] = None if swing is None else int((cutoff.astimezone(UTC) - swing.available_at).total_seconds())
     return signal, evidence
+
+
+def _trend_only_signal(
+    *,
+    job: ResearchV2JobConfig,
+    base,
+    ema20: Decimal,
+    ema50: Decimal,
+    return15_pct_points: Decimal,
+):
+    if base.status is not V2DecisionStatus.PASS:
+        return V2SignalResult(V2DecisionStatus.NONE, V2Direction.NONE, "V2-SIGNAL-RET5-RET15-OR-TREND-ONLY-V1", base.reason)
+    if base.direction is V2Direction.LONG and ema20 > ema50 and return15_pct_points > 0:
+        return V2SignalResult(V2DecisionStatus.PASS, V2Direction.LONG, "V2-SIGNAL-RET5-RET15-OR-TREND-ONLY-V1")
+    if base.direction is V2Direction.SHORT and ema20 < ema50 and return15_pct_points < 0:
+        return V2SignalResult(V2DecisionStatus.PASS, V2Direction.SHORT, "V2-SIGNAL-RET5-RET15-OR-TREND-ONLY-V1")
+    return V2SignalResult(V2DecisionStatus.NONE, V2Direction.NONE, "V2-SIGNAL-RET5-RET15-OR-TREND-ONLY-V1", "TREND_FILTER_FAILED")
+
+
+def _apply_direction_mode(job: ResearchV2JobConfig, signal):
+    if signal.status is not V2DecisionStatus.PASS:
+        return signal
+    mode = str(job.runtime_profile.get("hypothesis", {}).get("direction_mode") or job.runtime_profile.get("signal", {}).get("direction_mode") or "LONG_SHORT")
+    if mode == "LONG_ONLY" and signal.direction is V2Direction.SHORT:
+        return V2SignalResult(V2DecisionStatus.NONE, V2Direction.NONE, signal.signal_version, "DIRECTION_MODE_SHORT_SUPPRESSED")
+    if mode == "SHORT_ONLY" and signal.direction is V2Direction.LONG:
+        return V2SignalResult(V2DecisionStatus.NONE, V2Direction.NONE, signal.signal_version, "DIRECTION_MODE_LONG_SUPPRESSED")
+    return signal
+
+
+def _directional_efficiency5_from_timeline(*, timeline: FeatureTimeline, cutoff: datetime) -> dict[str, Any]:
+    bars = aggregate_completed_bars(timeline.candles, timeframe_minutes=5, cutoff=cutoff)
+    source = tuple(bar for bar in bars if bar.close_time <= cutoff)[-9:]
+    if len(source) != 9:
+        return {"value": None, "source_closes": [str(bar.close) for bar in source], "source_close_times": [_iso(bar.close_time) for bar in source]}
+    value = directional_efficiency(closes=(str(bar.close) for bar in source))
+    return {"value": value, "source_closes": [str(bar.close) for bar in source], "source_close_times": [_iso(bar.close_time) for bar in source]}
+
+
+def _compression_ratio_bucket(*, atr_value: Decimal, median: Decimal) -> str | None:
+    if median <= 0:
+        return None
+    ratio = atr_value / median
+    if ratio <= Decimal("0.80"):
+        return "LTE_0_80"
+    if ratio <= Decimal("1.00"):
+        return "GT_0_80_LTE_1_00"
+    return "GT_1_00"
 
 
 def _replay_one_context(
@@ -1418,6 +1545,35 @@ def _replay_one_context(
     funding = funding_cache[physical]
     profile = build_research_v2_canonical_execution_profile(job)
     resolution = _resolution_from_record(record)
+    g0_eligibility = _g0_eligibility_only_result(job=job, record=record, venue=venue, direction=resolution.direction)
+    if g0_eligibility is not None and g0_eligibility.status != "PASS":
+        return {
+            "status": "HYPOTHESIS_REJECTED",
+            "reason_code": f"G0_ELIGIBILITY_{g0_eligibility.reason_code}",
+            "job_id": job.job_id,
+            "symbol": logical,
+            "observed_at": record["observed_at"],
+            "research_identity": _research_identity_payload(job, execution_profile_fingerprint=profile.config_fingerprint),
+            "g0_eligibility_evidence": {
+                **g0_eligibility.evidence,
+                "result": g0_eligibility.status,
+                "reason_code": g0_eligibility.reason_code,
+                "portfolio_grant_evaluated": False,
+                "order_spec_created": False,
+                "cooldown_evaluated": False,
+                "account_state_mutated": False,
+            },
+            "market_handoff": None,
+            "portfolio_grant": None,
+            "daily_equity_guard_evidence": None,
+            "cooldown_evidence": None,
+            "order_spec": None,
+            "reservation_committed": False,
+            "reservation_released": False,
+            "reservation_release_at": None,
+            "state_committed": False,
+            "account_event_ledger": [],
+        }
     handoff = produce_research_v2_market_handoff(
         resolution=resolution,
         facts=_handoff_facts_from_evidence(
@@ -1637,6 +1793,18 @@ def _replay_one_context(
         "job_id": job.job_id,
         "symbol": logical,
         "observed_at": record["observed_at"],
+        "research_identity": _research_identity_payload(job, execution_profile_fingerprint=profile.config_fingerprint),
+        "g0_eligibility_evidence": None
+        if g0_eligibility is None
+        else {
+            **g0_eligibility.evidence,
+            "result": g0_eligibility.status,
+            "reason_code": g0_eligibility.reason_code,
+            "portfolio_grant_evaluated": True,
+            "order_spec_created": construction.order_spec is not None,
+            "cooldown_evaluated": True,
+            "account_state_mutated": reservation_committed,
+        },
         "market_handoff": handoff.payload,
         "portfolio_grant": grant.to_payload(),
         "daily_equity_guard_evidence": daily_equity,
@@ -1657,6 +1825,41 @@ def _replay_one_context(
         "account_event_ledger": [event.to_payload() for event in account_events],
         "backtest_lifecycle": asdict(lifecycle),
     }
+
+
+def _g0_eligibility_only_result(
+    *,
+    job: ResearchV2JobConfig,
+    record: Mapping[str, Any],
+    venue: VenueConstraints,
+    direction: V2Direction,
+):
+    signal_profile = job.runtime_profile.get("signal", {})
+    if not isinstance(signal_profile, Mapping) or not signal_profile.get("g0_eligibility_only"):
+        return None
+    evidence = record.get("factual_feature_evidence")
+    if not isinstance(evidence, Mapping):
+        raise ResearchV2RunnerError("G0 eligibility requires factual feature evidence")
+    common = load_common_profile()
+    result = evaluate_research_v2_g0_structural_eligibility(
+        direction=direction.value,
+        stop_profile=common["stop_G0"],
+        venue=venue,
+        reference_price=_decimal(evidence["reference_price"]),
+        atr15=_decimal(evidence["atr15"]),
+        structural_reference_price=_optional_decimal(evidence.get("structural_reference_price")),
+    )
+    result.evidence.update(
+        {
+            "reference_identity": "v2-protective-reference",
+            "reference_formed_at": evidence.get("structural_reference_formed_at"),
+            "reference_confirmed_at": evidence.get("structural_reference_confirmed_at"),
+            "reference_available_at": evidence.get("structural_reference_available_at"),
+            "reference_age_seconds": evidence.get("structural_reference_age_seconds"),
+            "actual_operative_stop_family": str(job.runtime_profile.get("stop", {}).get("type")),
+        }
+    )
+    return result
 
 
 def _simulate_bounded_research_v2_lifecycle(
@@ -2252,6 +2455,9 @@ def _profile_cooldown_minutes(profile: Any) -> int:
 
 
 def _portfolio_book_key(context: Mapping[str, Any]) -> str:
+    identity = context.get("research_identity")
+    if isinstance(identity, Mapping) and identity.get("batch_id") and identity.get("hypothesis_id"):
+        return f"{identity['batch_id']}:{identity['hypothesis_id']}:{context['execution_profile_fingerprint']}"
     return f"{context['job_id']}:{context['execution_profile_fingerprint']}"
 
 
@@ -2293,7 +2499,83 @@ def _dedupe_set_scan_jobs(jobs: Sequence[ResearchV2JobConfig]) -> list[ResearchV
 
 def _set_scan_key(job: ResearchV2JobConfig) -> str:
     signal = dict(job.runtime_profile.get("signal", {}))
-    return canonical_json_digest({"signal": signal, "symbols": list(job.symbols), "window": [job.window_start, job.window_end]})
+    payload: dict[str, Any] = {"signal": signal, "symbols": list(job.symbols), "window": [job.window_start, job.window_end]}
+    identity = _research_identity_payload(job)
+    if identity:
+        payload["research_identity"] = identity
+    return canonical_json_digest(payload)
+
+
+def _research_identity_payload(
+    job: ResearchV2JobConfig,
+    *,
+    dataset_fingerprint: str | None = None,
+    population_fingerprint: str | None = None,
+    execution_profile_fingerprint: str | None = None,
+) -> dict[str, Any]:
+    identity_method = getattr(job, "identity_payload", None)
+    hypothesis = job.runtime_profile.get("hypothesis", {})
+    if not callable(identity_method) and (
+        not isinstance(hypothesis, Mapping) or not hypothesis.get("batch_id") or not hypothesis.get("hypothesis_id")
+    ):
+        return {}
+    if callable(identity_method):
+        payload = dict(identity_method(dataset_fingerprint=dataset_fingerprint, population_fingerprint=population_fingerprint))
+    else:
+        payload = {
+            "batch_id": hypothesis.get("batch_id"),
+            "hypothesis_id": hypothesis.get("hypothesis_id"),
+            "parent_job_id": hypothesis.get("parent_job_id"),
+            "parent_hypothesis_id": hypothesis.get("parent_hypothesis_id"),
+            "research_direction": hypothesis.get("research_direction"),
+            "resolved_config": job.normalized_config(),
+            "strategy_fingerprint": getattr(job, "signal_config_fingerprint", None),
+            "dataset_fingerprint": dataset_fingerprint,
+            "window": {"start_inclusive": job.window_start, "end_exclusive": job.window_end},
+            "warmup": job.runtime_profile.get("warmup_days"),
+            "population_fingerprint": population_fingerprint,
+        }
+    if execution_profile_fingerprint is not None:
+        payload["execution_profile_fingerprint"] = execution_profile_fingerprint
+    elif payload.get("execution_profile_fingerprint") is None:
+        payload.pop("execution_profile_fingerprint", None)
+    return {key: value for key, value in payload.items() if value is not None}
+
+
+def _append_candidate_census(
+    *,
+    output_dir: Path,
+    job: ResearchV2JobConfig,
+    symbol: str,
+    observed_at: datetime,
+    signal,
+    evidence: Mapping[str, Any],
+) -> None:
+    identity = _research_identity_payload(job)
+    if not identity:
+        return
+    gate_results = {
+        key: value
+        for key, value in evidence.items()
+        if key.endswith("_gate") or key.endswith("_min") or key in {"signal_status", "signal_direction", "signal_reason"}
+    }
+    unavailable = sorted(key for key, value in evidence.items() if key.endswith("_status") and value != V2DecisionStatus.AVAILABLE.value)
+    row = {
+        "batch_id": identity.get("batch_id"),
+        "hypothesis_id": identity.get("hypothesis_id"),
+        "parent_job_id": identity.get("parent_job_id"),
+        "timestamp": _iso(observed_at),
+        "symbol": symbol,
+        "raw_direction": signal.direction.value,
+        "status": signal.status.value,
+        "first_rejection_reason": None if signal.status is V2DecisionStatus.PASS else signal.reason,
+        "simultaneous_blockers": unavailable,
+        "gate_results": gate_results,
+        "feature_values": dict(evidence),
+        "feature_availability": {key: value for key, value in evidence.items() if key.endswith("_status")},
+        "research_identity": identity,
+    }
+    append_jsonl(output_dir / "hypothesis_candidate_census.jsonl", row)
 
 
 def _execution_contexts_from_population(population: Mapping[str, Any], selected_jobs: Sequence[ResearchV2JobConfig]) -> list[dict[str, Any]]:
@@ -2305,13 +2587,22 @@ def _execution_contexts_from_population(population: Mapping[str, Any], selected_
             if job is None:
                 continue
             profile = build_research_v2_canonical_execution_profile(job)
+            research_identity = _research_identity_payload(job, execution_profile_fingerprint=profile.config_fingerprint)
             contexts.append(
                 {
-                    "context_id": canonical_json_digest({"set_result_id": record["set_result_id"], "job_id": job.job_id, "profile": profile.config_fingerprint}),
+                    "context_id": canonical_json_digest(
+                        {
+                            "set_result_id": record["set_result_id"],
+                            "job_id": job.job_id,
+                            "profile": profile.config_fingerprint,
+                            "research_identity": research_identity,
+                        }
+                    ),
                     "job_id": job.job_id,
                     "job": job,
                     "set_scan_key": record["set_scan_key"],
                     "execution_profile_fingerprint": profile.config_fingerprint,
+                    "research_identity": research_identity,
                     "record": record,
                     "symbol": record["symbol"],
                     "observed_at": record["observed_at"],
@@ -2327,7 +2618,7 @@ def _context_identity(context: Mapping[str, Any]) -> tuple[str, str]:
 
 
 def _context_payload(context: Mapping[str, Any]) -> dict[str, Any]:
-    return {
+    payload = {
         "context_id": str(context["context_id"]),
         "job_id": str(context["job_id"]),
         "set_result_id": str(context["record"]["set_result_id"]),
@@ -2337,6 +2628,9 @@ def _context_payload(context: Mapping[str, Any]) -> dict[str, Any]:
         "observed_at": str(context["observed_at"]),
         "set_scan_key": str(context["set_scan_key"]),
     }
+    if context.get("research_identity"):
+        payload["research_identity"] = dict(context["research_identity"])
+    return payload
 
 
 def _write_phase_b_job_results(
@@ -2393,7 +2687,7 @@ def _write_phase_b_job_results(
             result = row.get("result", {})
             if result.get("order_spec"):
                 counts["approved"] += 1
-            elif result.get("status") in {"BLOCKED", "CONSTRUCTION_REJECTED", "PORTFOLIO_BLOCKED", "POSITION_REJECTED"}:
+            elif result.get("status") in {"BLOCKED", "CONSTRUCTION_REJECTED", "PORTFOLIO_BLOCKED", "POSITION_REJECTED", "HYPOTHESIS_REJECTED"}:
                 counts["blocked"] += 1
             lifecycle = result.get("backtest_lifecycle", {})
             counts["accepted"] += 1 if lifecycle.get("accepted") else 0
@@ -3279,6 +3573,7 @@ def _compression_signal(
         prior_range_low=min(bar.low for bar in prior),
         rvol5_value=_decimal(rv.value),
         turnover_acceleration_value=_decimal(accel.value),
+        compression_ratio_max=_decimal(job.runtime_profile["signal"].get("compression_ratio_max", "0.80")),
     )
 
 
@@ -3690,8 +3985,12 @@ def _append_replay_evidence(
         "logical_symbol": str(context["record"]["symbol"]),
         "physical_symbol": str(context["record"]["physical_symbol"]),
     }
+    if context.get("research_identity"):
+        base["research_identity"] = dict(context["research_identity"])
     if lifecycle_index is not None:
         base["lifecycle_index"] = lifecycle_index
+    if isinstance(result.get("g0_eligibility_evidence"), Mapping):
+        append_jsonl(output_dir / "g0_eligibility_evidence.jsonl", {**base, **dict(result["g0_eligibility_evidence"])})
     if isinstance(result.get("cooldown_evidence"), Mapping):
         append_jsonl(output_dir / "acceptance_cooldown_evidence.jsonl", {**base, **dict(result["cooldown_evidence"])})
     for event in result.get("account_event_ledger", ()) if isinstance(result.get("account_event_ledger"), Sequence) and not isinstance(result.get("account_event_ledger"), (str, bytes)) else ():

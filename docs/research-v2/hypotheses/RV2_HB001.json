@@ -1,0 +1,125 @@
+{
+  "batch_id": "RV2-HB001",
+  "hypotheses": [
+    {
+      "batch_id": "RV2-HB001",
+      "hypothesis_id": "H001",
+      "parent_job_id": "J4",
+      "parent_hypothesis_id": null,
+      "research_direction": "J4 continuation G0 LONG_ONLY",
+      "direction_mode": "LONG_ONLY",
+      "signal_family": "MOMENTUM_CONTINUATION",
+      "stop_family": "G0",
+      "parameters": {},
+      "metadata": {"council_definition": "J4 continuation, G0, LONG_ONLY"}
+    },
+    {
+      "batch_id": "RV2-HB001",
+      "hypothesis_id": "H002",
+      "parent_job_id": "J7",
+      "parent_hypothesis_id": null,
+      "research_direction": "J7 continuation G1 LONG_ONLY",
+      "direction_mode": "LONG_ONLY",
+      "signal_family": "MOMENTUM_CONTINUATION",
+      "stop_family": "G1",
+      "parameters": {},
+      "metadata": {"council_definition": "J7 continuation, G1, LONG_ONLY"}
+    },
+    {
+      "batch_id": "RV2-HB001",
+      "hypothesis_id": "H003",
+      "parent_job_id": "J3",
+      "parent_hypothesis_id": null,
+      "research_direction": "RET_OR plus J4 trend block only",
+      "direction_mode": "LONG_SHORT",
+      "signal_family": "RET_OR_TREND_ONLY",
+      "stop_family": "G0",
+      "parameters": {},
+      "metadata": {"council_definition": "J3 RET_OR plus J4 trend block, no RVOL gate"}
+    },
+    {
+      "batch_id": "RV2-HB001",
+      "hypothesis_id": "H004",
+      "parent_job_id": "J3",
+      "parent_hypothesis_id": null,
+      "research_direction": "RET_OR plus RVOL only",
+      "direction_mode": "LONG_SHORT",
+      "signal_family": "RET_OR_RVOL_ONLY",
+      "stop_family": "G0",
+      "parameters": {"rvol5_min": "1.2"},
+      "metadata": {"council_definition": "J3 RET_OR plus RVOL5 >= 1.2, no trend block"}
+    },
+    {
+      "batch_id": "RV2-HB001",
+      "hypothesis_id": "H005",
+      "parent_job_id": "J5",
+      "parent_hypothesis_id": null,
+      "research_direction": "J5 compression breakout with G1 stop",
+      "direction_mode": "LONG_SHORT",
+      "signal_family": "COMPRESSION_BREAKOUT",
+      "stop_family": "G1",
+      "parameters": {"compression_ratio_max": "0.80"},
+      "metadata": {"council_definition": "J5 compression signal unchanged, stock G1 ATR-only stop"}
+    },
+    {
+      "batch_id": "RV2-HB001",
+      "hypothesis_id": "H006",
+      "parent_job_id": "J4",
+      "parent_hypothesis_id": null,
+      "research_direction": "J4 continuation with SHORT directional efficiency gate",
+      "direction_mode": "LONG_SHORT",
+      "signal_family": "MOMENTUM_CONTINUATION_SHORT_DE",
+      "stop_family": "G0",
+      "parameters": {"short_directional_efficiency_min": "0.30"},
+      "metadata": {"council_definition": "LONG unchanged; SHORT requires DE >= 0.30 over 9 causal completed 5m closes"}
+    },
+    {
+      "batch_id": "RV2-HB001",
+      "hypothesis_id": "H007",
+      "parent_job_id": "J4",
+      "parent_hypothesis_id": null,
+      "research_direction": "LONG-only continuation with pure G0 eligibility and operative G1 stop",
+      "direction_mode": "LONG_ONLY",
+      "signal_family": "MOMENTUM_CONTINUATION",
+      "stop_family": "G1",
+      "parameters": {"g0_eligibility_only": true},
+      "metadata": {"council_definition": "J4 continuation LONG_ONLY; G0 structural eligibility filter only; stock G1 operative stop"}
+    },
+    {
+      "batch_id": "RV2-HB001",
+      "hypothesis_id": "H008",
+      "parent_job_id": "J4",
+      "parent_hypothesis_id": null,
+      "research_direction": "J4 continuation with turnover acceleration gate",
+      "direction_mode": "LONG_SHORT",
+      "signal_family": "MOMENTUM_CONTINUATION_TURNOVER",
+      "stop_family": "G0",
+      "parameters": {"turnover_acceleration_min": "1.2"},
+      "metadata": {"council_definition": "J4 continuation plus turnover_acceleration >= 1.2 for both directions"}
+    },
+    {
+      "batch_id": "RV2-HB001",
+      "hypothesis_id": "H009",
+      "parent_job_id": "J5",
+      "parent_hypothesis_id": null,
+      "research_direction": "J5 compression threshold 1.00",
+      "direction_mode": "LONG_SHORT",
+      "signal_family": "COMPRESSION_BREAKOUT",
+      "stop_family": "G0",
+      "parameters": {"compression_ratio_max": "1.00"},
+      "metadata": {"council_definition": "J5 compression breakout with ATR15/median96 maximum changed from 0.80 to 1.00"}
+    },
+    {
+      "batch_id": "RV2-HB001",
+      "hypothesis_id": "H010",
+      "parent_job_id": "J6",
+      "parent_hypothesis_id": null,
+      "research_direction": "J6 exhaustion reversal with G1 stop",
+      "direction_mode": "LONG_SHORT",
+      "signal_family": "EXHAUSTION_REVERSAL",
+      "stop_family": "G1",
+      "parameters": {},
+      "metadata": {"council_definition": "J6 exhaustion reversal with stock G1 ATR-only stop"}
+    }
+  ]
+}

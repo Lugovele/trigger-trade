@@ -87,6 +87,13 @@ class V2ConstructionResult:
     economics: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class V2G0EligibilityResult:
+    status: str
+    reason_code: str
+    evidence: dict[str, Any]
+
+
 def build_research_v2_canonical_execution_profile(job: ResearchV2JobConfig) -> ResearchV2ExecutionProfile:
     return build_research_v2_execution_profile(job)
 
@@ -269,6 +276,58 @@ def construct_research_v2_order_spec(
     }
     validate_research_v2_order_spec(spec)
     return V2ConstructionResult("CONSTRUCTED", "CONSTRUCTED", spec, sizing, economics)
+
+
+def evaluate_research_v2_g0_structural_eligibility(
+    *,
+    direction: str,
+    stop_profile: Mapping[str, Any],
+    venue: VenueConstraints,
+    reference_price: Decimal,
+    atr15: Decimal,
+    structural_reference_price: Decimal | None,
+) -> V2G0EligibilityResult:
+    """Pure G0 geometry eligibility check; it creates no order/account effects."""
+
+    evidence: dict[str, Any] = {
+        "eligibility_mode": "G0_STRUCTURAL_ONLY",
+        "operative_stop_family": "G1_ATR_ONLY",
+        "direction": direction,
+        "reference_price": _decimal_text(reference_price),
+        "atr15": _decimal_text(atr15),
+        "structural_reference_price": None if structural_reference_price is None else _decimal_text(structural_reference_price),
+        "tick_size": _decimal_text(venue.tick_size),
+    }
+    if stop_profile.get("type") != "HYBRID_STRUCTURAL":
+        return V2G0EligibilityResult("REJECT", "G0_PROFILE_REQUIRED", evidence)
+    entry = _entry_price(direction=direction, reference=reference_price, atr15=atr15, tick=venue.tick_size)
+    evidence["g0_entry_price_for_eligibility"] = _decimal_text(entry)
+    try:
+        stop = _stop_price(
+            direction=direction,
+            entry=entry,
+            reference=reference_price,
+            atr15=atr15,
+            tick=venue.tick_size,
+            stop_profile=stop_profile,
+            structural_reference_price=structural_reference_price,
+        )
+    except ResearchV2ExecutionError as exc:
+        return V2G0EligibilityResult("REJECT", str(exc), evidence)
+    if stop is None:
+        return V2G0EligibilityResult("REJECT", "STOP_REFERENCE_UNAVAILABLE", evidence)
+    evidence["g0_stop_price_for_eligibility"] = _decimal_text(stop)
+    evidence["g0_structural_distance"] = _decimal_text(_risk_distance(direction, entry, stop))
+    rejection = _final_stop_geometry_rejection(
+        direction=direction,
+        entry=entry,
+        stop=stop,
+        atr15=atr15,
+        stop_profile=stop_profile,
+    )
+    if rejection is not None:
+        return V2G0EligibilityResult("REJECT", rejection, evidence)
+    return V2G0EligibilityResult("PASS", "PASS", evidence)
 
 
 def validate_research_v2_order_spec(order_spec: Mapping[str, Any]) -> dict[str, Any]:
