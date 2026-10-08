@@ -399,6 +399,7 @@ def test_finalize_existing_resolves_hypotheses_from_manifest_without_baseline_lo
     monkeypatch.setattr(Path, "mkdir", lambda self, parents=False, exist_ok=False: None)
     monkeypatch.setattr(hypothesis_batch_cli, "write_json", lambda path, payload: writes.setdefault(str(path), payload))
     monkeypatch.setattr(hypothesis_batch_cli, "finalize_research_v2_existing_run", fake_finalize)
+    monkeypatch.setattr(hypothesis_batch_cli, "validate_dataset", lambda path: {"screen_start": "2026-05-24T00:00:00Z", "screen_end": "2026-05-31T00:00:00Z"})
 
     assert hypothesis_batch_cli.main(
         [
@@ -476,6 +477,7 @@ def test_finalize_existing_selection_path_does_not_call_replay_or_materializatio
     monkeypatch.setattr(Path, "mkdir", lambda self, parents=False, exist_ok=False: None)
     monkeypatch.setattr(hypothesis_batch_cli, "write_json", lambda path, payload: None)
     monkeypatch.setattr(hypothesis_batch_cli, "finalize_research_v2_existing_run", fake_finalize)
+    monkeypatch.setattr(hypothesis_batch_cli, "validate_dataset", lambda path: {"screen_start": "2026-05-24T00:00:00Z", "screen_end": "2026-05-31T00:00:00Z"})
     monkeypatch.setattr(hypothesis_batch_cli, "run_screen_two_phase", lambda **kwargs: (_ for _ in ()).throw(AssertionError("replay must not run")))
     monkeypatch.setattr(screen_runner, "materialize_research_v2_set_population", lambda **kwargs: (_ for _ in ()).throw(AssertionError("materialization must not run")))
 
@@ -492,6 +494,53 @@ def test_finalize_existing_selection_path_does_not_call_replay_or_materializatio
     ) == 0
 
     assert [job.job_id for job in captured["selected_jobs"]] == ["H001"]  # type: ignore[union-attr]
+
+
+def test_hypothesis_jobs_bind_to_dataset_window_before_materialization() -> None:
+    job = load_rv2_hb001_hypothesis_jobs()["H001"]
+    rebound = screen_runner.bind_jobs_to_dataset_window(
+        [job],
+        {"screen_start": "2026-05-24T00:00:00Z", "screen_end": "2026-05-31T00:00:00Z"},
+    )[0]
+
+    assert rebound.window_start == "2026-05-24T00:00:00Z"
+    assert rebound.window_end == "2026-05-31T00:00:00Z"
+    assert rebound.parent_job_id == job.parent_job_id
+    assert rebound.signal_config["signal"] == job.signal_config["signal"]
+    assert job.window_start == "2026-08-19T00:00:00Z"
+
+
+def test_two_phase_run_refuses_empty_population_without_replay(monkeypatch) -> None:
+    job = load_rv2_hb001_hypothesis_jobs()["H001"]
+    replay_called = False
+
+    class DummyProgress:
+        def __init__(self, **kwargs):
+            self.payload = {}
+
+    def fake_replay(**kwargs):
+        nonlocal replay_called
+        replay_called = True
+        return (0, 0)
+
+    monkeypatch.setattr(screen_runner, "ProgressReporter", DummyProgress)
+    monkeypatch.setattr(screen_runner, "_phase_a_units", lambda jobs, manifest: 0)
+    monkeypatch.setattr(
+        screen_runner,
+        "materialize_research_v2_set_population",
+        lambda **kwargs: {"records": [], "summary": {"matched_episodes": 0}},
+    )
+    monkeypatch.setattr(screen_runner, "replay_research_v2_materialized_population", fake_replay)
+    monkeypatch.setattr(screen_runner, "write_run_state", lambda *args, **kwargs: None)
+
+    with pytest.raises(screen_runner.ResearchV2RunnerError, match="EMPTY_RESEARCH_V2_POPULATION"):
+        screen_runner.run_screen_two_phase(
+            manifest={"screen_start": "2026-05-24T00:00:00Z", "screen_end": "2026-05-31T00:00:00Z"},
+            selected_jobs=[job],
+            output_dir=Path("unused"),
+        )
+
+    assert not replay_called
 
 
 def _minute_candles(

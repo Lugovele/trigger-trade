@@ -25,6 +25,7 @@ from triggertrade.research_v2_hypotheses import (  # noqa: E402
 from tools.research_v2.run_7d_screen import (  # noqa: E402
     ResearchV2RunnerError,
     finalize_research_v2_existing_run,
+    bind_jobs_to_dataset_window,
     population_fingerprint as research_v2_population_fingerprint,
     read_jsonl,
     run_screen_two_phase,
@@ -72,7 +73,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 jobs_arg=args.hypotheses,
             )
             return 0
-        jobs = [jobs_by_id[hypothesis_id] for hypothesis_id in requested_hypothesis_ids]
+        jobs = bind_jobs_to_dataset_window(
+            [jobs_by_id[hypothesis_id] for hypothesis_id in requested_hypothesis_ids],
+            validate_dataset(args.dataset),
+        )
         report = finalize_research_v2_existing_run(
             output_dir=args.existing_run,
             dataset_path=args.dataset,
@@ -116,6 +120,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if missing:
         raise ResearchV2RunnerError(f"unknown hypothesis IDs: {','.join(missing)}")
     jobs = [jobs_by_id[hypothesis_id] for hypothesis_id in requested]
+    if manifest is not None:
+        jobs = bind_jobs_to_dataset_window(jobs, manifest)
     args.output.mkdir(parents=True, exist_ok=True)
     dataset_fingerprint = canonical_json_digest(_dataset_identity(manifest)) if manifest is not None else None
     _write_resolved_research_specs(

@@ -947,6 +947,7 @@ def run_screen_two_phase(
     output_dir: Path,
     resume: bool = False,
 ) -> tuple[int, int]:
+    selected_jobs = bind_jobs_to_dataset_window(selected_jobs, manifest)
     materialize_jobs = [job for job in selected_jobs if job.signal_family != "LEGACY_SET"]
     phase_a_units = _phase_a_units(materialize_jobs, manifest)
     reporter = ProgressReporter(output_dir=output_dir, global_units_total=phase_a_units + 1)
@@ -957,6 +958,9 @@ def run_screen_two_phase(
         progress=reporter,
     )
     contexts = _execution_contexts_from_population(population, selected_jobs)
+    if selected_jobs and not contexts:
+        write_run_state(output_dir, selected_jobs, completed_count=0, failed_count=len(selected_jobs))
+        raise ResearchV2RunnerError("EMPTY_RESEARCH_V2_POPULATION: no execution contexts were materialized for the selected jobs")
     reporter.payload["global_units_total"] = phase_a_units + max(len(contexts), 1)
     reporter.payload["execution_contexts_total"] = len(contexts)
     completed, total = replay_research_v2_materialized_population(
@@ -972,6 +976,26 @@ def run_screen_two_phase(
     write_run_state(output_dir, selected_jobs, completed_count=completed, failed_count=count_jsonl(output_dir / "job_errors.jsonl"))
     reporter.complete()
     return completed, total
+
+
+def bind_jobs_to_dataset_window(
+    jobs: Sequence[ResearchV2JobConfig],
+    dataset_manifest: Mapping[str, Any],
+) -> list[ResearchV2JobConfig]:
+    start = str(dataset_manifest.get("screen_start") or "")
+    end = str(dataset_manifest.get("screen_end") or "")
+    if not start or not end:
+        raise ResearchV2RunnerError("dataset manifest missing screen_start/screen_end")
+    return [_bind_job_to_window(job, start=start, end=end) for job in jobs]
+
+
+def _bind_job_to_window(job: ResearchV2JobConfig, *, start: str, end: str) -> ResearchV2JobConfig:
+    if getattr(job, "window_start", None) == start and getattr(job, "window_end", None) == end:
+        return job
+    parent = getattr(job, "parent_job", None)
+    if parent is not None:
+        return replace(job, parent_job=replace(parent, window_start=start, window_end=end))
+    return replace(job, window_start=start, window_end=end)
 
 
 def load_research_v2_set_population(

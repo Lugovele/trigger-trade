@@ -75,6 +75,20 @@ def test_research_v2_data_window_must_be_exactly_seven_days() -> None:
         )
 
 
+def test_research_v2_data_package_rejects_all_zero_candle_volume_turnover() -> None:
+    zero_rows = [
+        {"volume": "0", "turnover": "0"},
+        {"volume": "0", "turnover": "0"},
+    ]
+    mixed_rows = [
+        {"volume": "0", "turnover": "0"},
+        {"volume": "1", "turnover": "10"},
+    ]
+
+    assert not prepare_7d_data._candle_volume_turnover_ready(zero_rows)
+    assert prepare_7d_data._candle_volume_turnover_ready(mixed_rows)
+
+
 def test_research_v2_dataset_validator_accepts_holdout_dataset_ids() -> None:
     root = Path("runtime/test-artifacts/holdout-validator")
     manifest_path = root / "dataset_manifest.json"

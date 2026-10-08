@@ -17,7 +17,7 @@ import json
 from pathlib import Path
 import sys
 from time import sleep
-from typing import Any
+from typing import Any, Mapping, Sequence
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
@@ -262,14 +262,28 @@ def prepare_candles(symbol: str) -> dict[str, Any]:
             file_record(meta_path, data_type="candles_metadata", symbol=symbol, physical_symbol=symbol, start=WARMUP_START, end=SCREEN_END, rows=1, source="local_generated"),
         ],
         "summary": {
-            "status": "READY",
+            "status": "READY" if _candle_volume_turnover_ready(rows) else "DATA_INVALID",
             "rows": len(rows),
             "expected_rows": int((SCREEN_END - WARMUP_START).total_seconds() // 60),
             "start": rows[0]["open_time"],
             "end": rows[-1]["close_time"],
             "missing_intervals": [],
+            "volume_zero_count": sum(1 for row in rows if Decimal(str(row["volume"])) == 0),
+            "volume_positive_count": sum(1 for row in rows if Decimal(str(row["volume"])) > 0),
+            "turnover_zero_count": sum(1 for row in rows if Decimal(str(row["turnover"])) == 0),
+            "turnover_positive_count": sum(1 for row in rows if Decimal(str(row["turnover"])) > 0),
+            "min_volume": str(min(Decimal(str(row["volume"])) for row in rows)),
+            "max_volume": str(max(Decimal(str(row["volume"])) for row in rows)),
+            "min_turnover": str(min(Decimal(str(row["turnover"])) for row in rows)),
+            "max_turnover": str(max(Decimal(str(row["turnover"])) for row in rows)),
         },
     }
+
+
+def _candle_volume_turnover_ready(rows: Sequence[Mapping[str, Any]]) -> bool:
+    if not rows:
+        return False
+    return any(Decimal(str(row["volume"])) > 0 for row in rows) and any(Decimal(str(row["turnover"])) > 0 for row in rows)
 
 
 def prepare_raw_trades(logical: str, physical: str) -> dict[str, Any]:
