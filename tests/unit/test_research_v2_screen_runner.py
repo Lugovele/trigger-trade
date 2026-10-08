@@ -292,6 +292,7 @@ def test_research_v2_g0_protective_swing_selection_skips_wrong_side_and_old_refs
         ema50={},
         rvol5={},
         turnover_acceleration={},
+        directional_efficiency5={},
         compression_atr_median96={},
         prior_12_range={},
         swing_long={},
@@ -690,6 +691,7 @@ def test_research_v2_daily_equity_guard_uses_frozen_marks_and_inclusive_threshol
     case_dir = _case_dir("daily_equity_guard")
     manifest_path = _dataset_manifest_with_mark(case_dir, mark_price=Decimal("977.51"))
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["dataset_id"] = "research-v2-7d-20260923-20260930-v1"
     as_of = datetime(2026, 8, 19, 12, 0, tzinfo=UTC)
     book = screen_runner.V2ReplayPortfolioBook(
         account_capital=Decimal("1000"),
@@ -724,6 +726,7 @@ def test_research_v2_daily_equity_guard_uses_frozen_marks_and_inclusive_threshol
     assert evidence["loss_guard_decision"] == "PASS"
     assert evidence["open_positions"][0]["mark_price"] == "977.51"
     assert evidence["daily_equity_delta_usdt"] == "-2.249"
+    assert evidence["source_provenance"] == "research-v2-7d-20260923-20260930-v1"
 
     exact_path = _dataset_manifest_with_mark(case_dir / "exact", mark_price=Decimal("775"))
     exact_manifest = json.loads(exact_path.read_text(encoding="utf-8"))

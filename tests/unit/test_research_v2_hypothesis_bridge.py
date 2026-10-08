@@ -612,6 +612,7 @@ def _manual_timeline(
         ema50={cutoff: ema50},
         rvol5={cutoff: rvol},
         turnover_acceleration={cutoff: accel},
+        directional_efficiency5={},
         compression_atr_median96={},
         prior_12_range={},
         swing_long={},

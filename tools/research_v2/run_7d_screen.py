@@ -165,6 +165,7 @@ class FeatureTimeline:
     ema50: Mapping[datetime, Decimal]
     rvol5: Mapping[datetime, Decimal]
     turnover_acceleration: Mapping[datetime, Decimal]
+    directional_efficiency5: Mapping[datetime, Mapping[str, Any]]
     compression_atr_median96: Mapping[datetime, Decimal]
     prior_12_range: Mapping[datetime, tuple[Decimal, Decimal]]
     swing_long: Mapping[datetime, Decimal]
@@ -1325,8 +1326,16 @@ def build_research_v2_feature_timeline(
     ema50 = _ema_series(bars15, 50)
     rvol: dict[datetime, Decimal] = {}
     accel: dict[datetime, Decimal] = {}
+    de5: dict[datetime, Mapping[str, Any]] = {}
     prior_range: dict[datetime, tuple[Decimal, Decimal]] = {}
     for idx, bar in enumerate(bars5):
+        if idx >= 8:
+            source = tuple(bars5[idx - 8:idx + 1])
+            de5[bar.close_time] = {
+                "value": directional_efficiency(closes=(str(item.close) for item in source)),
+                "source_closes": [str(item.close) for item in source],
+                "source_close_times": [_iso(item.close_time) for item in source],
+            }
         if idx >= 20:
             mean = sum((item.turnover for item in bars5[idx - 20:idx]), Decimal("0")) / Decimal("20")
             if mean != 0:
@@ -1355,6 +1364,7 @@ def build_research_v2_feature_timeline(
         ema50=ema50,
         rvol5=rvol,
         turnover_acceleration=accel,
+        directional_efficiency5=de5,
         compression_atr_median96=atr_median,
         prior_12_range=prior_range,
         swing_long=swing_long,
@@ -1546,12 +1556,12 @@ def _apply_direction_mode(job: ResearchV2JobConfig, signal):
 
 
 def _directional_efficiency5_from_timeline(*, timeline: FeatureTimeline, cutoff: datetime) -> dict[str, Any]:
-    bars = aggregate_completed_bars(timeline.candles, timeframe_minutes=5, cutoff=cutoff)
-    source = tuple(bar for bar in bars if bar.close_time <= cutoff)[-9:]
-    if len(source) != 9:
+    result = _latest_at_or_before(timeline.directional_efficiency5, cutoff)
+    if result is None:
+        bars = aggregate_completed_bars(timeline.candles, timeframe_minutes=5, cutoff=cutoff)
+        source = tuple(bar for bar in bars if bar.close_time <= cutoff)[-9:]
         return {"value": None, "source_closes": [str(bar.close) for bar in source], "source_close_times": [_iso(bar.close_time) for bar in source]}
-    value = directional_efficiency(closes=(str(bar.close) for bar in source))
-    return {"value": value, "source_closes": [str(bar.close) for bar in source], "source_close_times": [_iso(bar.close_time) for bar in source]}
+    return dict(result)
 
 
 def _compression_ratio_bucket(*, atr_value: Decimal, median: Decimal) -> str | None:
@@ -3242,7 +3252,7 @@ def _daily_equity_guard_evidence(
         "threshold_operator": "<=",
         "mark_source": "FROZEN_MARK_PRICE_1M",
         "loss_guard_decision": decision,
-        "source_provenance": "runtime/data/research-v2/7d_20260819_20260826/dataset_manifest.json",
+        "source_provenance": str(dataset_manifest.get("dataset_id") or "dataset_manifest"),
     }
 
 
