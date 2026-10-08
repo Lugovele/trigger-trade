@@ -82,6 +82,8 @@ from triggertrade.set_engine import HandoffContext, HandoffFacts, HandoffReferen
 
 
 EXPECTED_DATASET_ID = "research-v2-7d-20260819-20260826-v1"
+DATASET_ID_PREFIX = "research-v2-7d-"
+DATASET_ID_SUFFIX = "-v1"
 INITIAL_JOBS_PATH = ROOT / "docs" / "research-v2" / "jobs" / "INITIAL_7D_JOBS.json"
 _G0_EVIDENCE_TIMELINE_CACHE: dict[tuple[str, str, str, str], FeatureTimeline] = {}
 SUPPORTED_ECONOMIC_GATES = {"ECONOMIC_PASS", "MECHANISM_PASS", "FAIL", "DATA_INVALID"}
@@ -3849,7 +3851,8 @@ def validate_dataset(dataset_path: Path) -> dict[str, Any]:
     manifest = json.loads(dataset_path.read_text(encoding="utf-8"))
     if manifest.get("status") != "DATA_READY":
         raise ResearchV2RunnerError(f"dataset status is not DATA_READY: {manifest.get('status')}")
-    if manifest.get("dataset_id") != EXPECTED_DATASET_ID:
+    dataset_id = str(manifest.get("dataset_id") or "")
+    if not (dataset_id.startswith(DATASET_ID_PREFIX) and dataset_id.endswith(DATASET_ID_SUFFIX)):
         raise ResearchV2RunnerError(f"unexpected dataset_id: {manifest.get('dataset_id')}")
     validation = manifest.get("validation", {})
     if validation.get("status") != "PASS":

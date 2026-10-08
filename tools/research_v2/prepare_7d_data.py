@@ -6,6 +6,7 @@ executes Research jobs or simulates positions.
 
 from __future__ import annotations
 
+import argparse
 import csv
 from dataclasses import asdict
 from datetime import UTC, date, datetime, timedelta
@@ -58,7 +59,17 @@ CONTEXT = ("BTCUSDT",)
 BYBIT_API_BASE = "https://api.bybit.com"
 
 
-def main() -> int:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--start", help="Trading window start, UTC ISO timestamp. Default is the certified August start.")
+    parser.add_argument("--end", help="Trading window end, UTC ISO timestamp. Default is the certified August end.")
+    parser.add_argument("--output-root", type=Path, help="Dataset root. Defaults to runtime/data/research-v2/7d_YYYYMMDD_YYYYMMDD.")
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+    configure_dataset_window(start=args.start, end=args.end, output_root=args.output_root)
     DATASET_ROOT.mkdir(parents=True, exist_ok=True)
     for child in ("candles", "raw_trades", "funding", "mark_price", "instruments"):
         (DATASET_ROOT / child).mkdir(parents=True, exist_ok=True)
@@ -204,11 +215,33 @@ def main() -> int:
     return 0 if dataset_status == "DATA_READY" else 2
 
 
+def configure_dataset_window(*, start: str | None = None, end: str | None = None, output_root: Path | None = None) -> None:
+    global DATASET_ID, SCREEN_START, SCREEN_END, WARMUP_START, DATASET_ROOT
+
+    if start is None and end is None and output_root is None:
+        return
+    if start is None or end is None:
+        raise ValueError("--start and --end must be supplied together")
+    screen_start = parse_time(start)
+    screen_end = parse_time(end)
+    if screen_end <= screen_start:
+        raise ValueError("--end must be after --start")
+    if screen_end - screen_start != timedelta(days=7):
+        raise ValueError("Research V2 dataset windows must be exactly 7 days")
+    warmup_start = screen_start - timedelta(days=15)
+    suffix = f"7d_{screen_start:%Y%m%d}_{screen_end:%Y%m%d}"
+    DATASET_ID = f"research-v2-7d-{screen_start:%Y%m%d}-{screen_end:%Y%m%d}-v1"
+    SCREEN_START = screen_start
+    SCREEN_END = screen_end
+    WARMUP_START = warmup_start
+    DATASET_ROOT = output_root if output_root is not None else ROOT / "runtime" / "data" / "research-v2" / suffix
+
+
 def prepare_candles(symbol: str) -> dict[str, Any]:
     candles = fetch_kline(symbol=symbol, endpoint="/v5/market/kline", result_key="list", start=WARMUP_START, end=SCREEN_END)
     validated = validate_historical_candles(tuple(candles), symbol=symbol, category="linear", timeframe="1m", start=WARMUP_START, end=SCREEN_END)
     rows = [candle_to_dict(candle) for candle in validated]
-    path = DATASET_ROOT / "candles" / f"{symbol}__linear__1m__20260804T000000Z__20260826T000000Z.json"
+    path = DATASET_ROOT / "candles" / f"{symbol}__linear__1m__{stamp(WARMUP_START)}__{stamp(SCREEN_END)}.json"
     write_json(path, rows)
     meta = {
         "symbol": symbol,
@@ -288,7 +321,7 @@ def prepare_funding(logical: str, physical: str) -> dict[str, Any]:
             "funding_rate": str(Decimal(str(row["fundingRate"]))),
             "source": "bybit_public_v5_market_funding_history",
         })
-    path = DATASET_ROOT / "funding" / f"{physical}__funding__20260819T000000Z__20260826T000000Z.json"
+    path = DATASET_ROOT / "funding" / f"{physical}__funding__{stamp(SCREEN_START)}__{stamp(SCREEN_END)}.json"
     write_json(path, records)
     csv_path = DATASET_ROOT / "funding" / f"{physical}__funding_coverage.csv"
     write_csv(csv_path, records, ["symbol", "logical_symbol", "funding_time", "status", "funding_rate", "source"])
@@ -303,7 +336,7 @@ def prepare_funding(logical: str, physical: str) -> dict[str, Any]:
 
 def prepare_mark_price(logical: str, physical: str) -> dict[str, Any]:
     rows = fetch_kline(symbol=physical, endpoint="/v5/market/mark-price-kline", result_key="list", start=WARMUP_START, end=SCREEN_END)
-    path = DATASET_ROOT / "mark_price" / f"{physical}__mark_price__1m__20260804T000000Z__20260826T000000Z.json"
+    path = DATASET_ROOT / "mark_price" / f"{physical}__mark_price__1m__{stamp(WARMUP_START)}__{stamp(SCREEN_END)}.json"
     data = [candle_to_dict(row) for row in rows]
     write_json(path, data)
     expected = int((SCREEN_END - WARMUP_START).total_seconds() // 60)
@@ -340,7 +373,7 @@ def prepare_instrument(symbol: str) -> dict[str, Any]:
 
 
 def feature_readiness(physical: str) -> dict[str, Any]:
-    path = DATASET_ROOT / "candles" / f"{physical}__linear__1m__20260804T000000Z__20260826T000000Z.json"
+    path = DATASET_ROOT / "candles" / f"{physical}__linear__1m__{stamp(WARMUP_START)}__{stamp(SCREEN_END)}.json"
     candles = tuple(dict_to_candle(row) for row in json.loads(path.read_text(encoding="utf-8")))
     checks = {
         "ATR15": atr15(candles, cutoff=SCREEN_START),
@@ -586,6 +619,10 @@ def sha256_json(payload: Any) -> str:
 
 def iso(value: datetime) -> str:
     return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
+def stamp(value: datetime) -> str:
+    return value.astimezone(UTC).strftime("%Y%m%dT%H%M%SZ")
 
 
 def parse_time(value: str) -> datetime:
