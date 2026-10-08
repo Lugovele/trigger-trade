@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from decimal import Decimal
 from pathlib import Path
 import sys
 from typing import Any, Mapping, Sequence
@@ -23,6 +24,8 @@ from triggertrade.research_v2_hypotheses import (  # noqa: E402
 )
 from tools.research_v2.run_7d_screen import (  # noqa: E402
     ResearchV2RunnerError,
+    finalize_research_v2_existing_run,
+    population_fingerprint as research_v2_population_fingerprint,
     read_jsonl,
     run_screen_two_phase,
     validate_dataset,
@@ -35,14 +38,75 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--dataset", type=Path, help="Frozen Research V2 dataset manifest.")
     parser.add_argument("--manifest", default=RV2_HB001_MANIFEST_PATH, type=Path, help="Hypothesis manifest.")
     parser.add_argument("--hypotheses", required=True, help="Comma-separated hypothesis IDs, e.g. H001,H002.")
-    parser.add_argument("--output", required=True, type=Path, help="Deterministic output directory.")
+    parser.add_argument("--output", type=Path, help="Deterministic output directory.")
     parser.add_argument("--resume", action="store_true", help="Resume an interrupted run in the output directory.")
     parser.add_argument("--resolve-only", action="store_true", help="Write resolved research passports without materializing or replaying.")
+    parser.add_argument("--existing-run", type=Path, help="Existing completed run directory for evidence-only finalization.")
+    parser.add_argument("--finalize-existing", action="store_true", help="Finalize evidence for an existing completed run without replay.")
     return parser.parse_args(argv)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
+    if args.finalize_existing:
+        if args.existing_run is None:
+            raise ResearchV2RunnerError("--finalize-existing requires --existing-run")
+        if args.dataset is None:
+            raise ResearchV2RunnerError("--finalize-existing requires --dataset")
+        requested = _parse_ids(args.hypotheses)
+        jobs_by_id = load_rv2_hb001_hypothesis_jobs(args.manifest)
+        requested_hypothesis_ids = [hypothesis_id for hypothesis_id in requested if hypothesis_id in jobs_by_id]
+        unknown_hypothesis_ids = [
+            hypothesis_id
+            for hypothesis_id in requested
+            if hypothesis_id.upper().startswith("H") and hypothesis_id not in jobs_by_id
+        ]
+        if unknown_hypothesis_ids:
+            raise ResearchV2RunnerError(f"unknown hypothesis IDs: {','.join(unknown_hypothesis_ids)}")
+        if requested_hypothesis_ids and len(requested_hypothesis_ids) != len(requested):
+            raise ResearchV2RunnerError("--finalize-existing cannot mix hypothesis IDs and baseline Research V2 job IDs")
+        if not requested_hypothesis_ids:
+            finalize_research_v2_existing_run(
+                output_dir=args.existing_run,
+                dataset_path=args.dataset,
+                jobs_arg=args.hypotheses,
+            )
+            return 0
+        jobs = [jobs_by_id[hypothesis_id] for hypothesis_id in requested_hypothesis_ids]
+        report = finalize_research_v2_existing_run(
+            output_dir=args.existing_run,
+            dataset_path=args.dataset,
+            jobs_arg=args.hypotheses,
+            selected_jobs=jobs,
+        )
+        dataset_fingerprint = report.get("dataset_fingerprint") or canonical_json_digest(_dataset_identity(validate_dataset(args.dataset)))
+        _write_resolved_research_specs(
+            jobs=jobs,
+            output_dir=args.existing_run,
+            dataset_manifest_path=args.dataset,
+            dataset_fingerprint=str(dataset_fingerprint),
+            population_fingerprint=report.get("population_fingerprint"),
+        )
+        write_json(
+            args.existing_run / "resolved_hypothesis_identity.json",
+            {
+                "artifact_type": "RESEARCH_V2_HYPOTHESIS_IDENTITIES",
+                "dataset_fingerprint": dataset_fingerprint,
+                "population_fingerprint": report.get("population_fingerprint"),
+                "manifest_path": str(args.manifest),
+                "hypotheses": [
+                    job.identity_payload(
+                        dataset_fingerprint=str(dataset_fingerprint),
+                        population_fingerprint=None if report.get("population_fingerprint") is None else str(report.get("population_fingerprint")),
+                    )
+                    for job in jobs
+                ],
+                "finalization_report": "finalization_report.json",
+            },
+        )
+        return 0
+    if args.output is None:
+        raise ResearchV2RunnerError("--output is required unless --finalize-existing is used")
     if args.dataset is None and not args.resolve_only:
         raise ResearchV2RunnerError("--dataset is required unless --resolve-only is used")
     manifest = validate_dataset(args.dataset) if args.dataset is not None else None
@@ -76,7 +140,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     population_path = args.output / "research_v2_set_population.json"
     population_fingerprint = None
     if population_path.exists():
-        population_fingerprint = canonical_json_digest(json.loads(population_path.read_text(encoding="utf-8")))
+        population_fingerprint = research_v2_population_fingerprint(json.loads(population_path.read_text(encoding="utf-8"), parse_float=Decimal))
     _write_resolved_research_specs(
         jobs=jobs,
         output_dir=args.output,

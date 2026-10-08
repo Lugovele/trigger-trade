@@ -7,6 +7,8 @@ import json
 from pathlib import Path
 from typing import Mapping
 
+import pytest
+
 import tools.research_v2.run_7d_screen as screen_runner
 import tools.research_v2.run_hypothesis_batch as hypothesis_batch_cli
 from tools.research_v2.run_7d_screen import (
@@ -381,6 +383,115 @@ def test_resolve_only_runner_writes_passports_without_dataset_or_replay(monkeypa
     assert h001["research"]["dataset_fingerprint"] is None  # type: ignore[index]
     assert h001["research"]["population_fingerprint_status"] == "AVAILABLE_AFTER_POPULATION_MATERIALIZATION"  # type: ignore[index]
     assert h005["position_rules"]["stop"]["family"]["value"] == "G1"  # type: ignore[index]
+
+
+def test_finalize_existing_resolves_hypotheses_from_manifest_without_baseline_lookup(monkeypatch) -> None:
+    writes: dict[str, Mapping[str, object]] = {}
+    captured: dict[str, object] = {}
+
+    def fake_finalize(**kwargs):
+        captured.update(kwargs)
+        return {
+            "dataset_fingerprint": "dataset-fingerprint",
+            "population_fingerprint": "population-fingerprint",
+        }
+
+    monkeypatch.setattr(Path, "mkdir", lambda self, parents=False, exist_ok=False: None)
+    monkeypatch.setattr(hypothesis_batch_cli, "write_json", lambda path, payload: writes.setdefault(str(path), payload))
+    monkeypatch.setattr(hypothesis_batch_cli, "finalize_research_v2_existing_run", fake_finalize)
+
+    assert hypothesis_batch_cli.main(
+        [
+            "--dataset",
+            "dataset.json",
+            "--manifest",
+            "docs/research-v2/hypotheses/RV2_HB001.json",
+            "--hypotheses",
+            "H001,H002,H003,H004,H005",
+            "--existing-run",
+            "existing-run",
+            "--finalize-existing",
+        ]
+    ) == 0
+
+    selected_jobs = captured["selected_jobs"]
+    assert [job.job_id for job in selected_jobs] == ["H001", "H002", "H003", "H004", "H005"]  # type: ignore[union-attr]
+    assert captured["jobs_arg"] == "H001,H002,H003,H004,H005"
+    assert "existing-run\\H001\\resolved_research_spec.json" in writes
+    assert writes["existing-run\\resolved_hypothesis_identity.json"]["hypotheses"][0]["hypothesis_id"] == "H001"  # type: ignore[index]
+
+
+def test_finalize_existing_unknown_hypothesis_fails_before_finalizer(monkeypatch) -> None:
+    def forbidden_finalize(**kwargs):
+        raise AssertionError("finalizer should not run for an unknown hypothesis")
+
+    monkeypatch.setattr(hypothesis_batch_cli, "finalize_research_v2_existing_run", forbidden_finalize)
+
+    with pytest.raises(screen_runner.ResearchV2RunnerError, match="unknown hypothesis IDs: H999"):
+        hypothesis_batch_cli.main(
+            [
+                "--dataset",
+                "dataset.json",
+                "--hypotheses",
+                "H999",
+                "--existing-run",
+                "existing-run",
+                "--finalize-existing",
+            ]
+        )
+
+
+def test_finalize_existing_baseline_job_selection_stays_on_baseline_path(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_finalize(**kwargs):
+        captured.update(kwargs)
+        return {"dataset_fingerprint": "dataset-fingerprint", "population_fingerprint": "population-fingerprint"}
+
+    monkeypatch.setattr(hypothesis_batch_cli, "finalize_research_v2_existing_run", fake_finalize)
+
+    assert hypothesis_batch_cli.main(
+        [
+            "--dataset",
+            "dataset.json",
+            "--hypotheses",
+            "J3",
+            "--existing-run",
+            "existing-run",
+            "--finalize-existing",
+        ]
+    ) == 0
+
+    assert captured["jobs_arg"] == "J3"
+    assert "selected_jobs" not in captured
+
+
+def test_finalize_existing_selection_path_does_not_call_replay_or_materialization(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_finalize(**kwargs):
+        captured.update(kwargs)
+        return {"dataset_fingerprint": "dataset-fingerprint", "population_fingerprint": "population-fingerprint"}
+
+    monkeypatch.setattr(Path, "mkdir", lambda self, parents=False, exist_ok=False: None)
+    monkeypatch.setattr(hypothesis_batch_cli, "write_json", lambda path, payload: None)
+    monkeypatch.setattr(hypothesis_batch_cli, "finalize_research_v2_existing_run", fake_finalize)
+    monkeypatch.setattr(hypothesis_batch_cli, "run_screen_two_phase", lambda **kwargs: (_ for _ in ()).throw(AssertionError("replay must not run")))
+    monkeypatch.setattr(screen_runner, "materialize_research_v2_set_population", lambda **kwargs: (_ for _ in ()).throw(AssertionError("materialization must not run")))
+
+    assert hypothesis_batch_cli.main(
+        [
+            "--dataset",
+            "dataset.json",
+            "--hypotheses",
+            "H001",
+            "--existing-run",
+            "existing-run",
+            "--finalize-existing",
+        ]
+    ) == 0
+
+    assert [job.job_id for job in captured["selected_jobs"]] == ["H001"]  # type: ignore[union-attr]
 
 
 def _minute_candles(

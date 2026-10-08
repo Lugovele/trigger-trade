@@ -740,6 +740,7 @@ def finalize_research_v2_existing_run(
     output_dir: Path,
     dataset_path: Path,
     jobs_arg: str = "ALL",
+    selected_jobs: Sequence[ResearchV2JobConfig] | None = None,
 ) -> dict[str, Any]:
     """Refresh evidence-only artifacts for a completed Research V2 run.
 
@@ -748,7 +749,12 @@ def finalize_research_v2_existing_run(
     verifies that economic event identities are unchanged by finalization.
     """
     manifest = validate_dataset(dataset_path)
-    selected_jobs = select_jobs(jobs_arg, load_ordered_jobs())
+    if selected_jobs is None:
+        selected_jobs = select_jobs(jobs_arg, load_ordered_jobs())
+    else:
+        selected_jobs = list(selected_jobs)
+        if not selected_jobs:
+            raise ResearchV2RunnerError("selected_jobs must include at least one Research V2 job")
     output_dir = output_dir.resolve()
     lifecycle_path = output_dir / "lifecycle_results.jsonl"
     ledger_path = output_dir / "account_event_ledger.jsonl"
@@ -757,6 +763,8 @@ def finalize_research_v2_existing_run(
     if not ledger_path.exists():
         raise ResearchV2RunnerError(f"EVIDENCE_FINALIZATION_BLOCKED:ACCOUNT_EVENT_LEDGER_MISSING:{ledger_path}")
     before = _economic_event_fingerprint(output_dir)
+    population_fingerprint = _population_fingerprint_from_file(output_dir / "research_v2_set_population.json")
+    factual_guard_before_hash = sha256_file(output_dir / "factual_timeline_daily_guard_evidence.jsonl") if (output_dir / "factual_timeline_daily_guard_evidence.jsonl").exists() else None
     _write_phase_b_job_results(
         output_dir,
         selected_jobs,
@@ -767,21 +775,46 @@ def finalize_research_v2_existing_run(
     after = _economic_event_fingerprint(output_dir)
     if before["digest"] != after["digest"]:
         raise ResearchV2RunnerError("ECONOMIC_EVENT_FINGERPRINT_CHANGED")
+    factual_guard_after_hash = sha256_file(output_dir / "factual_timeline_daily_guard_evidence.jsonl") if (output_dir / "factual_timeline_daily_guard_evidence.jsonl").exists() else None
     progress = json.loads((output_dir / "progress.json").read_text(encoding="utf-8")) if (output_dir / "progress.json").exists() else {}
     lifecycle_rows = read_jsonl(lifecycle_path)
-    return {
+    guard_report = _validate_factual_guard_evidence(output_dir)
+    if guard_report["guard_decision_mismatches"]:
+        raise ResearchV2RunnerError("RUN_INVALIDATING_DEFECT:FACTUAL_GUARD_DECISION_CHANGED")
+    counters = _authoritative_final_counters(output_dir, lifecycle_rows)
+    report = {
         "status": "COMPLETE",
         "mode": "EVIDENCE_ONLY_FINALIZATION",
         "output_dir": str(output_dir),
         "dataset_manifest": str(dataset_path),
+        "dataset_fingerprint": canonical_json_digest(
+            {
+                "dataset_id": manifest.get("dataset_id"),
+                "window": manifest.get("window"),
+                "symbols": manifest.get("symbols"),
+                "artifacts": manifest.get("artifacts"),
+            }
+        ),
         "jobs": jobs_arg,
-        "contexts": len(lifecycle_rows),
-        "accepted": progress.get("orders_created"),
-        "fills": progress.get("fills"),
-        "closed": progress.get("closed"),
+        "selected_jobs": [job.job_id for job in selected_jobs],
+        "economic_event_history_changed": False,
+        "economic_event_fingerprint_before": before["digest"],
+        "economic_event_fingerprint_after": after["digest"],
         "economic_event_fingerprint": after["digest"],
         "economic_event_fingerprint_changed": False,
+        "population_fingerprint": population_fingerprint,
+        **counters,
+        **guard_report,
+        "evidence_files": {
+            "factual_timeline_daily_guard_evidence.jsonl": {
+                "before_sha256": factual_guard_before_hash,
+                "after_sha256": factual_guard_after_hash,
+                "regeneration_reason": "evidence-only rebuild from complete account_event_ledger causal state",
+            }
+        },
     }
+    write_json(output_dir / "finalization_report.json", report)
+    return report
 
 
 def run_screen(
@@ -4430,6 +4463,7 @@ def _rewrite_factual_timeline_guard_evidence_from_event_ledger(
             dataset_manifest=dataset_manifest,
             mark_cache=mark_cache,
         )
+        exposure_snapshot = _ledger_exposure_snapshot_at(job_events, as_of=timestamp, guard_row=row)
         day_opening = day_openings[day_key]
         daily_delta = snapshot["equity"] - day_opening
         daily_fraction = Decimal("0") if day_opening == 0 else daily_delta / day_opening
@@ -4454,8 +4488,22 @@ def _rewrite_factual_timeline_guard_evidence_from_event_ledger(
                 "breached": decision == "REJECT",
                 "protected_open_position_context_ids": _snapshot_open_position_context_ids(snapshot),
                 "protected_open_position_order_spec_ids": _snapshot_open_position_order_spec_ids(snapshot),
+                "pending_order_context_ids": exposure_snapshot["pending_context_ids"],
+                "pending_order_spec_ids": exposure_snapshot["pending_order_spec_ids"],
             }
         )
+        if sorted(str(item) for item in row.get("pending_order_context_ids", ())) != exposure_snapshot["pending_context_ids"]:
+            rebuilt["pending_state_mismatch_repaired"] = {
+                "before": row.get("pending_order_context_ids", []),
+                "after": exposure_snapshot["pending_context_ids"],
+            }
+        if sorted(str(item) for item in row.get("protected_open_position_context_ids", ())) != _snapshot_open_position_context_ids(snapshot):
+            rebuilt["open_state_mismatch_repaired"] = {
+                "before": row.get("protected_open_position_context_ids", []),
+                "after": _snapshot_open_position_context_ids(snapshot),
+            }
+        if str(row.get("loss_guard_decision") or "") and str(row.get("loss_guard_decision")) != decision:
+            rebuilt["guard_decision_mismatch"] = {"before": row.get("loss_guard_decision"), "after": decision}
         key = _factual_guard_key(rebuilt)
         if key is not None:
             canonical_by_key[key] = dict(rebuilt)
@@ -4492,6 +4540,70 @@ def _snapshot_open_position_order_spec_ids(snapshot: Mapping[str, Any]) -> list[
     return ids
 
 
+def _ledger_exposure_snapshot_at(
+    events: Sequence[Mapping[str, Any]],
+    *,
+    as_of: datetime,
+    guard_row: Mapping[str, Any] | None = None,
+) -> dict[str, list[str]]:
+    """Rebuild pending/open membership from the complete causal ledger.
+
+    A breached factual guard row observes pending orders immediately before the
+    cancellation it emits at the same timestamp, so same-timestamp cancellation
+    and reservation-release events are ignored for that row only.
+    """
+
+    pre_cancel_snapshot = bool(guard_row and (guard_row.get("breached") is True or int(guard_row.get("cancellation_obligations_generated") or 0) > 0))
+    state: dict[str, dict[str, Any]] = {}
+    for event in sorted(events, key=_ledger_event_sort_key):
+        timestamp = _optional_time(event.get("timestamp"))
+        if timestamp is None:
+            continue
+        if timestamp > as_of:
+            continue
+        event_type = str(event.get("event_type") or "")
+        if pre_cancel_snapshot and timestamp == as_of and event_type in {"ORDER_CANCEL_REQUEST", "ENTRY_CANCELLED_UNFILLED", "RESERVATION_RELEASE"}:
+            continue
+        context_id = str(event.get("context_id") or "")
+        if not context_id:
+            continue
+        slot = state.setdefault(
+            context_id,
+            {
+                "context_id": context_id,
+                "order_spec_id": event.get("order_spec_id"),
+                "status": None,
+            },
+        )
+        if event.get("order_spec_id"):
+            slot["order_spec_id"] = event.get("order_spec_id")
+        if event_type == "ORDER_ACCEPTED":
+            slot["status"] = "PENDING"
+        elif event_type == "ENTRY_FILLED":
+            slot["status"] = "OPEN"
+        elif event_type in {"ENTRY_CANCELLED_UNFILLED", "RESERVATION_RELEASE", "PROTECTIVE_EXIT", "FINAL_CLOSE"}:
+            slot["status"] = "TERMINAL"
+    pending = sorted((item for item in state.values() if item.get("status") == "PENDING"), key=lambda item: item["context_id"])
+    open_positions = sorted((item for item in state.values() if item.get("status") == "OPEN"), key=lambda item: item["context_id"])
+    return {
+        "pending_context_ids": [str(item["context_id"]) for item in pending],
+        "pending_order_spec_ids": [str(item["order_spec_id"]) for item in pending if item.get("order_spec_id") is not None],
+        "open_context_ids": [str(item["context_id"]) for item in open_positions],
+        "open_order_spec_ids": [str(item["order_spec_id"]) for item in open_positions if item.get("order_spec_id") is not None],
+    }
+
+
+def _ledger_event_sort_key(row: Mapping[str, Any]) -> tuple[Any, ...]:
+    timestamp = _optional_time(row.get("timestamp"))
+    return (
+        timestamp or datetime.max.replace(tzinfo=UTC),
+        _ledger_sequence(row),
+        int(row.get("causal_sequence") or 0),
+        str(row.get("context_id") or ""),
+        str(row.get("event_type") or ""),
+    )
+
+
 _FACTUAL_GUARD_SYNC_FIELDS = (
     "day_opening_equity",
     "realized_gross_pnl_to_date",
@@ -4508,6 +4620,9 @@ _FACTUAL_GUARD_SYNC_FIELDS = (
     "breached",
     "protected_open_position_context_ids",
     "protected_open_position_order_spec_ids",
+    "pending_order_context_ids",
+    "pending_order_spec_ids",
+    "guard_decision_mismatch",
 )
 
 
@@ -4563,6 +4678,48 @@ def _sync_embedded_factual_timeline_guard_evidence(
         _write_jsonl(path, rewritten)
 
 
+def _validate_factual_guard_evidence(output_dir: Path) -> dict[str, Any]:
+    rows = read_jsonl(output_dir / "factual_timeline_daily_guard_evidence.jsonl")
+    pending_mismatches = 0
+    open_mismatches = 0
+    equity_mismatches = 0
+    fraction_mismatches = 0
+    decision_mismatches = 0
+    pending_repairs = 0
+    open_repairs = 0
+    for row in rows:
+        if row.get("guard_decision_mismatch"):
+            decision_mismatches += 1
+        if row.get("pending_state_mismatch_repaired"):
+            pending_repairs += 1
+        if row.get("open_state_mismatch_repaired"):
+            open_repairs += 1
+        if row.get("pending_state_mismatch"):
+            pending_mismatches += 1
+        if row.get("open_state_mismatch"):
+            open_mismatches += 1
+        if row.get("equity_mismatch"):
+            equity_mismatches += 1
+        if row.get("daily_fraction_mismatch"):
+            fraction_mismatches += 1
+    return {
+        "guard_rows": len(rows),
+        "guard_pending_state_mismatches": pending_mismatches,
+        "guard_open_state_mismatches": open_mismatches,
+        "guard_equity_mismatches": equity_mismatches,
+        "guard_daily_fraction_mismatches": fraction_mismatches,
+        "guard_decision_mismatches": decision_mismatches,
+        "guard_pending_state_repairs": pending_repairs,
+        "guard_open_state_repairs": open_repairs,
+        "FACTUAL_GUARD_ROWS": len(rows),
+        "FACTUAL_GUARD_PENDING_STATE_MISMATCHES": pending_mismatches,
+        "FACTUAL_GUARD_OPEN_STATE_MISMATCHES": open_mismatches,
+        "FACTUAL_GUARD_EQUITY_MISMATCHES": equity_mismatches,
+        "FACTUAL_GUARD_DAILY_FRACTION_MISMATCHES": fraction_mismatches,
+        "FACTUAL_GUARD_DECISION_MISMATCHES": decision_mismatches,
+    }
+
+
 def _reconcile_final_progress_counts(output_dir: Path, rows: Sequence[Mapping[str, Any]]) -> None:
     progress_path = output_dir / "progress.json"
     if not progress_path.exists():
@@ -4601,6 +4758,48 @@ def _reconcile_final_progress_counts(output_dir: Path, rows: Sequence[Mapping[st
     write_json(progress_path, payload)
 
 
+def _authoritative_final_counters(output_dir: Path, rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    contexts = len(rows)
+    accepted = 0
+    fills = 0
+    closed = 0
+    endpoint_open = 0
+    unfilled_accepted = 0
+    for row in rows:
+        result = row.get("result") if isinstance(row, Mapping) else None
+        if not isinstance(result, Mapping):
+            continue
+        lifecycle = result.get("backtest_lifecycle") if isinstance(result.get("backtest_lifecycle"), Mapping) else {}
+        if lifecycle.get("accepted"):
+            accepted += 1
+        if lifecycle.get("filled"):
+            fills += 1
+        if lifecycle.get("status") == "CLOSED":
+            closed += 1
+        if lifecycle.get("status") == "FILLED_OPEN_AT_ENDPOINT":
+            endpoint_open += 1
+        if lifecycle.get("accepted") and not lifecycle.get("filled"):
+            unfilled_accepted += 1
+    reservation_releases = sum(1 for row in read_jsonl(output_dir / "account_event_ledger.jsonl") if row.get("event_type") == "RESERVATION_RELEASE")
+    progress_path = output_dir / "progress.json"
+    progress = json.loads(progress_path.read_text(encoding="utf-8")) if progress_path.exists() else {}
+    return {
+        "contexts": contexts,
+        "accepted": accepted,
+        "fills": fills,
+        "closed": closed,
+        "endpoint_open": endpoint_open,
+        "unfilled_accepted": unfilled_accepted,
+        "reservation_releases": reservation_releases,
+        "stale_progress_counters_before_finalization": {
+            "contexts": progress.get("execution_contexts_done"),
+            "accepted": progress.get("orders_created"),
+            "fills": progress.get("fills"),
+            "closed": progress.get("closed"),
+        },
+    }
+
+
 _ECONOMIC_LEDGER_EVENT_TYPES = {
     "ORDER_ACCEPTED",
     "ORDER_CANCEL_REQUEST",
@@ -4613,6 +4812,53 @@ _ECONOMIC_LEDGER_EVENT_TYPES = {
     "FINAL_CLOSE",
     "RESERVATION_RELEASE",
 }
+
+
+_NON_SEMANTIC_POPULATION_SUMMARY_FIELDS = frozenset(
+    {
+        "feature_timeline_build_and_scan_seconds",
+    }
+)
+
+
+def population_identity_payload(population: Mapping[str, Any]) -> dict[str, Any]:
+    summary = dict(population.get("summary") or {})
+    for key in tuple(summary):
+        if key in _NON_SEMANTIC_POPULATION_SUMMARY_FIELDS or key.endswith("_seconds"):
+            summary.pop(key, None)
+    return {
+        "artifact_type": population.get("artifact_type"),
+        "dataset_id": population.get("dataset_id"),
+        "selected_jobs": population.get("selected_jobs"),
+        "records": population.get("records", ()),
+        "summary": summary,
+    }
+
+
+def population_fingerprint(population: Mapping[str, Any]) -> str:
+    return canonical_json_digest(_canonical_json_value(population_identity_payload(population)))
+
+
+def _population_fingerprint_from_file(path: Path) -> str | None:
+    if not path.exists():
+        return None
+    return population_fingerprint(json.loads(path.read_text(encoding="utf-8"), parse_float=Decimal))
+
+
+def _canonical_json_value(value: Any) -> Any:
+    if isinstance(value, Decimal):
+        return value
+    if isinstance(value, float):
+        return Decimal(str(value))
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, datetime):
+        return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
+    if isinstance(value, Mapping):
+        return {str(key): _canonical_json_value(item) for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))}
+    if isinstance(value, (list, tuple)):
+        return [_canonical_json_value(item) for item in value]
+    return value
 
 
 def _economic_event_fingerprint(output_dir: Path) -> dict[str, Any]:

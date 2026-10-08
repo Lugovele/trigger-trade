@@ -32,6 +32,7 @@ from tools.research_v2.run_7d_screen import (
 )
 from triggertrade.research_v2_execution import V2PortfolioExposureState
 from triggertrade.research_v2 import atr15, return_pct_points
+from triggertrade.research_v2_hypotheses import load_rv2_hb001_hypothesis_jobs
 from triggertrade.services.research_backtest_execution import ResearchV1BacktestLifecycleResult
 from triggertrade.set_engine import q18_export_text
 
@@ -1667,6 +1668,183 @@ def test_research_v2_finalize_existing_run_is_evidence_only_and_reconciles_progr
     assert progress["orders_created"] == 0
     assert progress["fills"] == 1
     assert progress["closed"] == 1
+
+
+def test_research_v2_population_fingerprint_ignores_nonsemantic_timing_float() -> None:
+    population = {
+        "artifact_type": "RESEARCH_V2_MATERIALIZED_SET_POPULATION",
+        "dataset_id": "dataset",
+        "selected_jobs": ["H001"],
+        "records": [{"set_result_id": "set-1", "observed_at": "2026-08-19T00:00:00Z", "direction": "LONG"}],
+        "summary": {"matched_episodes": 1, "feature_timeline_build_and_scan_seconds": 709.5218667001463},
+    }
+    changed_timing = {
+        **population,
+        "summary": {"matched_episodes": 1, "feature_timeline_build_and_scan_seconds": 1.25},
+    }
+    changed_record = {
+        **population,
+        "records": [{"set_result_id": "set-2", "observed_at": "2026-08-19T00:00:00Z", "direction": "LONG"}],
+    }
+
+    assert screen_runner.population_fingerprint(population) == screen_runner.population_fingerprint(changed_timing)
+    assert screen_runner.population_fingerprint(population) != screen_runner.population_fingerprint(changed_record)
+
+
+def test_research_v2_factual_guard_rebuild_includes_accepted_pending_from_later_context() -> None:
+    case_dir = _case_dir("factual_guard_pending_membership_rebuild")
+    manifest = json.loads(_dataset_manifest(case_dir).read_text(encoding="utf-8"))
+    output = case_dir / "out"
+    output.mkdir()
+    ledger = [
+        {
+            "job_id": "H004",
+            "timestamp": "2026-08-19T05:19:00Z",
+            "sequence": screen_runner._EVENT_ORDER["ORDER_ACCEPTED"],
+            "event_type": "ORDER_ACCEPTED",
+            "context_id": "ctx-23",
+            "symbol": "AVAXUSDT",
+            "physical_symbol": "AVAXUSDT",
+            "order_spec_id": "order-23",
+            "causal_sequence": 1,
+        },
+        {
+            "job_id": "H004",
+            "timestamp": "2026-08-19T05:20:00Z",
+            "sequence": screen_runner._EVENT_ORDER["ORDER_ACCEPTED"],
+            "event_type": "ORDER_ACCEPTED",
+            "context_id": "ctx-24",
+            "symbol": "SUIUSDT",
+            "physical_symbol": "SUIUSDT",
+            "order_spec_id": "order-24",
+            "causal_sequence": 2,
+        },
+    ]
+    screen_runner._write_jsonl(output / "account_event_ledger.jsonl", ledger)
+    stale = {
+        "job_id": "H004",
+        "context_id": "ctx-23",
+        "evaluated_at": "2026-08-19T05:20:00Z",
+        "configured_loss_threshold_fraction": "0.0225",
+        "loss_guard_decision": "PASS",
+        "pending_order_context_ids": ["ctx-23"],
+        "pending_order_spec_ids": ["order-23"],
+        "protected_open_position_context_ids": [],
+        "protected_open_position_order_spec_ids": [],
+        "breached": False,
+    }
+    screen_runner._write_jsonl(output / "factual_timeline_daily_guard_evidence.jsonl", [stale])
+    job = load_rv2_hb001_hypothesis_jobs()["H004"]
+
+    screen_runner._rewrite_factual_timeline_guard_evidence_from_event_ledger(output, selected_jobs=[job], dataset_manifest=manifest)
+
+    [rewritten] = screen_runner.read_jsonl(output / "factual_timeline_daily_guard_evidence.jsonl")
+    assert rewritten["pending_order_context_ids"] == ["ctx-23", "ctx-24"]
+    assert rewritten["pending_order_spec_ids"] == ["order-23", "order-24"]
+    assert rewritten["pending_state_mismatch_repaired"]["before"] == ["ctx-23"]
+    assert rewritten["loss_guard_decision"] == "PASS"
+
+
+def test_research_v2_factual_guard_rebuild_preserves_breach_pending_before_same_timestamp_cancel() -> None:
+    case_dir = _case_dir("factual_guard_h003_2226_witness")
+    manifest = json.loads(_dataset_manifest(case_dir).read_text(encoding="utf-8"))
+    output = case_dir / "out"
+    output.mkdir()
+    ledger = [
+        {
+            "job_id": "H003",
+            "timestamp": "2026-08-24T18:30:00Z",
+            "sequence": screen_runner._EVENT_ORDER["ORDER_ACCEPTED"],
+            "event_type": "ORDER_ACCEPTED",
+            "context_id": "ctx-2226",
+            "symbol": "AVAXUSDT",
+            "physical_symbol": "AVAXUSDT",
+            "order_spec_id": "order-2226",
+            "causal_sequence": 1,
+        },
+        {
+            "job_id": "H003",
+            "timestamp": "2026-08-24T18:39:00Z",
+            "sequence": screen_runner._EVENT_ORDER["ENTRY_CANCELLED_UNFILLED"],
+            "event_type": "ENTRY_CANCELLED_UNFILLED",
+            "context_id": "ctx-2226",
+            "symbol": "AVAXUSDT",
+            "physical_symbol": "AVAXUSDT",
+            "order_spec_id": "order-2226",
+            "causal_sequence": 2,
+        },
+        {
+            "job_id": "H003",
+            "timestamp": "2026-08-24T18:39:00Z",
+            "sequence": screen_runner._EVENT_ORDER["RESERVATION_RELEASE"],
+            "event_type": "RESERVATION_RELEASE",
+            "context_id": "ctx-2226",
+            "symbol": "AVAXUSDT",
+            "physical_symbol": "AVAXUSDT",
+            "order_spec_id": "order-2226",
+            "causal_sequence": 3,
+        },
+    ]
+    screen_runner._write_jsonl(output / "account_event_ledger.jsonl", ledger)
+    guard = {
+        "job_id": "H003",
+        "context_id": "ctx-2226",
+        "evaluated_at": "2026-08-24T18:39:00Z",
+        "configured_loss_threshold_fraction": "0.0225",
+        "loss_guard_decision": "REJECT",
+        "cancellation_obligations_generated": 1,
+        "pending_order_context_ids": [],
+        "pending_order_spec_ids": [],
+        "breached": True,
+    }
+    screen_runner._write_jsonl(output / "factual_timeline_daily_guard_evidence.jsonl", [guard])
+    job = load_rv2_hb001_hypothesis_jobs()["H003"]
+
+    screen_runner._rewrite_factual_timeline_guard_evidence_from_event_ledger(output, selected_jobs=[job], dataset_manifest=manifest)
+
+    [rewritten] = screen_runner.read_jsonl(output / "factual_timeline_daily_guard_evidence.jsonl")
+    assert rewritten["pending_order_context_ids"] == ["ctx-2226"]
+    assert rewritten["pending_order_spec_ids"] == ["order-2226"]
+    assert not any(row["event_type"] == "ENTRY_FILLED" for row in ledger)
+
+
+def test_research_v2_finalize_refuses_economic_event_fingerprint_change(monkeypatch: pytest.MonkeyPatch) -> None:
+    case_dir = _case_dir("evidence_finalize_refuses_economic_change")
+    manifest_path = _dataset_manifest(case_dir)
+    output = case_dir / "out"
+    output.mkdir()
+    screen_runner._write_jsonl(output / "account_event_ledger.jsonl", [])
+    screen_runner._write_jsonl(output / "lifecycle_results.jsonl", [])
+
+    def mutate(*args, **kwargs) -> None:
+        screen_runner._write_jsonl(
+            output / "account_event_ledger.jsonl",
+            [{"job_id": "H003", "timestamp": "2026-08-19T00:00:00Z", "event_type": "FINAL_CLOSE", "context_id": "x"}],
+        )
+
+    monkeypatch.setattr(screen_runner, "_write_phase_b_job_results", mutate)
+
+    with pytest.raises(screen_runner.ResearchV2RunnerError, match="ECONOMIC_EVENT_FINGERPRINT_CHANGED"):
+        screen_runner.finalize_research_v2_existing_run(output_dir=output, dataset_path=manifest_path, jobs_arg="J3")
+
+
+def test_research_v2_finalize_refuses_guard_decision_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    case_dir = _case_dir("evidence_finalize_refuses_guard_decision")
+    manifest_path = _dataset_manifest(case_dir)
+    output = case_dir / "out"
+    output.mkdir()
+    screen_runner._write_jsonl(output / "account_event_ledger.jsonl", [])
+    screen_runner._write_jsonl(output / "lifecycle_results.jsonl", [])
+
+    monkeypatch.setattr(screen_runner, "_write_phase_b_job_results", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        screen_runner,
+        "_validate_factual_guard_evidence",
+        lambda output_dir: {"guard_decision_mismatches": 1},
+    )
+
+    with pytest.raises(screen_runner.ResearchV2RunnerError, match="RUN_INVALIDATING_DEFECT"):
+        screen_runner.finalize_research_v2_existing_run(output_dir=output, dataset_path=manifest_path, jobs_arg="J3")
 
 
 def test_research_v2_finalize_existing_run_does_not_apply_lifecycle_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
