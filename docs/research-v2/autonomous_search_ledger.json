@@ -1,0 +1,137 @@
+{
+  "schema": "triggertrade.research_v2.autonomous_search_ledger.v1",
+  "updated_at": "2026-10-09T06:30:00+03:00",
+  "objective": {
+    "kpi_net_return_pct_each_window": "2.333333333",
+    "kpi_net_usdt_each_window": "23.333333333",
+    "windows": [
+      {"label": "May", "dataset_id": "research-v2-7d-20260524-20260531-v1", "screen_start": "2026-05-24T00:00:00Z", "screen_end": "2026-05-31T00:00:00Z"},
+      {"label": "August", "dataset_id": "research-v2-7d-20260819-20260826-v1", "screen_start": "2026-08-19T00:00:00Z", "screen_end": "2026-08-26T00:00:00Z"},
+      {"label": "September", "dataset_id": "research-v2-7d-20260923-20260930-v1", "screen_start": "2026-09-23T00:00:00Z", "screen_end": "2026-09-30T00:00:00Z"}
+    ]
+  },
+  "constraints": {
+    "backend_semantic_changes": false,
+    "new_metrics": false,
+    "new_mechanics": false,
+    "future_info_in_decision_path": false,
+    "kpi_relaxed": false,
+    "final_direction_requirement": "LONG_SHORT capable"
+  },
+  "runs": [
+    {
+      "label": "mandatory_prior_H001_H002_H006_H007",
+      "run_dirs": {
+        "May": "runtime/audit/research_v2_holdout_may_20261008-223944",
+        "August_H001_H002": "runtime/audit/research_v2_hb001_wave1_20261008-023618",
+        "August_H006_H007": "runtime/audit/research_v2_hb001_wave2_20261008-165935",
+        "September": "runtime/audit/research_v2_holdout_sep_20261009-010207"
+      },
+      "result": [
+        {"hypothesis_id": "H001", "May_pct": "-1.57891422616368", "August_pct": "4.4091801875", "September_pct": "-4.0263445017719", "all_three_pass": false},
+        {"hypothesis_id": "H002", "August_pct": "0.971826287500", "August_usdt": "9.718262875000", "all_three_possible": false, "gate_failure_reason": "August below +2.333333333% KPI"},
+        {"hypothesis_id": "H006", "May_pct": "-2.68258383641968", "August_pct": "4.5440584775", "September_pct": "-5.5856399464795", "all_three_pass": false},
+        {"hypothesis_id": "H007", "May_pct": "-1.510503730785", "August_pct": "2.877013592", "September_pct": "-2.2239441582479", "all_three_pass": false}
+      ]
+    },
+    {
+      "label": "gen1_existing_long_short_families",
+      "hypotheses": ["H003", "H004", "H005", "H008", "H009", "H010"],
+      "run_dirs": {
+        "May": "runtime/audit/research_v2_gen1_may_20261009",
+        "August_H003_H004_H005": "runtime/audit/research_v2_hb001_wave1_20261008-023618",
+        "August_H008_H009_H010": "runtime/audit/research_v2_hb001_wave2_20261008-165935",
+        "September": "runtime/audit/research_v2_gen1_sep_20261009"
+      },
+      "ranking_by_worst_window_pct": [
+        {"hypothesis_id": "H009", "May_pct": "-0.42906782664436", "August_pct": "0.563298225", "September_pct": "-0.9054296900105", "worst_pct": "-0.9054296900105", "all_three_pass": false},
+        {"hypothesis_id": "H005", "May_pct": "-1.3131716762139", "August_pct": "2.267751277", "September_pct": "0.8179609239714", "worst_pct": "-1.3131716762139", "all_three_pass": false},
+        {"hypothesis_id": "H010", "May_pct": "-0.57024935783374", "August_pct": "-1.5214535267992", "September_pct": "3.2213088792424", "worst_pct": "-1.5214535267992", "all_three_pass": false},
+        {"hypothesis_id": "H003", "May_pct": "-0.80380335376566", "August_pct": "2.9512452248574", "September_pct": "-6.5691131502755", "worst_pct": "-6.5691131502755", "all_three_pass": false},
+        {"hypothesis_id": "H008", "May_pct": "-2.352644", "August_pct": "1.716221", "September_pct": "-7.144011", "worst_pct": "-7.144011", "all_three_pass": false},
+        {"hypothesis_id": "H004", "May_pct": "-0.908046", "August_pct": "-1.644587", "September_pct": "-8.437066", "worst_pct": "-8.437066", "all_three_pass": false}
+      ]
+    },
+    {
+      "label": "gen2_compression_exhaustion_gate",
+      "hypotheses": ["H011", "H012", "H013", "H014", "H015", "H016"],
+      "run_dirs": {"May": "runtime/audit/research_v2_gen2_may_20261009"},
+      "may_gate": [
+        {"hypothesis_id": "H013", "May_pct": "0.4475867103272", "May_usdt": "4.475867103272", "all_three_possible": false},
+        {"hypothesis_id": "H015", "May_pct": "0.253750995", "May_usdt": "2.537509950", "all_three_possible": false},
+        {"hypothesis_id": "H016", "May_pct": "0.055922856", "May_usdt": "0.559228560", "all_three_possible": false},
+        {"hypothesis_id": "H014", "May_pct": "-0.3601094325512", "May_usdt": "-3.601094325512", "all_three_possible": false},
+        {"hypothesis_id": "H011", "May_pct": "-1.201600", "May_usdt": "-12.01600", "all_three_possible": false},
+        {"hypothesis_id": "H012", "May_pct": "-1.246444", "May_usdt": "-12.46444", "all_three_possible": false}
+      ]
+    },
+    {
+      "label": "gen3_participation_quality_gate",
+      "hypotheses": ["H017", "H018", "H019", "H020", "H021", "H022"],
+      "run_dirs": {"May": "runtime/audit/research_v2_gen3_may_20261009"},
+      "may_gate": [
+        {"hypothesis_id": "H018", "May_pct": "-0.01485947227214", "May_usdt": "-0.1485947227214", "all_three_possible": false},
+        {"hypothesis_id": "H017", "May_pct": "-0.98319084172012", "May_usdt": "-9.8319084172012", "all_three_possible": false},
+        {"hypothesis_id": "H020", "May_pct": "-1.34055531762358", "May_usdt": "-13.4055531762358", "all_three_possible": false},
+        {"hypothesis_id": "H019", "May_pct": "-1.949396", "May_usdt": "-19.49396", "all_three_possible": false},
+        {"hypothesis_id": "H022", "May_pct": "-1.985712", "May_usdt": "-19.85712", "all_three_possible": false},
+        {"hypothesis_id": "H021", "May_pct": "-2.615441", "May_usdt": "-26.15441", "all_three_possible": false}
+      ]
+    },
+    {
+      "label": "gen4_alternate_g1_and_long_short_resolution",
+      "hypotheses": ["H023", "H024", "H025", "H026", "H027", "H028", "H029", "H030", "H031", "H032"],
+      "run_dirs": {
+        "May": "runtime/audit/research_v2_gen4_may_20261009",
+        "August": "runtime/audit/research_v2_gen4_aug_20261009",
+        "September": "runtime/audit/research_v2_gen4_sep_20261009"
+      },
+      "execution_notes": [
+        "May and August completed replay and wrote job_results evidence, then run_hypothesis_batch failed in non-semantic final metadata while counting the large candidate census via read_jsonl, raising MemoryError.",
+        "September completed replay, wrote job_results and screen_summary, and exited cleanly.",
+        "All Gen4 rankings below use completed job_results.jsonl account_net values from each window."
+      ],
+      "ranking_by_worst_window_pct": [
+        {"hypothesis_id": "H028", "May_pct": "-3.4980557394082", "August_pct": "-0.2569042815", "September_pct": "-3.5263534754399", "worst_pct": "-3.5263534754399", "all_three_pass": false},
+        {"hypothesis_id": "H027", "May_pct": "-3.7180877159073", "August_pct": "1.059023441", "September_pct": "-2.7390532051159", "worst_pct": "-3.7180877159073", "all_three_pass": false},
+        {"hypothesis_id": "H026", "May_pct": "-3.7987793002815", "August_pct": "1.0556609085", "September_pct": "-2.6813337197205", "worst_pct": "-3.7987793002815", "all_three_pass": false},
+        {"hypothesis_id": "H029", "May_pct": "-2.0662365542449", "August_pct": "0.8282738286", "September_pct": "-3.8875181267174", "worst_pct": "-3.8875181267174", "all_three_pass": false},
+        {"hypothesis_id": "H024", "May_pct": "-4.70891639739469", "August_pct": "-1.7466658367374", "September_pct": "-1.78671839663868", "worst_pct": "-4.70891639739469", "all_three_pass": false},
+        {"hypothesis_id": "H030", "May_pct": "-4.1489948158905", "August_pct": "1.05505745", "September_pct": "-4.7476727955168", "worst_pct": "-4.7476727955168", "all_three_pass": false},
+        {"hypothesis_id": "H025", "May_pct": "-3.8061540685665", "August_pct": "0.2907116495", "September_pct": "-5.634767295413", "worst_pct": "-5.634767295413", "all_three_pass": false},
+        {"hypothesis_id": "H032", "May_pct": "-2.7785819013066", "August_pct": "7.8203566845848", "September_pct": "-6.62788746066202", "worst_pct": "-6.62788746066202", "all_three_pass": false},
+        {"hypothesis_id": "H031", "May_pct": "-2.80280244562358", "August_pct": "2.0100320073", "September_pct": "-6.87597287021366", "worst_pct": "-6.87597287021366", "all_three_pass": false},
+        {"hypothesis_id": "H023", "May_pct": "-1.41364678353956", "August_pct": "-9.6034547816958", "September_pct": "-9.49813825596632", "worst_pct": "-9.6034547816958", "all_three_pass": false}
+      ]
+    }
+  ],
+  "search_coverage": {
+    "coverage_level": "HIGH",
+    "tested_legal_dimensions": [
+      "Base momentum continuation, RET_OR, compression breakout, and exhaustion reversal signal families supported by the bridge.",
+      "LONG_ONLY, SHORT-gated, and LONG_SHORT direction modes where supported.",
+      "G0 structural stop, G1 ATR-only stop, and G0-eligibility/G1-operative variants supported by the bridge.",
+      "Existing legal participation and quality knobs: RVOL5 thresholds, turnover acceleration thresholds, compression ratio thresholds, short directional-efficiency thresholds, and trend-only/RVOL-only RET_OR decompositions.",
+      "Mandatory May, August, and September windows for candidates that survived beyond the May gate."
+    ],
+    "untested_or_fixed_dimensions": [
+      "Unsupported indicators such as RSI, MACD, order-book imbalance, trailing stops, partial exits, market fallback, dynamic TP, and arbitrary take-profit changes remain outside the legal backend surface.",
+      "Portfolio/risk policy, costs, leverage profile, watchlist, dataset windows, execution contract, and KPI threshold were fixed by request.",
+      "Additional numeric interpolation inside already-failing families remains possible in theory, but current evidence shows the same legal axes alternate between May/September failure and August-only strength without a material path to all-window KPI."
+    ],
+    "material_untested_legal_search_space_remaining": false
+  },
+  "diagnosis": [
+    "H001/H006/H007 proved August-positive but failed May and September.",
+    "Adding SHORT exposure through H006 did not rescue May or September; H006 shorts were weak outside August.",
+    "Continuation and RET_OR variants overtraded September and remained below KPI in May.",
+    "Compression and exhaustion variants were least bad, but May gate results stayed far below the required +2.333333333%.",
+    "Tightening existing RVOL, turnover, and SHORT directional-efficiency thresholds did not clear the May gate.",
+    "Gen4 G1 alternates and LONG_SHORT continuation resolution again produced August-positive pockets, but every candidate failed May and/or September; best Gen4 worst-window result was H028 at -3.5263534754399%."
+  ],
+  "terminal_assessment": {
+    "status": "SEARCH_SPACE_EXHAUSTED_BELOW_KPI",
+    "reason": "Across H001-H032, all legal existing-backend signal families, direction modes, stop-family combinations, and supported threshold tightenings that were material from prior evidence failed to clear the required +2.333333333% in each of May, August, and September. Gen4 specifically refuted the remaining material G1/participation and LONG_SHORT continuation combinations.",
+    "blocked_commit_reason": "Commit remains blocked until the requested independent artifact review, Expert Council verdict, required repository reviewer gates, and final change review are completed."
+  }
+}
