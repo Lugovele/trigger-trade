@@ -1,4 +1,5 @@
-﻿name: Deploy TriggerTrade Production
+
+name: Deploy TriggerTrade Production
 
 on:
   push:
@@ -112,14 +113,14 @@ jobs:
           echo "Cloud image digest: ${DIGEST}"
 
       - name: Build-only candidate complete
-        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.deploy != 'true' }}
+        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.deploy != 'true') }}
         shell: bash
         run: |
           set -euo pipefail
           echo "Build-only mode complete for ${IMAGE}@${IMAGE_DIGEST}; Container Apps were not modified."
 
       - name: Resolve managed identity
-        if: ${{ github.event_name == 'push' || github.event.inputs.deploy == 'true' }}
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.deploy == 'true' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -138,7 +139,7 @@ jobs:
           echo "UAMI_ID=${UAMI_ID}" >> "$GITHUB_ENV"
 
       - name: Attach managed identities
-        if: ${{ github.event_name == 'push' || github.event.inputs.deploy == 'true' }}
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.deploy == 'true' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -153,7 +154,7 @@ jobs:
           done
 
       - name: Deploy web
-        if: ${{ github.event_name == 'push' || github.event.inputs.deploy == 'true' }}
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.deploy == 'true' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -167,7 +168,7 @@ jobs:
             --set-env-vars $COMMON_ENV_VARS TRIGGERTRADE_PROCESS_ROLE=web
 
       - name: Deploy trading worker
-        if: ${{ github.event_name == 'push' || github.event.inputs.deploy == 'true' }}
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.deploy == 'true' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -181,7 +182,7 @@ jobs:
             --set-env-vars $COMMON_ENV_VARS TRIGGERTRADE_PROCESS_ROLE=trading-worker TRIGGERTRADE_WORKER_ID=uae-trading-worker-1 BYBIT_API_KEY=secretref:bybit-api-key BYBIT_API_SECRET=secretref:bybit-api-secret
 
       - name: Deploy scheduler
-        if: ${{ github.event_name == 'push' || github.event.inputs.deploy == 'true' }}
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.deploy == 'true' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -195,7 +196,7 @@ jobs:
             --set-env-vars $COMMON_ENV_VARS TRIGGERTRADE_PROCESS_ROLE=scheduler
 
       - name: Verify deployed images
-        if: ${{ github.event_name == 'push' || github.event.inputs.deploy == 'true' }}
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.deploy == 'true' }}
         shell: bash
         run: |
           set -euo pipefail
