@@ -1,0 +1,8 @@
+{
+  "path": "C:\\Users\\Елена\\Documents\\trigger-trade\\tools\\research_v2\\v2_research_harness.py",
+  "sha256": "a06e678b2f21898ba38868c505c92e9056fc85692966fd62b614dc6e6c348477",
+  "expected_sha256": "a06e678b2f21898ba38868c505c92e9056fc85692966fd62b614dc6e6c348477",
+  "hash_match": true,
+  "status": "FROZEN_CANONICAL_CALCULATION_IMPLEMENTATION",
+  "modified_in_release_task": "NO"
+}

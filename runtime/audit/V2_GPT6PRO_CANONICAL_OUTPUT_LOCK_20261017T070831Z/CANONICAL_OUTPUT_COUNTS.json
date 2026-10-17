@@ -1,0 +1,82 @@
+{
+  "canonical_run_id": "20261017T054006Z",
+  "counts_by_horizon": {
+    "120": {
+      "LONG_FAVORED": 196654,
+      "NO_DIRECTION": 441362,
+      "SHORT_FAVORED": 202304,
+      "UNAVAILABLE": 288,
+      "VALID": 840320
+    },
+    "60": {
+      "LONG_FAVORED": 200625,
+      "NO_DIRECTION": 434905,
+      "SHORT_FAVORED": 204838,
+      "UNAVAILABLE": 240,
+      "VALID": 840368
+    }
+  },
+  "counts_by_horizon_and_symbol": {
+    "120:1000PEPEUSDT": {
+      "LONG_FAVORED": 48143,
+      "NO_DIRECTION": 110928,
+      "SHORT_FAVORED": 51009,
+      "UNAVAILABLE": 72,
+      "VALID": 210080
+    },
+    "120:AVAXUSDT": {
+      "LONG_FAVORED": 49675,
+      "NO_DIRECTION": 109171,
+      "SHORT_FAVORED": 51234,
+      "UNAVAILABLE": 72,
+      "VALID": 210080
+    },
+    "120:BTCUSDT": {
+      "LONG_FAVORED": 50341,
+      "NO_DIRECTION": 111125,
+      "SHORT_FAVORED": 48614,
+      "UNAVAILABLE": 72,
+      "VALID": 210080
+    },
+    "120:SUIUSDT": {
+      "LONG_FAVORED": 48495,
+      "NO_DIRECTION": 110138,
+      "SHORT_FAVORED": 51447,
+      "UNAVAILABLE": 72,
+      "VALID": 210080
+    },
+    "60:1000PEPEUSDT": {
+      "LONG_FAVORED": 49367,
+      "NO_DIRECTION": 109411,
+      "SHORT_FAVORED": 51314,
+      "UNAVAILABLE": 60,
+      "VALID": 210092
+    },
+    "60:AVAXUSDT": {
+      "LONG_FAVORED": 50660,
+      "NO_DIRECTION": 107533,
+      "SHORT_FAVORED": 51899,
+      "UNAVAILABLE": 60,
+      "VALID": 210092
+    },
+    "60:BTCUSDT": {
+      "LONG_FAVORED": 50691,
+      "NO_DIRECTION": 109810,
+      "SHORT_FAVORED": 49591,
+      "UNAVAILABLE": 60,
+      "VALID": 210092
+    },
+    "60:SUIUSDT": {
+      "LONG_FAVORED": 49907,
+      "NO_DIRECTION": 108151,
+      "SHORT_FAVORED": 52034,
+      "UNAVAILABLE": 60,
+      "VALID": 210092
+    }
+  },
+  "dual_direction_contradictions": 0,
+  "duplicate_canonical_keys": 0,
+  "total_origins_per_horizon": 840608,
+  "unavailable_separate_from_no_direction": true,
+  "validator_result": "PASS"
+}

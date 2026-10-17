@@ -1,0 +1,66 @@
+{
+  "corpus_id": "direction-regime-history-20240930-20260930-bybit-linear-1m-v1",
+  "source_manifest_path": "C:\\Users\\Елена\\Documents\\trigger-trade\\runtime\\data\\direction-regime-history\\manifest.json",
+  "source_manifest_sha256": "f600c0546344259911075f479de583c69d88435321e06c41e0e61acbf49bf45e",
+  "physical_source_files": [
+    {
+      "logical_symbol": "BTCUSDT",
+      "physical_symbol": "BTCUSDT",
+      "path": "C:\\Users\\Елена\\Documents\\trigger-trade\\runtime\\data\\direction-regime-history\\BTCUSDT_1m.csv.gz",
+      "sha256": "131c4ebe05b2fe08eeff2758100c7ba79b609320a07d403c9db3dd50cdaa4d9c",
+      "rows": 1050760,
+      "start_utc": "2024-09-30T07:20:00Z",
+      "end_utc": "2026-09-30T00:00:00Z",
+      "actual_sha256": "131c4ebe05b2fe08eeff2758100c7ba79b609320a07d403c9db3dd50cdaa4d9c",
+      "hash_match": true
+    },
+    {
+      "logical_symbol": "AVAXUSDT",
+      "physical_symbol": "AVAXUSDT",
+      "path": "C:\\Users\\Елена\\Documents\\trigger-trade\\runtime\\data\\direction-regime-history\\AVAXUSDT_1m.csv.gz",
+      "sha256": "dbdc8739c10ac2a04d5d5daf2d4ba85789c3afbf33fb6714762e0f943b1e8e69",
+      "rows": 1050760,
+      "start_utc": "2024-09-30T07:20:00Z",
+      "end_utc": "2026-09-30T00:00:00Z",
+      "actual_sha256": "dbdc8739c10ac2a04d5d5daf2d4ba85789c3afbf33fb6714762e0f943b1e8e69",
+      "hash_match": true
+    },
+    {
+      "logical_symbol": "SUIUSDT",
+      "physical_symbol": "SUIUSDT",
+      "path": "C:\\Users\\Елена\\Documents\\trigger-trade\\runtime\\data\\direction-regime-history\\SUIUSDT_1m.csv.gz",
+      "sha256": "d2daef3bcb7944b44c516ff5f7cc182cf0ebb9a7aee809e3a1979b568f6a0b39",
+      "rows": 1050760,
+      "start_utc": "2024-09-30T07:20:00Z",
+      "end_utc": "2026-09-30T00:00:00Z",
+      "actual_sha256": "d2daef3bcb7944b44c516ff5f7cc182cf0ebb9a7aee809e3a1979b568f6a0b39",
+      "hash_match": true
+    },
+    {
+      "logical_symbol": "PEPEUSDT",
+      "physical_symbol": "1000PEPEUSDT",
+      "path": "C:\\Users\\Елена\\Documents\\trigger-trade\\runtime\\data\\direction-regime-history\\1000PEPEUSDT_1m.csv.gz",
+      "sha256": "40926fb1e2c026ef6720b687ec7eff1f65063e4708b995431cff7edba9e18061",
+      "rows": 1050760,
+      "start_utc": "2024-09-30T07:20:00Z",
+      "end_utc": "2026-09-30T00:00:00Z",
+      "actual_sha256": "40926fb1e2c026ef6720b687ec7eff1f65063e4708b995431cff7edba9e18061",
+      "hash_match": true
+    }
+  ],
+  "logical_physical_mapping": {
+    "BTCUSDT": "BTCUSDT",
+    "AVAXUSDT": "AVAXUSDT",
+    "SUIUSDT": "SUIUSDT",
+    "PEPEUSDT": "1000PEPEUSDT"
+  },
+  "common_historical_range": {
+    "start_utc": "2024-09-30T07:20:00Z",
+    "end_utc": "2026-09-30T00:00:00Z"
+  },
+  "timestamp_convention": "UTC aware pandas datetime",
+  "source_parsing_policy": "gzip CSV, close as source text then float64; decimal places counted on original close string",
+  "decimal_representation_policy": "Decimal places are counted on the original close string; numeric calculations use parsed float64 as retained in the validated calculation environment.",
+  "source_data_modified": "NO",
+  "physical_file_hash_verification": "PASS"
+}

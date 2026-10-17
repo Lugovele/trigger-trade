@@ -1,0 +1,44 @@
+{
+  "CANONICAL_PROTOCOL_ID": "V2_GPT6PRO",
+  "STATUS": "CANONICAL_HISTORICAL_LABEL_PROTOCOL",
+  "semantic_target": "A material one-sided market advantage sustained over a material part of the evaluation horizon, with sufficient advantage still present at the horizon boundary.",
+  "class_set": [
+    "LONG_FAVORED",
+    "SHORT_FAVORED",
+    "NO_DIRECTION"
+  ],
+  "primary_horizon": "60m",
+  "secondary_horizon": "120m",
+  "secondary_horizon_contract": "independently evaluated; does not confirm, veto, overwrite, fill, or alter the 60m label",
+  "research_only_nearby_horizons": [
+    "55m",
+    "65m",
+    "115m",
+    "125m"
+  ],
+  "future_information_allowed_for_historical_target": "YES",
+  "live_use": "NO",
+  "trading_strategy": "NO",
+  "release_scope": "RETROSPECTIVE HISTORICAL MARKET-DIRECTION LABELING ONLY",
+  "rms48_contract": {
+    "return_count": 48,
+    "return_interval": "5m",
+    "causal": true,
+    "adjacent_continuous_origin_transition": {
+      "enters": 1,
+      "exits": 1,
+      "remains": 47
+    }
+  },
+  "predicate_contract": {
+    "P1": "GE(J_q, beta)",
+    "P2": "M_q > 0",
+    "P3": "GE(B_q, 1)",
+    "P4": "NOT material_phase_exists(opposite side)",
+    "P5": "R_q > 0",
+    "P6": "GE(R_q, min(eta * B_q, 1))",
+    "GE": "GE(u,v) iff u >= v - tau",
+    "P4_semantics": "exact Boolean complement; not a generic GE_WITH_TAU scalar comparison",
+    "symmetry": "exact LONG/SHORT mirror symmetry"
+  }
+}

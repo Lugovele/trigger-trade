@@ -1,0 +1,31 @@
+{
+  "protocol_id": "V2_GPT6PRO",
+  "status": "CANONICAL_HISTORICAL_LABEL_PROTOCOL",
+  "configuration_strings": {
+    "a": "0.50",
+    "beta": "0.25",
+    "rho": "0.10",
+    "eta": "0.50"
+  },
+  "canonical_serialization": "{\"a\":\"0.50\",\"beta\":\"0.25\",\"rho\":\"0.10\",\"eta\":\"0.50\"}",
+  "configuration_sha256": "fb194d06cf2b79db113f74cec495fe96c61c6fde1cc33981d678332bdd919f99",
+  "primary_horizon": "60m",
+  "secondary_horizon": "120m",
+  "p_w_lmin_by_horizon": {
+    "60m": {
+      "p": 6,
+      "w": 11,
+      "L_min": 15
+    },
+    "120m": {
+      "p": 12,
+      "w": 23,
+      "L_min": 30
+    }
+  },
+  "tau": "1e-12",
+  "architecture_sha256": "7d5af8dde65fc7a3ead814e3bfa57e8ec19fa9bc3f5d2c923258da9732a0e799",
+  "freeze_amendment_sha256": "9cc5d4ea6485b59227a94e4fbef54dda3fbc43e725e746b53c9d8b03a5942134",
+  "harness_sha256": "a06e678b2f21898ba38868c505c92e9056fc85692966fd62b614dc6e6c348477",
+  "release_timestamp_utc": "2026-10-17T04:35:56Z"
+}

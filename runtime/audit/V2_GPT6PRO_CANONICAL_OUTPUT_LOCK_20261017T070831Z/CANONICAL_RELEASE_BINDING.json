@@ -1,0 +1,22 @@
+{
+  "binding_status": "PASS",
+  "canonical_output": {
+    "canonical_output_file_hashes_sha256": "769a5f2571c19315ab3dad45e8561beb9da3016057d556c0b2166f7551be819c",
+    "canonical_run_id": "20261017T054006Z",
+    "generation_manifest_sha256": "33443e4924a7c65bb9ce904dea7d00ded00f15a1483447087df3da2f57f2cb72",
+    "run_directory": "runtime\\data\\canonical_direction_labels\\V2_GPT6PRO\\20261017T054006Z",
+    "run_output_hashes_sha256": "5a7c08542c90f995fec2537f7756c704b2820f86d50836fbe13f60f071c2f4b3"
+  },
+  "configuration_sha256": "fb194d06cf2b79db113f74cec495fe96c61c6fde1cc33981d678332bdd919f99",
+  "formal_release": {
+    "canonical_release_id": "V2_GPT6PRO_CANONICAL_RELEASE_20261017T043556Z",
+    "package_archive": "runtime\\audit\\V2_GPT6PRO_CANONICAL_RELEASE_20261017T043556Z.zip",
+    "package_archive_sha256": "ab66d30b6c142991b7e5e4f68a2788ed52f3701497a98487026de0247b3d7257",
+    "package_directory": "runtime\\audit\\V2_GPT6PRO_CANONICAL_RELEASE_20261017T043556Z",
+    "release_manifest_sha256": "a19d8a4de209582b07a71f78659b1cb848b4a4d1ebb67bf64ca62c1854d4609f",
+    "release_output_hashes_sha256": "e34380005d9d6529e7c2c91871aa20c753fc1435dd01905e7d5f2902b0cd6c8a"
+  },
+  "harness_sha256": "a06e678b2f21898ba38868c505c92e9056fc85692966fd62b614dc6e6c348477",
+  "protocol_id": "V2_GPT6PRO",
+  "source_identity": "direction-regime-history-20240930-20260930-bybit-linear-1m-v1"
+}

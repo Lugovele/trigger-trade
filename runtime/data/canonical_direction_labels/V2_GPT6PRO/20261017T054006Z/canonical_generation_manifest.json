@@ -1,0 +1,152 @@
+{
+  "architecture_identity": {
+    "sha256": "7d5af8dde65fc7a3ead814e3bfa57e8ec19fa9bc3f5d2c923258da9732a0e799"
+  },
+  "calculation_environment": {
+    "contract_source_sha256": "fc24c52a83be4c65d17d43d1a382e9352c1f337486f31630a8fc561cc39a5128",
+    "deterministic_sort": "physical_symbol lexical ascending, then origin_utc ascending",
+    "floating_point_type": "IEEE binary64 / numpy.float64",
+    "generator_source_sha256": "ea6d7b15f9fa4a506e20c77120172bca0caf5e672791d2f25640026d5782c853",
+    "harness_sha256": "a06e678b2f21898ba38868c505c92e9056fc85692966fd62b614dc6e6c348477",
+    "log_implementation": "Python math.log in frozen harness",
+    "numpy": "2.2.5",
+    "pandas": "2.2.3",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "pyarrow": "25.0.1",
+    "python": "3.13.3 (tags/v3.13.3:6280bb5, Apr  8 2025, 14:47:33) [MSC v.1943 64 bit (AMD64)]",
+    "source_parsing_mode": "pandas.read_csv gzip; OHLC parsed as numpy.float64",
+    "sqrt_implementation": "Python math.sqrt in frozen harness",
+    "timezone_handling": "UTC-aware pandas timestamps; canonical UTC Z serialization",
+    "validator_source_sha256": "d4315fd9adc1790992d615ac5191ee3924787b6de3ad581a63021e2046ca8099"
+  },
+  "calculation_version": "v2_gpt6pro_canonical_089d6128f26c311c",
+  "canonical_horizons_minutes": [
+    60,
+    120
+  ],
+  "canonical_protocol_id": "V2_GPT6PRO",
+  "canonical_release_id": "V2_GPT6PRO_CANONICAL_RELEASE_20261017T043556Z",
+  "configuration_identity": {
+    "sha256": "fb194d06cf2b79db113f74cec495fe96c61c6fde1cc33981d678332bdd919f99",
+    "strings": {
+      "a": "0.50",
+      "beta": "0.25",
+      "eta": "0.50",
+      "rho": "0.10"
+    }
+  },
+  "contract_source_sha256": "fc24c52a83be4c65d17d43d1a382e9352c1f337486f31630a8fc561cc39a5128",
+  "deterministic_sort": "physical_symbol lexical ascending, then origin_utc ascending",
+  "freeze_identity": {
+    "sha256": "9cc5d4ea6485b59227a94e4fbef54dda3fbc43e725e746b53c9d8b03a5942134"
+  },
+  "generation_command": "'C:\\Users\\\u0415\u043b\u0435\u043d\u0430\\AppData\\Local\\Programs\\Python\\Python313\\python.exe' -m tools.direction_labels.generate_v2_gpt6pro_canonical --timestamp 20261017T054006Z",
+  "generator_source_sha256": "ea6d7b15f9fa4a506e20c77120172bca0caf5e672791d2f25640026d5782c853",
+  "harness_identity": {
+    "sha256": "a06e678b2f21898ba38868c505c92e9056fc85692966fd62b614dc6e6c348477"
+  },
+  "horizon_relationship": "INDEPENDENT",
+  "input_file_hashes": {
+    "1000PEPEUSDT": "40926fb1e2c026ef6720b687ec7eff1f65063e4708b995431cff7edba9e18061",
+    "AVAXUSDT": "dbdc8739c10ac2a04d5d5daf2d4ba85789c3afbf33fb6714762e0f943b1e8e69",
+    "BTCUSDT": "131c4ebe05b2fe08eeff2758100c7ba79b609320a07d403c9db3dd50cdaa4d9c",
+    "SUIUSDT": "d2daef3bcb7944b44c516ff5f7cc182cf0ebb9a7aee809e3a1979b568f6a0b39"
+  },
+  "output_file_hashes": {
+    "canonical_diagnostics.parquet": "9b1228acd2fbe5987cca0f37f5a580b01a138b6e48913504fe99d6cc713fc9b2",
+    "canonical_generation_summary.csv": "a4f2f3e7eb4d9389b0c697574dfe5214fa9fac8f9c681d7bccc88c76fcab9955",
+    "canonical_labels.parquet": "a9ca77e059e600a2cab1e57cebbe71b217a36a72c6c673496b0eef7f2b1baca0",
+    "canonical_labels_120m.parquet": "f4161b32784539376f3148b867f5658d98c05d9ea891b01e1996d7107c60b06b",
+    "canonical_labels_60m.parquet": "d8f60429d25cffde767c5ee244f125114ca872666c9f6884c893f1ada285c5ed",
+    "canonical_unavailable_rows.csv": "9ffd46c15bcf9ecd3405873ca1cbaef7a28560de6802ebc3eafc0294b909923c"
+  },
+  "release_manifest_sha256": "a19d8a4de209582b07a71f78659b1cb848b4a4d1ebb67bf64ca62c1854d4609f",
+  "rms48_contract": {
+    "return_count": 48,
+    "return_spacing_minutes": 5
+  },
+  "row_counts": {
+    "counts": {
+      "120": {
+        "LONG_FAVORED": 196654,
+        "NO_DIRECTION": 441362,
+        "SHORT_FAVORED": 202304,
+        "UNAVAILABLE": 288,
+        "VALID": 840320
+      },
+      "60": {
+        "LONG_FAVORED": 200625,
+        "NO_DIRECTION": 434905,
+        "SHORT_FAVORED": 204838,
+        "UNAVAILABLE": 240,
+        "VALID": 840368
+      }
+    },
+    "symbol_counts": {
+      "120:1000PEPEUSDT": {
+        "LONG_FAVORED": 48143,
+        "NO_DIRECTION": 110928,
+        "SHORT_FAVORED": 51009,
+        "UNAVAILABLE": 72,
+        "VALID": 210080
+      },
+      "120:AVAXUSDT": {
+        "LONG_FAVORED": 49675,
+        "NO_DIRECTION": 109171,
+        "SHORT_FAVORED": 51234,
+        "UNAVAILABLE": 72,
+        "VALID": 210080
+      },
+      "120:BTCUSDT": {
+        "LONG_FAVORED": 50341,
+        "NO_DIRECTION": 111125,
+        "SHORT_FAVORED": 48614,
+        "UNAVAILABLE": 72,
+        "VALID": 210080
+      },
+      "120:SUIUSDT": {
+        "LONG_FAVORED": 48495,
+        "NO_DIRECTION": 110138,
+        "SHORT_FAVORED": 51447,
+        "UNAVAILABLE": 72,
+        "VALID": 210080
+      },
+      "60:1000PEPEUSDT": {
+        "LONG_FAVORED": 49367,
+        "NO_DIRECTION": 109411,
+        "SHORT_FAVORED": 51314,
+        "UNAVAILABLE": 60,
+        "VALID": 210092
+      },
+      "60:AVAXUSDT": {
+        "LONG_FAVORED": 50660,
+        "NO_DIRECTION": 107533,
+        "SHORT_FAVORED": 51899,
+        "UNAVAILABLE": 60,
+        "VALID": 210092
+      },
+      "60:BTCUSDT": {
+        "LONG_FAVORED": 50691,
+        "NO_DIRECTION": 109810,
+        "SHORT_FAVORED": 49591,
+        "UNAVAILABLE": 60,
+        "VALID": 210092
+      },
+      "60:SUIUSDT": {
+        "LONG_FAVORED": 49907,
+        "NO_DIRECTION": 108151,
+        "SHORT_FAVORED": 52034,
+        "UNAVAILABLE": 60,
+        "VALID": 210092
+      }
+    }
+  },
+  "run_id": "20261017T054006Z",
+  "run_timestamp_utc": "2026-10-17T05:40:06Z",
+  "source_identity": {
+    "corpus_id": "direction-regime-history-20240930-20260930-bybit-linear-1m-v1",
+    "manifest_sha256": "f600c0546344259911075f479de583c69d88435321e06c41e0e61acbf49bf45e"
+  },
+  "status": "CANONICAL_HISTORICAL_LABEL_PROTOCOL",
+  "validator_source_sha256": "d4315fd9adc1790992d615ac5191ee3924787b6de3ad581a63021e2046ca8099"
+}

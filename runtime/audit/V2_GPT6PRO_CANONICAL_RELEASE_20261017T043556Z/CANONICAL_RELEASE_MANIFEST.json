@@ -1,0 +1,342 @@
+{
+  "release_id": "V2_GPT6PRO_CANONICAL_RELEASE_20261017T043556Z",
+  "release_timestamp_utc": "2026-10-17T04:35:56Z",
+  "research_freeze_date": "2026-10-13",
+  "protocol_id": "V2_GPT6PRO",
+  "status": "CANONICAL_HISTORICAL_LABEL_PROTOCOL",
+  "architecture_identity": {
+    "path": "C:\\Users\\Елена\\Downloads\\V2_GPT6PRO.md",
+    "sha256": "7d5af8dde65fc7a3ead814e3bfa57e8ec19fa9bc3f5d2c923258da9732a0e799",
+    "retained_repository_identity_reference": "C:\\Users\\Елена\\Documents\\trigger-trade\\runtime\\audit\\RC_GPT6_ORIGIN_ALIGNED_PRECISION_VALIDATION_20261016T042006Z\\CONFIGURATION_IDENTITY.json"
+  },
+  "freeze_identity": {
+    "path": "C:\\Users\\Елена\\Downloads\\V2_GPT6PRO_PARAMETER_FREEZE (1).md",
+    "sha256": "9cc5d4ea6485b59227a94e4fbef54dda3fbc43e725e746b53c9d8b03a5942134",
+    "amendment_id": "V2_GPT6PRO_RC_20261013_01",
+    "decision_date": "2026-10-13",
+    "retained_repository_identity_reference": "C:\\Users\\Елена\\Documents\\trigger-trade\\runtime\\audit\\RC_GPT6_ORIGIN_ALIGNED_PRECISION_VALIDATION_20261016T042006Z\\CONFIGURATION_IDENTITY.json"
+  },
+  "configuration_identity": {
+    "protocol_id": "V2_GPT6PRO",
+    "status": "CANONICAL_HISTORICAL_LABEL_PROTOCOL",
+    "configuration_strings": {
+      "a": "0.50",
+      "beta": "0.25",
+      "rho": "0.10",
+      "eta": "0.50"
+    },
+    "canonical_serialization": "{\"a\":\"0.50\",\"beta\":\"0.25\",\"rho\":\"0.10\",\"eta\":\"0.50\"}",
+    "configuration_sha256": "fb194d06cf2b79db113f74cec495fe96c61c6fde1cc33981d678332bdd919f99",
+    "primary_horizon": "60m",
+    "secondary_horizon": "120m",
+    "p_w_lmin_by_horizon": {
+      "60m": {
+        "p": 6,
+        "w": 11,
+        "L_min": 15
+      },
+      "120m": {
+        "p": 12,
+        "w": 23,
+        "L_min": 30
+      }
+    },
+    "tau": "1e-12",
+    "architecture_sha256": "7d5af8dde65fc7a3ead814e3bfa57e8ec19fa9bc3f5d2c923258da9732a0e799",
+    "freeze_amendment_sha256": "9cc5d4ea6485b59227a94e4fbef54dda3fbc43e725e746b53c9d8b03a5942134",
+    "harness_sha256": "a06e678b2f21898ba38868c505c92e9056fc85692966fd62b614dc6e6c348477",
+    "release_timestamp_utc": "2026-10-17T04:35:56Z"
+  },
+  "source_identity": {
+    "corpus_id": "direction-regime-history-20240930-20260930-bybit-linear-1m-v1",
+    "source_manifest_path": "C:\\Users\\Елена\\Documents\\trigger-trade\\runtime\\data\\direction-regime-history\\manifest.json",
+    "source_manifest_sha256": "f600c0546344259911075f479de583c69d88435321e06c41e0e61acbf49bf45e",
+    "physical_source_files": [
+      {
+        "logical_symbol": "BTCUSDT",
+        "physical_symbol": "BTCUSDT",
+        "path": "C:\\Users\\Елена\\Documents\\trigger-trade\\runtime\\data\\direction-regime-history\\BTCUSDT_1m.csv.gz",
+        "sha256": "131c4ebe05b2fe08eeff2758100c7ba79b609320a07d403c9db3dd50cdaa4d9c",
+        "rows": 1050760,
+        "start_utc": "2024-09-30T07:20:00Z",
+        "end_utc": "2026-09-30T00:00:00Z",
+        "actual_sha256": "131c4ebe05b2fe08eeff2758100c7ba79b609320a07d403c9db3dd50cdaa4d9c",
+        "hash_match": true
+      },
+      {
+        "logical_symbol": "AVAXUSDT",
+        "physical_symbol": "AVAXUSDT",
+        "path": "C:\\Users\\Елена\\Documents\\trigger-trade\\runtime\\data\\direction-regime-history\\AVAXUSDT_1m.csv.gz",
+        "sha256": "dbdc8739c10ac2a04d5d5daf2d4ba85789c3afbf33fb6714762e0f943b1e8e69",
+        "rows": 1050760,
+        "start_utc": "2024-09-30T07:20:00Z",
+        "end_utc": "2026-09-30T00:00:00Z",
+        "actual_sha256": "dbdc8739c10ac2a04d5d5daf2d4ba85789c3afbf33fb6714762e0f943b1e8e69",
+        "hash_match": true
+      },
+      {
+        "logical_symbol": "SUIUSDT",
+        "physical_symbol": "SUIUSDT",
+        "path": "C:\\Users\\Елена\\Documents\\trigger-trade\\runtime\\data\\direction-regime-history\\SUIUSDT_1m.csv.gz",
+        "sha256": "d2daef3bcb7944b44c516ff5f7cc182cf0ebb9a7aee809e3a1979b568f6a0b39",
+        "rows": 1050760,
+        "start_utc": "2024-09-30T07:20:00Z",
+        "end_utc": "2026-09-30T00:00:00Z",
+        "actual_sha256": "d2daef3bcb7944b44c516ff5f7cc182cf0ebb9a7aee809e3a1979b568f6a0b39",
+        "hash_match": true
+      },
+      {
+        "logical_symbol": "PEPEUSDT",
+        "physical_symbol": "1000PEPEUSDT",
+        "path": "C:\\Users\\Елена\\Documents\\trigger-trade\\runtime\\data\\direction-regime-history\\1000PEPEUSDT_1m.csv.gz",
+        "sha256": "40926fb1e2c026ef6720b687ec7eff1f65063e4708b995431cff7edba9e18061",
+        "rows": 1050760,
+        "start_utc": "2024-09-30T07:20:00Z",
+        "end_utc": "2026-09-30T00:00:00Z",
+        "actual_sha256": "40926fb1e2c026ef6720b687ec7eff1f65063e4708b995431cff7edba9e18061",
+        "hash_match": true
+      }
+    ],
+    "logical_physical_mapping": {
+      "BTCUSDT": "BTCUSDT",
+      "AVAXUSDT": "AVAXUSDT",
+      "SUIUSDT": "SUIUSDT",
+      "PEPEUSDT": "1000PEPEUSDT"
+    },
+    "common_historical_range": {
+      "start_utc": "2024-09-30T07:20:00Z",
+      "end_utc": "2026-09-30T00:00:00Z"
+    },
+    "timestamp_convention": "UTC aware pandas datetime",
+    "source_parsing_policy": "gzip CSV, close as source text then float64; decimal places counted on original close string",
+    "decimal_representation_policy": "Decimal places are counted on the original close string; numeric calculations use parsed float64 as retained in the validated calculation environment.",
+    "source_data_modified": "NO",
+    "physical_file_hash_verification": "PASS"
+  },
+  "harness_identity": {
+    "path": "C:\\Users\\Елена\\Documents\\trigger-trade\\tools\\research_v2\\v2_research_harness.py",
+    "sha256": "a06e678b2f21898ba38868c505c92e9056fc85692966fd62b614dc6e6c348477",
+    "expected_sha256": "a06e678b2f21898ba38868c505c92e9056fc85692966fd62b614dc6e6c348477",
+    "hash_match": true,
+    "status": "FROZEN_CANONICAL_CALCULATION_IMPLEMENTATION",
+    "modified_in_release_task": "NO"
+  },
+  "calculation_environment_identity": {
+    "path": "C:\\Users\\Елена\\Documents\\trigger-trade\\runtime\\audit\\RC_GPT6_SECTION16_COMPLETION_20261016T042006Z\\CALCULATION_ENVIRONMENT.json",
+    "sha256": "d45bbf3ccbed29e30ea6babd651621b7da5ae105d0a938e847a883d11b915e44",
+    "environment": {
+      "python": "3.13.3 (tags/v3.13.3:6280bb5, Apr  8 2025, 14:47:33) [MSC v.1943 64 bit (AMD64)]",
+      "numpy": "2.2.5",
+      "pandas": "2.2.3",
+      "pyarrow": "25.0.1",
+      "platform": "Windows-11-10.0.26200-SP0",
+      "floating_point_type": "IEEE binary64 / numpy.float64",
+      "log_implementation": "numpy.log and numpy.log1p",
+      "sqrt_implementation": "numpy.sqrt",
+      "timezone": "UTC aware pandas datetime",
+      "source_csv_parsing": "gzip CSV, close as source text then float64; decimal places counted on original close string",
+      "sorting": "physical symbol fixed order; origin UTC stable ascending; side LONG then SHORT"
+    }
+  },
+  "evidence_packages": [
+    {
+      "id": "architecture",
+      "description": "Authoritative V2_GPT6PRO architecture",
+      "path": "C:\\Users\\Елена\\Downloads\\V2_GPT6PRO.md",
+      "identity_type": "file_sha256",
+      "sha256": "7d5af8dde65fc7a3ead814e3bfa57e8ec19fa9bc3f5d2c923258da9732a0e799",
+      "exists": true
+    },
+    {
+      "id": "frozen_parameter_amendment",
+      "description": "Frozen RC parameter amendment",
+      "path": "C:\\Users\\Елена\\Downloads\\V2_GPT6PRO_PARAMETER_FREEZE (1).md",
+      "identity_type": "file_sha256",
+      "sha256": "9cc5d4ea6485b59227a94e4fbef54dda3fbc43e725e746b53c9d8b03a5942134",
+      "exists": true
+    },
+    {
+      "id": "baseline_full_corpus_validation",
+      "description": "Dual-candidate full-corpus validation; package bound by retained per-origin hash manifest",
+      "path": "C:\\Users\\Елена\\Documents\\trigger-trade\\runtime\\audit\\direction_label_v2_gpt6pro_dual_candidate_validation_20261013T043733Z",
+      "identity_artifact": "C:\\Users\\Елена\\Documents\\trigger-trade\\runtime\\audit\\direction_label_v2_gpt6pro_dual_candidate_validation_20261013T043733Z\\PER_ORIGIN_OUTPUT_HASHES.json",
+      "identity_type": "PER_ORIGIN_OUTPUT_HASHES.json_sha256",
+      "sha256": "2993f97eb30a1172e38efe98503336ff3bb3b924b05fd4a6c5f00ad0b42e4fcb",
+      "exists": true
+    },
+    {
+      "id": "full_stability_package",
+      "description": "Full predeclared RC-GPT6 stability package",
+      "path": "C:\\Users\\Елена\\Documents\\trigger-trade\\runtime\\audit\\direction_label_v2_rc_gpt6_full_stability_20261015T013231Z",
+      "identity_artifact": "C:\\Users\\Елена\\Documents\\trigger-trade\\runtime\\audit\\direction_label_v2_rc_gpt6_full_stability_20261015T013231Z\\OUTPUT_HASHES.json",
+      "identity_type": "OUTPUT_HASHES.json_sha256",
+      "sha256": "14e54e2e47b6b4aa040737f74fe47c7bbc803de3aa9d7eaac5feff0b9c93fb31",
+      "exists": true
+    },
+    {
+      "id": "independent_stability_adjudications",
+      "description": "Independent stability adjudications recorded in release decision provenance",
+      "path": null,
+      "sha256": null,
+      "identity_type": "decision_provenance_without_local_source_text",
+      "provenance_record": "EXPERT_RELEASE_DECISIONS.md"
+    },
+    {
+      "id": "fresh_representative_panel_selection",
+      "description": "Fresh outcome-blind representative panel",
+      "path": "C:\\Users\\Елена\\Documents\\trigger-trade\\runtime\\audit\\direction_label_v2_fresh_representative_panel_20261015T045719Z",
+      "identity_artifact": "C:\\Users\\Елена\\Documents\\trigger-trade\\runtime\\audit\\direction_label_v2_fresh_representative_panel_20261015T045719Z\\OUTPUT_HASHES.json",
+      "identity_type": "OUTPUT_HASHES.json_sha256",
+      "sha256": "fefc74dc756efa81a2072d06ab75c07d5cac572570e72b18b95c06a7b05bb696",
+      "exists": true
+    },
+    {
+      "id": "blind_reviewer_agreement_freeze",
+      "description": "Frozen two-reviewer agreement package",
+      "path": "C:\\Users\\Елена\\Documents\\trigger-trade\\runtime\\audit\\direction_label_v2_fresh_panel_reviewer_agreement_20261015T071211Z",
+      "identity_artifact": "C:\\Users\\Елена\\Documents\\trigger-trade\\runtime\\audit\\direction_label_v2_fresh_panel_reviewer_agreement_20261015T071211Z\\OUTPUT_HASHES.json",
+      "identity_type": "OUTPUT_HASHES.json_sha256",
+      "sha256": "17837075e8b31115e29b0375d034760194cd891ce623550f03f9d81b8bfa3a5f",
+      "exists": true
+    },
+    {
+      "id": "candidate_unblind_package",
+      "description": "Frozen candidate unblind and reviewer comparison",
+      "path": "C:\\Users\\Елена\\Documents\\trigger-trade\\runtime\\audit\\direction_label_v2_fresh_panel_candidate_unblind_20261015T073438Z",
+      "identity_artifact": "C:\\Users\\Елена\\Documents\\trigger-trade\\runtime\\audit\\direction_label_v2_fresh_panel_candidate_unblind_20261015T073438Z\\OUTPUT_HASHES.json",
+      "identity_type": "OUTPUT_HASHES.json_sha256",
+      "sha256": "eb04edd16fd98e97abf14c03c89ab68028fb42d0a63463ea7c312e3953fdb7eb",
+      "exists": true
+    },
+    {
+      "id": "68_row_disagreement_adjudication_ledgers",
+      "description": "All 68 candidate-versus-agreed-reviewer disagreement rows; expert conclusion CONTINUE_RC_GPT6_UNCHANGED, without collapsing ambiguity into correctness",
+      "path": "C:\\Users\\Елена\\Documents\\trigger-trade\\runtime\\audit\\direction_label_v2_fresh_panel_candidate_unblind_20261015T073438Z\\candidate_vs_agreed_reviewers_disagreements.csv",
+      "identity_type": "file_sha256",
+      "sha256": "b520564f61891fdd3f38e9f750025663a194cf354cd1edf5077835c656d381fc",
+      "exists": true,
+      "expert_response_hash": null,
+      "expert_response_provenance": "user-supplied release instruction; original expert response text not retained locally"
+    },
+    {
+      "id": "precision_base_042006Z",
+      "description": "Origin-aligned precision base",
+      "path": "C:\\Users\\Елена\\Documents\\trigger-trade\\runtime\\audit\\RC_GPT6_ORIGIN_ALIGNED_PRECISION_VALIDATION_20261016T042006Z",
+      "identity_artifact": "C:\\Users\\Елена\\Documents\\trigger-trade\\runtime\\audit\\RC_GPT6_ORIGIN_ALIGNED_PRECISION_VALIDATION_20261016T042006Z\\OUTPUT_HASHES.json",
+      "identity_type": "OUTPUT_HASHES.json_sha256",
+      "sha256": "ee563afccd30f7b077fa0200a2baf0edfe57ff739a1599b8f01bc29745e4b686",
+      "exists": true
+    },
+    {
+      "id": "precision_final_overlay_055025Z",
+      "description": "Final exhaustive single-source-step precision overlay",
+      "path": "C:\\Users\\Елена\\Documents\\trigger-trade\\runtime\\audit\\RC_GPT6_ORIGIN_ALIGNED_PRECISION_VALIDATION_20261016T055025Z",
+      "identity_artifact": "C:\\Users\\Елена\\Documents\\trigger-trade\\runtime\\audit\\RC_GPT6_ORIGIN_ALIGNED_PRECISION_VALIDATION_20261016T055025Z\\OUTPUT_HASHES.json",
+      "identity_type": "OUTPUT_HASHES.json_sha256",
+      "sha256": "46a1dcd018d43ec21f3039c63ec83bdb14a6376cbba6af2b34a0c17b15258a8f",
+      "exists": true
+    },
+    {
+      "id": "section16_base_042006Z",
+      "description": "Section16 retained base studies",
+      "path": "C:\\Users\\Елена\\Documents\\trigger-trade\\runtime\\audit\\RC_GPT6_SECTION16_COMPLETION_20261016T042006Z",
+      "identity_artifact": "C:\\Users\\Елена\\Documents\\trigger-trade\\runtime\\audit\\RC_GPT6_SECTION16_COMPLETION_20261016T042006Z\\OUTPUT_HASHES.json",
+      "identity_type": "OUTPUT_HASHES.json_sha256",
+      "sha256": "512b55a781cbbe87a14b7539fd1e74d7533cd8a4fafd0b11ec355f44490b9ed6",
+      "exists": true
+    },
+    {
+      "id": "section16_completion_050339Z",
+      "description": "Section16 exact timing, interruption, and shock-membership completion",
+      "path": "C:\\Users\\Елена\\Documents\\trigger-trade\\runtime\\audit\\RC_GPT6_SECTION16_COMPLETION_20261016T050339Z",
+      "identity_artifact": "C:\\Users\\Елена\\Documents\\trigger-trade\\runtime\\audit\\RC_GPT6_SECTION16_COMPLETION_20261016T050339Z\\OUTPUT_HASHES.json",
+      "identity_type": "OUTPUT_HASHES.json_sha256",
+      "sha256": "bc602ada99b3fe2ede4a8a5d0de9df4f63717e1b53e25662fa5a39cd4f30c519",
+      "exists": true
+    },
+    {
+      "id": "active_blocker_closure_wrapper_055025Z",
+      "description": "Active release-blocker evidence closure wrapper",
+      "path": "C:\\Users\\Елена\\Documents\\trigger-trade\\runtime\\audit\\RC_GPT6_RELEASE_BLOCKER_CLOSURE_20261016T055025Z",
+      "identity_artifact": "C:\\Users\\Елена\\Documents\\trigger-trade\\runtime\\audit\\RC_GPT6_RELEASE_BLOCKER_CLOSURE_20261016T055025Z\\OUTPUT_HASHES.json",
+      "identity_type": "OUTPUT_HASHES.json_sha256",
+      "sha256": "078e86554d379ecedfffb237df8fc47e6b46201d4355627bd7bb4b791444ec09",
+      "exists": true
+    },
+    {
+      "id": "compact_gpt6pro_closure_proxy",
+      "description": "Compact locally verified closure-review proxy",
+      "path": "C:\\Users\\Елена\\Documents\\trigger-trade\\runtime\\audit\\RC_GPT6_GPT6PRO_CLOSURE_PROXY_20261017T033933Z.zip",
+      "identity_type": "file_sha256",
+      "sha256": "4d4d525d4419f79256332a8c9c10bd2e43da50a5e8fffbf4524706b07cde8f64",
+      "exists": true
+    },
+    {
+      "id": "final_claude_canonical_approval",
+      "description": "Claude APPROVE_CANONICAL_RELEASE; V2-REL-01 and V2-REL-02 CLOSED",
+      "path": null,
+      "sha256": null,
+      "identity_type": "decision_provenance_without_local_source_text",
+      "provenance_record": "EXPERT_RELEASE_DECISIONS.md"
+    },
+    {
+      "id": "final_gpt6pro_canonical_approval",
+      "description": "GPT-6 Pro APPROVE_CANONICAL_RELEASE; V2-REL-01 and V2-REL-02 CLOSED",
+      "path": null,
+      "sha256": null,
+      "identity_type": "decision_provenance_without_local_source_text",
+      "provenance_record": "EXPERT_RELEASE_DECISIONS.md"
+    }
+  ],
+  "closure_records": {
+    "V2_REL_01": "CLOSED",
+    "V2_REL_02": "CLOSED",
+    "semantic_blocker": "NO",
+    "stability_blocker": "NO",
+    "implementation_blocker": "NO",
+    "active_wrapper": "RC_GPT6_RELEASE_BLOCKER_CLOSURE_20261016T055025Z",
+    "stale_historical_wrapper": "RC_GPT6_RELEASE_BLOCKER_CLOSURE_20261016T050339Z"
+  },
+  "expert_release_decisions": {
+    "Claude": {
+      "decision": "APPROVE_CANONICAL_RELEASE",
+      "source_text_local_file": null,
+      "source_text_sha256": null,
+      "provenance": "EXPERT_RELEASE_DECISIONS.md"
+    },
+    "GPT-6 Pro": {
+      "decision": "APPROVE_CANONICAL_RELEASE",
+      "source_text_local_file": null,
+      "source_text_sha256": null,
+      "provenance": "EXPERT_RELEASE_DECISIONS.md"
+    }
+  },
+  "known_limitations": [
+    "Endpoint sensitivity.",
+    "Terminal settlement binding.",
+    "Hard material-establishment boundary.",
+    "Partial-prefix contribution to J.",
+    "Opposing-phase veto granularity.",
+    "Local p/w discrete boundary effects.",
+    "Capped retention / large proportional givebacks.",
+    "RMS48 regime-transition sensitivity.",
+    "Reviewer provenance limitations.",
+    "Same-corpus fresh-panel validation rather than later untouched temporal data.",
+    "Origin-shift sensitivity.",
+    "Single-source-step precision dependence near boundaries."
+  ],
+  "post_release_obligations": [
+    "When data after 2026-09-30 exists, apply the frozen canonical protocol unchanged to a separately frozen later period.",
+    "Use a new outcome-blind panel on later data.",
+    "Prefer context-isolated independent reviewers.",
+    "Report results; do not tune the canonical version.",
+    "Monitor endpoint-only veto rate, p0/source-step precision dependence, RMS48 regime-transition behavior, volatility-quintile directional gradient, and tick/source-representation changes.",
+    "Re-run conformance for every new calculation/runtime version.",
+    "Any semantic change requires a new protocol version."
+  ],
+  "canonical_outputs_status": "NOT_GENERATED_IN_THIS_TASK",
+  "parameters_changed": "NO",
+  "architecture_changed": "NO",
+  "label_rule_changed": "NO",
+  "trading_results_used": "NO"
+}

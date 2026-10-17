@@ -1,0 +1,53 @@
+{
+  "canonical_protocol_id": "V2_GPT6PRO",
+  "canonical_release_id": "V2_GPT6PRO_CANONICAL_RELEASE_20261017T043556Z",
+  "canonical_run_directory": "runtime\\data\\canonical_direction_labels\\V2_GPT6PRO\\20261017T054006Z",
+  "canonical_run_id": "20261017T054006Z",
+  "files": [
+    {
+      "relative_path": "canonical_diagnostics.parquet",
+      "sha256": "9b1228acd2fbe5987cca0f37f5a580b01a138b6e48913504fe99d6cc713fc9b2",
+      "size_bytes": 42225621
+    },
+    {
+      "relative_path": "canonical_generation_manifest.json",
+      "sha256": "33443e4924a7c65bb9ce904dea7d00ded00f15a1483447087df3da2f57f2cb72",
+      "size_bytes": 6045
+    },
+    {
+      "relative_path": "canonical_generation_summary.csv",
+      "sha256": "a4f2f3e7eb4d9389b0c697574dfe5214fa9fac8f9c681d7bccc88c76fcab9955",
+      "size_bytes": 592
+    },
+    {
+      "relative_path": "canonical_generation_validation.md",
+      "sha256": "1c711d286653a011dae9905cf90201879a419d8c3e2ed5086ec7091d756070ad",
+      "size_bytes": 234
+    },
+    {
+      "relative_path": "canonical_labels.parquet",
+      "sha256": "a9ca77e059e600a2cab1e57cebbe71b217a36a72c6c673496b0eef7f2b1baca0",
+      "size_bytes": 10584706
+    },
+    {
+      "relative_path": "canonical_labels_120m.parquet",
+      "sha256": "f4161b32784539376f3148b867f5658d98c05d9ea891b01e1996d7107c60b06b",
+      "size_bytes": 9778700
+    },
+    {
+      "relative_path": "canonical_labels_60m.parquet",
+      "sha256": "d8f60429d25cffde767c5ee244f125114ca872666c9f6884c893f1ada285c5ed",
+      "size_bytes": 9798675
+    },
+    {
+      "relative_path": "canonical_output_hashes.json",
+      "sha256": "5a7c08542c90f995fec2537f7756c704b2820f86d50836fbe13f60f071c2f4b3",
+      "size_bytes": 1050
+    },
+    {
+      "relative_path": "canonical_unavailable_rows.csv",
+      "sha256": "9ffd46c15bcf9ecd3405873ca1cbaef7a28560de6802ebc3eafc0294b909923c",
+      "size_bytes": 46588
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "canonical_protocol_id": "V2_GPT6PRO",
+  "canonical_release_id": "V2_GPT6PRO_CANONICAL_RELEASE_20261017T043556Z",
+  "files": {
+    "canonical_diagnostics.parquet": "9b1228acd2fbe5987cca0f37f5a580b01a138b6e48913504fe99d6cc713fc9b2",
+    "canonical_generation_manifest.json": "33443e4924a7c65bb9ce904dea7d00ded00f15a1483447087df3da2f57f2cb72",
+    "canonical_generation_summary.csv": "a4f2f3e7eb4d9389b0c697574dfe5214fa9fac8f9c681d7bccc88c76fcab9955",
+    "canonical_generation_validation.md": "1c711d286653a011dae9905cf90201879a419d8c3e2ed5086ec7091d756070ad",
+    "canonical_labels.parquet": "a9ca77e059e600a2cab1e57cebbe71b217a36a72c6c673496b0eef7f2b1baca0",
+    "canonical_labels_120m.parquet": "f4161b32784539376f3148b867f5658d98c05d9ea891b01e1996d7107c60b06b",
+    "canonical_labels_60m.parquet": "d8f60429d25cffde767c5ee244f125114ca872666c9f6884c893f1ada285c5ed",
+    "canonical_unavailable_rows.csv": "9ffd46c15bcf9ecd3405873ca1cbaef7a28560de6802ebc3eafc0294b909923c"
+  },
+  "self_excluded": "canonical_output_hashes.json"
+}
