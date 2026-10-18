@@ -1,0 +1,5 @@
+"""Bounded causal data and feature contract for LIVE_DIRECTION_ESTIMATOR_V1."""
+
+SPEC_ID = "LIVE_DIRECTION_ESTIMATOR_V1"
+SPEC_VERSION = "1.0.0"
+FEATURE_REGISTRY = "LDE_V1_ADJ35_U1M"
