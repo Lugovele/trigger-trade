@@ -153,9 +153,8 @@ class BybitKlineCaptureHook:
             else:
                 receipt_status = "VALID"
         parameters = tuple(sorted((key, value) for key, values in params.items() for value in values))
-        identity = (PROVIDER_ID, STREAM_ID, symbol, parameters, request_id,
-                    received_at.isoformat() if isinstance(received_at, datetime) else None, digest)
-        receipt_ref = "bybit-rest-receipt:" + sha256(json.dumps(identity, separators=(",", ":")).encode()).hexdigest()
+        receipt_ref = capture_receipt_reference(
+            PROVIDER_ID, STREAM_ID, symbol, parameters, request_id, timestamp, digest)
         evidence = self._clock_attestor(receipt_ref, timestamp) if self._clock_attestor and receipt_status == "VALID" else None
         clock_ok = (evidence is not None and evidence.receipt_ref == receipt_ref and
                     evidence.verified_at == timestamp)
@@ -202,3 +201,12 @@ def load_capture_record(data: dict[str, object], *, sink: CaptureSink | None = N
         if original is not None and original.to_dict() == data:
             return original
     return imported
+
+
+def capture_receipt_reference(provider_id: str, stream_id: str, symbol: str,
+                              parameters: tuple[tuple[str, str], ...], request_id: str,
+                              received_at: datetime | None, raw_sha256: str) -> str:
+    """The Phase 4 identity rule, shared with durable reload verification."""
+    identity = (provider_id, stream_id, symbol, parameters, request_id,
+                received_at.isoformat() if isinstance(received_at, datetime) else None, raw_sha256)
+    return "bybit-rest-receipt:" + sha256(json.dumps(identity, separators=(",", ":")).encode()).hexdigest()
