@@ -9,6 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import gzip
 import json
+import subprocess
 
 import pytest
 
@@ -17,6 +18,73 @@ from triggertrade.live_direction_estimator_v1.historical_source import (
     HistoricalMember, HistoricalSourceContract,
 )
 from triggertrade.live_direction_estimator_v1.development_readiness import AuthenticatedInputs, DevelopmentInputError
+
+
+@pytest.fixture
+def committed_runner_repo(tmp_path, monkeypatch):
+    """An isolated synthetic Git repo; never commits to TriggerTrade."""
+    repo = tmp_path / "fixture-repo"
+    repo.mkdir()
+
+    def git(*args):
+        return subprocess.run(["git", *args], cwd=repo, capture_output=True,
+                              check=True).stdout
+
+    git("init", "-q")
+    path = repo / "tools/lde_v1/run_development_study.py"
+    path.parent.mkdir(parents=True)
+    committed = b"print('committed runner')\n"
+    path.write_bytes(committed)
+    (repo / ".gitattributes").write_text(
+        "tools/lde_v1/run_development_study.py text\n", encoding="utf-8")
+    (repo / "other.txt").write_text("original\n", encoding="utf-8")
+    git("add", ".gitattributes", "tools/lde_v1/run_development_study.py", "other.txt")
+    git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+        "commit", "-q", "-m", "synthetic fixture")
+    monkeypatch.setattr(runner, "REPO", repo)
+    monkeypatch.setattr(runner, "__file__", str(path))
+    return repo, path, sha256(committed).hexdigest()
+
+
+def test_committed_runner_unchanged_passes(committed_runner_repo):
+    _repo, _path, expected = committed_runner_repo
+    assert runner._committed_runner() == expected
+
+
+def test_committed_runner_crlf_checkout_passes(committed_runner_repo):
+    _repo, path, expected = committed_runner_repo
+    path.write_bytes(path.read_bytes().replace(b"\n", b"\r\n"))
+    assert runner._committed_runner() == expected
+
+
+def test_committed_runner_source_modification_fails_closed(committed_runner_repo):
+    _repo, path, _expected = committed_runner_repo
+    path.write_bytes(path.read_bytes() + b"print('modified')\n")
+    with pytest.raises(DevelopmentInputError, match="runner differs from committed HEAD"):
+        runner._committed_runner()
+
+
+def test_committed_runner_ignores_unrelated_dirty_file(committed_runner_repo):
+    repo, _path, expected = committed_runner_repo
+    (repo / "other.txt").write_text("dirty\n", encoding="utf-8")
+    assert runner._committed_runner() == expected
+
+
+def test_committed_runner_rejects_custom_clean_filter(committed_runner_repo):
+    repo, _path, _expected = committed_runner_repo
+    (repo / ".gitattributes").write_text(
+        "tools/lde_v1/run_development_study.py filter=untrusted\n", encoding="utf-8")
+    with pytest.raises(DevelopmentInputError, match="unsupported custom Git filter"):
+        runner._committed_runner()
+
+
+def test_committed_runner_rejects_redirected_registered_path(committed_runner_repo, monkeypatch):
+    _repo, path, _expected = committed_runner_repo
+    original_is_symlink = Path.is_symlink
+    monkeypatch.setattr(Path, "is_symlink", lambda candidate:
+                        candidate == path or original_is_symlink(candidate))
+    with pytest.raises(DevelopmentInputError, match="redirected evidence path"):
+        runner._committed_runner()
 
 
 def test_dry_run_builds_frozen_plan_without_writes(tmp_path, monkeypatch):

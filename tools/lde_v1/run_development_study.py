@@ -203,14 +203,39 @@ def dry_run() -> dict:
 
 
 def _committed_runner() -> str:
-    """The manually run study must execute the same runner bytes recorded at HEAD."""
+    """Require Git-clean runner content and identify the committed HEAD blob."""
     import subprocess
     relative = "tools/lde_v1/run_development_study.py"
-    committed = subprocess.check_output(["git", "show", f"HEAD:{relative}"], cwd=REPO)
-    actual = Path(__file__).read_bytes()
-    if committed != actual:
+    registered_path = REPO / relative
+    _reject_reparse_components(registered_path)
+    runner_path = Path(__file__).resolve()
+    if runner_path != registered_path.resolve() or not runner_path.is_relative_to(REPO.resolve()):
+        raise DevelopmentInputError("executed runner is outside the registered path")
+
+    def git(*args: str) -> bytes:
+        result = subprocess.run(["git", *args], cwd=REPO, capture_output=True, check=False)
+        if result.returncode != 0:
+            raise DevelopmentInputError(f"runner Git identity check failed: {' '.join(args)}")
+        return result.stdout
+
+    # A custom content filter could hide changed executable code. Git's standard
+    # text/eol conversion remains allowed, including Windows CRLF checkout.
+    attributes = git("check-attr", "-z", "filter", "--", relative).split(b"\0")
+    if len(attributes) != 4 or attributes[1:3] != [b"filter", b"unspecified"]:
+        raise DevelopmentInputError("runner has an unsupported custom Git filter")
+    committed_oid = git("rev-parse", "--verify", f"HEAD:{relative}").strip()
+    if git("cat-file", "-t", committed_oid.decode("ascii")).strip() != b"blob":
+        raise DevelopmentInputError("committed runner is not a blob")
+    working_oid = git("hash-object", f"--path={relative}", "--", str(runner_path)).strip()
+    if working_oid != committed_oid:
         raise DevelopmentInputError("runner differs from committed HEAD")
-    return sha256(actual).hexdigest()
+    cleanliness = subprocess.run(
+        ["git", "diff", "--no-ext-diff", "--quiet", "HEAD", "--", relative],
+        cwd=REPO, capture_output=True, check=False)
+    if cleanliness.returncode != 0:
+        raise DevelopmentInputError("runner differs from committed HEAD")
+    committed = git("cat-file", "blob", committed_oid.decode("ascii"))
+    return sha256(committed).hexdigest()
 
 
 def _registration(env, horizon: int):
