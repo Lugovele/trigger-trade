@@ -1,0 +1,13 @@
+# LDE V1 reproducibility pins for the pyproject.toml runtime, dev, and build inputs.
+# pandas and pyarrow are required by the frozen development input path but are
+# not declared as application runtime dependencies in pyproject.toml.
+# Compile together with pyproject.toml and its dev extra. pip-tools does not
+# accept --all-build-deps with multiple input files, so mirror the declared
+# setuptools>=69 build requirement here and pin the resolved build tool.
+# Resolver toolchain: pip-tools==7.6.2, pip==25.0.1, Python==3.13.3.
+numpy==2.2.5
+psycopg[binary]==3.3.5
+pytest==9.1.1
+pandas==2.2.3
+pyarrow==25.0.1
+setuptools==84.0.0
