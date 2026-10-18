@@ -1,0 +1,344 @@
+"""Only synthetic runner contracts; never invoke --execute on retained data."""
+
+from __future__ import annotations
+
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
+from hashlib import sha256
+from pathlib import Path
+from types import SimpleNamespace
+import gzip
+import json
+
+import pytest
+
+from tools.lde_v1 import run_development_study as runner
+from triggertrade.live_direction_estimator_v1.historical_source import (
+    HistoricalMember, HistoricalSourceContract,
+)
+from triggertrade.live_direction_estimator_v1.development_readiness import AuthenticatedInputs, DevelopmentInputError
+
+
+def test_dry_run_builds_frozen_plan_without_writes(tmp_path, monkeypatch):
+    env = SimpleNamespace(identity_sha256="a" * 64, source_revision="b" * 40)
+    monkeypatch.setattr(runner, "_preflight", lambda: (env, object()))
+    monkeypatch.setattr(runner, "RUN_ROOT", tmp_path / "uncreated")
+    result = runner.dry_run()
+    assert result["mode"] == "DRY_RUN"
+    assert result["model_fits"] == result["permanent_ledger_entries"] == 0
+    assert [f["fit_id"] for f in result["plan"]["folds"]] == ["F1", "F2", "F3", "F4", "F5"]
+    assert result["plan"]["horizons"] == [60, 120]
+    assert not runner.RUN_ROOT.exists()
+
+
+def test_sealed_stage_resume_integrity_and_no_overwrite(tmp_path):
+    path = tmp_path / "fold.json"
+    parents = {"environment": "a" * 64}
+    payload = b'{"exact":"bytes"}'
+    assert runner._sealed_write(path, payload, parents=parents) == sha256(payload).hexdigest()
+    assert runner._sealed_read(path, parents=parents) == payload
+    with pytest.raises(DevelopmentInputError, match="already exists"):
+        runner._sealed_write(path, b"replacement", parents=parents)
+    with pytest.raises(DevelopmentInputError, match="seal mismatch"):
+        runner._sealed_read(path, parents={"environment": "b" * 64})
+    path.write_bytes(b"tampered")
+    with pytest.raises(DevelopmentInputError, match="seal mismatch"):
+        runner._sealed_read(path, parents=parents)
+    partial = tmp_path / "partial.json"
+    partial.write_bytes(b"unsealed")
+    with pytest.raises(DevelopmentInputError, match="partial stage"):
+        runner._sealed_read(partial, parents=parents)
+
+
+@pytest.mark.parametrize("partial_name", [".incomplete-abc", ".features-incomplete-abc", "half.tmp"])
+def test_resume_refuses_interrupted_stage_files(tmp_path, monkeypatch, partial_name):
+    env = SimpleNamespace(identity_sha256="a" * 64, source_revision="b" * 40,
+                          registry_sha256="c" * 64, spec_sha256="d" * 64)
+    monkeypatch.setattr(runner, "_preflight", lambda: (env, object()))
+    monkeypatch.setattr(runner, "_committed_runner", lambda: "e" * 64)
+    monkeypatch.setattr(runner, "authenticate_inputs", lambda *_args, **_kwargs:
+                        SimpleNamespace(label_member_sha256="f" * 64))
+    monkeypatch.setattr(runner, "RUN_ROOT", tmp_path)
+    monkeypatch.setattr(runner, "REPO", tmp_path)
+    run_id = "20261018T100000000000Z_bbbbbbbb"
+    run_dir = tmp_path / run_id
+    run_dir.mkdir()
+    expected = {"run_id": run_id, "plan": runner._plan(env),
+        "runner_sha256": "e" * 64,
+        "historical_source_manifest_sha256": runner.SOURCE_SHA256,
+        "canonical_release_manifest_sha256": runner.RELEASE_SHA256,
+        "label_members": {"60": "f" * 64, "120": "f" * 64},
+        "feature_end_exclusive": runner.iso(runner.FEATURE_STOP)}
+    (run_dir / "run_manifest.json").write_text(runner.canonical_json(expected), encoding="utf-8")
+    (run_dir / partial_name).write_bytes(b"partial")
+    with pytest.raises(DevelopmentInputError, match="incomplete temporary stage"):
+        runner._run(resume_id=run_id)
+
+
+def test_status_rejects_seal_path_traversal(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner, "REPO", tmp_path)
+    monkeypatch.setattr(runner, "RUN_ROOT", tmp_path / "runs")
+    run_id = "20261018T100000000000Z_bbbbbbbb"
+    run_dir = runner.RUN_ROOT / run_id
+    run_dir.mkdir(parents=True)
+    (run_dir / "run_manifest.json").write_text(json.dumps({
+        "run_id": run_id, "plan": {"environment_sha256": "a" * 64},
+    }), encoding="utf-8")
+    (run_dir / "fold.json.seal.json").write_text(json.dumps({
+        "artifact": "../outside.json", "sha256": "b" * 64,
+    }), encoding="utf-8")
+    with pytest.raises(DevelopmentInputError, match="invalid run artifact identity"):
+        runner._status(run_id)
+
+
+def test_run_root_and_run_directory_reject_redirected_paths(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    link = repo / "redirected"
+    link.mkdir()
+    original_is_symlink = Path.is_symlink
+    redirected = {link}
+    monkeypatch.setattr(Path, "is_symlink", lambda path:
+                        path in redirected or original_is_symlink(path))
+    monkeypatch.setattr(runner, "REPO", repo)
+    run_id = "20261018T100000000000Z_bbbbbbbb"
+    monkeypatch.setattr(runner, "RUN_ROOT", link)
+    with pytest.raises(DevelopmentInputError, match="redirected evidence path"):
+        runner._status(run_id)
+    actual_root = repo / "runtime"
+    actual_root.mkdir()
+    redirected.add(actual_root / run_id)
+    (actual_root / run_id).mkdir()
+    monkeypatch.setattr(runner, "RUN_ROOT", actual_root)
+    with pytest.raises(DevelopmentInputError, match="redirected evidence path"):
+        runner._status(run_id)
+
+
+def test_sealed_read_rejects_redirected_parent(tmp_path, monkeypatch):
+    link = tmp_path / "redirected"
+    link.mkdir()
+    original_is_symlink = Path.is_symlink
+    monkeypatch.setattr(Path, "is_symlink", lambda path:
+                        path == link or original_is_symlink(path))
+    with pytest.raises(DevelopmentInputError, match="redirected evidence path"):
+        runner._sealed_read(link / "fold.json", parents={})
+
+
+def test_sealed_read_and_status_reject_reparse_artifact_leaves(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner, "REPO", tmp_path)
+    monkeypatch.setattr(runner, "RUN_ROOT", tmp_path / "runs")
+    run_id = "20261018T100000000000Z_bbbbbbbb"
+    run_dir = runner.RUN_ROOT / run_id
+    run_dir.mkdir(parents=True)
+    (run_dir / "run_manifest.json").write_text(json.dumps({
+        "run_id": run_id, "plan": {"environment_sha256": "a" * 64},
+    }), encoding="utf-8")
+    artifact = run_dir / "fold.json"
+    runner._sealed_write(artifact, b"exact", parents={})
+    original_lstat = Path.lstat
+
+    def reparse_lstat(path):
+        result = original_lstat(path)
+        if path == artifact:
+            return SimpleNamespace(st_mode=result.st_mode, st_file_attributes=0x400)
+        return result
+
+    monkeypatch.setattr(Path, "lstat", reparse_lstat)
+    with pytest.raises(DevelopmentInputError, match="redirected evidence path"):
+        runner._sealed_read(artifact, parents={})
+    with pytest.raises(DevelopmentInputError, match="redirected evidence path"):
+        runner._status(run_id)
+
+
+def test_pre_run_ledger_reference_is_sealed_and_resume_checks_identity(tmp_path, monkeypatch):
+    run_id = "20261018T100000000000Z_bbbbbbbb"
+    run_dir = tmp_path / run_id
+    run_dir.mkdir()
+    (run_dir / "run_manifest.json").write_text(json.dumps({
+        "run_id": run_id, "runner_sha256": "e" * 64,
+        "plan": {"environment_sha256": "a" * 64, "source_revision": "b" * 40},
+    }), encoding="utf-8")
+    env = SimpleNamespace(identity_sha256="a" * 64, source_revision="b" * 40)
+    monkeypatch.setattr(runner.DevelopmentPreRunRegistration, "from_environment",
+                        staticmethod(lambda _env: SimpleNamespace(identity_sha256="c" * 64)))
+    entry = SimpleNamespace(entry_sha256="d" * 64)
+    identity = runner._preserve_registration(
+        run_dir=run_dir, env=env, runner_sha="e" * 64, horizon=60, entry=entry)
+    assert identity == sha256((run_dir / "E60_pre_run_ledger.json").read_bytes()).hexdigest()
+    assert runner._preserve_registration(
+        run_dir=run_dir, env=env, runner_sha="e" * 64, horizon=60, entry=entry) == identity
+    monkeypatch.setattr(runner, "REPO", tmp_path)
+    monkeypatch.setattr(runner, "RUN_ROOT", tmp_path)
+    monkeypatch.setattr(runner, "LEDGER_ROOT", tmp_path / "ledger")
+    good_entry = SimpleNamespace(entry_sha256="d" * 64, horizon_minutes=60,
+                                 action="DEVELOPMENT_PREFLIGHT_REGISTERED",
+                                 artifact_hashes=(("pre_run_registration", "c" * 64),),
+                                 code_revision_or_hash="b" * 40)
+    monkeypatch.setattr(runner, "ExperimentLedger", lambda *_args:
+                        SimpleNamespace(read_all=lambda: (good_entry,)))
+    assert runner._status(run_id)["pre_run_ledger_entries"] == {"60": "d" * 64}
+    bad_entry = SimpleNamespace(entry_sha256="d" * 64, horizon_minutes=60,
+                                action="DEVELOPMENT_PREFLIGHT_REGISTERED",
+                                artifact_hashes=(("pre_run_registration", "f" * 64),),
+                                code_revision_or_hash="b" * 40)
+    monkeypatch.setattr(runner, "ExperimentLedger", lambda *_args:
+                        SimpleNamespace(read_all=lambda: (bad_entry,)))
+    with pytest.raises(DevelopmentInputError, match="ledger entry missing"):
+        runner._status(run_id)
+    monkeypatch.setattr(runner, "ExperimentLedger", lambda *_args:
+                        SimpleNamespace(read_all=lambda: (good_entry,)))
+    runner._sealed_write(run_dir / "E60_F1.json.gz", b"fold", parents={
+        "pre_run_registration": "f" * 64,
+    })
+    with pytest.raises(DevelopmentInputError, match="registration parent mismatch"):
+        runner._status(run_id)
+    monkeypatch.setattr(runner, "ExperimentLedger", lambda *_args:
+                        SimpleNamespace(read_all=lambda: ()))
+    with pytest.raises(DevelopmentInputError, match="ledger entry missing"):
+        runner._status(run_id)
+    with pytest.raises(DevelopmentInputError, match="stage seal mismatch"):
+        runner._preserve_registration(
+            run_dir=run_dir, env=env, runner_sha="e" * 64, horizon=60,
+            entry=SimpleNamespace(entry_sha256="f" * 64))
+
+
+def test_historical_evaluation_record_roundtrip_without_asof_claim():
+    t = datetime(2025, 4, 1, 2, tzinfo=UTC)
+    unavailable = SimpleNamespace(prediction_origin=t, physical_symbol="BTCUSDT",
+        target_status="UNAVAILABLE", canonical_class=None, target_reason="NO_TARGET",
+        feature_reasons=("MISSING_REQUIRED_MINUTE",), feature_status="UNAVAILABLE")
+    row = runner._evaluation_record(row=unavailable, score=None, fit_id="F1", horizon=60)
+    restored = runner._restore_record(runner._wire(row))
+    assert restored == row
+    assert restored.prediction.provenance_mode == "EVENT_TIME_ONLY"
+    assert not restored.prediction.emitted and restored.truth.target_status == "UNAVAILABLE"
+
+
+def test_scored_record_roundtrip_uses_sealed_primary_and_baselines():
+    t = datetime(2025, 4, 1, 2, tzinfo=UTC)
+    valid = SimpleNamespace(prediction_origin=t, physical_symbol="BTCUSDT",
+        target_status="VALID", canonical_class="NO_DIRECTION", target_reason=None,
+        feature_reasons=(), feature_status="AVAILABLE")
+    probabilities = (1 / 3, 1 / 3, 1 / 3)
+    from math import log
+    state = SimpleNamespace(probabilities=probabilities,
+                            log_probabilities=(log(1 / 3),) * 3,
+                            logits=(0.0, 0.0, 0.0))
+    score = SimpleNamespace(bundle_sha256="a" * 64, raw=state, calibrated=state,
+        b0_hard_class="NO_DIRECTION", b1_probabilities=probabilities,
+        b2_hard_class="NO_DIRECTION", b3_probabilities=probabilities)
+    row = runner._evaluation_record(row=valid, score=score, fit_id="F1", horizon=60)
+    assert row.matched and row.prediction.emitted
+    assert runner._restore_record(runner._wire(row)) == row
+
+
+def test_source_stream_one_origin_keeps_feature_target_firewall(tmp_path, monkeypatch):
+    origin = datetime(2024, 10, 2, tzinfo=UTC)
+    first = origin - timedelta(minutes=1446)
+    root = tmp_path / "runtime/data/direction-regime-history"
+    root.mkdir(parents=True)
+    members = []
+    for symbol in runner.SYMBOLS:
+        logical = "PEPEUSDT" if symbol == "1000PEPEUSDT" else symbol
+        header = "open_time,close_time,symbol,logical_symbol,category,timeframe,open,high,low,close,volume,turnover\n"
+        lines = []
+        for i in range(1445):
+            t = first + i * timedelta(minutes=1)
+            stamp = t.isoformat().replace("+00:00", "Z")
+            close = (t + timedelta(minutes=1)).isoformat().replace("+00:00", "Z")
+            price = 100 + i * .001
+            lines.append(f"{stamp},{close},{symbol},{logical},linear,1m,{price},{price+.1},{price-.1},{price},0,0\n")
+        path = root / f"{symbol}_1m.csv.gz"
+        path.write_bytes(gzip.compress((header + "".join(lines)).encode(), mtime=0))
+        members.append(HistoricalMember(symbol, logical,
+            f"runtime/data/direction-regime-history/{symbol}_1m.csv.gz",
+            sha256(path.read_bytes()).hexdigest(), 1445,
+            first.isoformat().replace("+00:00", "Z"),
+            (first + timedelta(minutes=1445)).isoformat().replace("+00:00", "Z")))
+    contract = HistoricalSourceContract("fixture", "a" * 64, "fixture-complete", tuple(members))
+    inputs = AuthenticatedInputs(contract, "b" * 64, "c" * 64, 60, root, tmp_path / "no-label.parquet")
+    monkeypatch.setattr(runner, "REPO", tmp_path)
+    monkeypatch.setattr(runner, "D0", origin)
+    monkeypatch.setattr(runner, "FEATURE_STOP", origin + timedelta(minutes=5))
+    features = tuple(runner._feature_rows_from_authenticated_sources(inputs))
+    assert len(features) == 4
+    assert all(f.row is not None and f.row.feature_timestamp == origin - timedelta(minutes=1)
+               for f in features)
+    assert all(f.trailing_sign_60 is not None and f.trailing_sign_120 is not None for f in features)
+    assert not inputs.label_file.exists()
+
+
+def test_tiny_fold_wires_primary_comparator_shadow_and_resume(tmp_path, monkeypatch):
+    from triggertrade.live_direction_estimator_v1.calendar import (
+        D0, FIT_DEFINITIONS, FOLDS, FoldDefinition, SegmentDefinition,
+    )
+    from triggertrade.live_direction_estimator_v1.features import RawFeatureRow
+    from triggertrade.live_direction_estimator_v1.model import CLASSES
+    from triggertrade.live_direction_estimator_v1.manifests import feature_row_identity
+    from triggertrade.live_direction_estimator_v1.development_readiness import (
+        CanonicalTarget, FeatureAssembly,
+    )
+    c, v = FOLDS[0].calibration.nominal_start, FOLDS[0].score.nominal_start
+    fold = FoldDefinition("F1", FOLDS[0].base, FOLDS[0].calibration,
+        SegmentDefinition("SCORE", v, v + timedelta(minutes=245), True, True))
+    monkeypatch.setitem(FIT_DEFINITIONS, "F1", fold)
+    rows = []
+    targets = {}
+    for si, symbol in enumerate(runner.SYMBOLS):
+        for ci in range(3):
+            rows.append((symbol, D0 + timedelta(days=2, minutes=5 * (3 * si + ci)),
+                         CLASSES[ci], ci - 1, si * .07 + ci * .03))
+        rows.append((symbol, c + timedelta(minutes=120 + si * 5),
+                     CLASSES[si % 3], si % 3 - 1, .11 + si * .04))
+        rows.append((symbol, v + timedelta(minutes=120),
+                     CLASSES[si % 3], si % 3 - 1, .14 + si * .04))
+    features = []
+    for symbol, t, label, sign, value in sorted(rows, key=lambda x: (x[1], runner.SYMBOLS.index(x[0]))):
+        values = [0.1 * (j + 1) + value for j in range(32)]
+        values[3] = sign * (0.1 + abs(value))
+        values[14] = 0.0
+        values[30:32] = (0.0, 1.0)
+        values += [float(symbol == s) for s in runner.SYMBOLS[1:]]
+        raw = RawFeatureRow(symbol, t, t - timedelta(minutes=1),
+                            f"synthetic:{symbol}:{t.isoformat()}:{value}", tuple(values))
+        features.append(FeatureAssembly(symbol, t, raw, (), raw.source_snapshot_id, sign, sign))
+        targets[(symbol, t, 60)] = CanonicalTarget(symbol, t, 60, "VALID", label, None)
+    feature_path = tmp_path / "synthetic_features.jsonl.gz"
+    with gzip.open(feature_path, "wt", encoding="utf-8") as stream:
+        for feature in features:
+            stream.write(runner.canonical_json(runner._feature_wire(feature)) + "\n")
+    members = tuple(HistoricalMember(symbol, "PEPEUSDT" if symbol == "1000PEPEUSDT" else symbol,
+        f"{symbol}.csv.gz", "a" * 64, 1445, "2024-10-01T00:00:00Z",
+        "2024-10-03T00:00:00Z", True) for symbol in runner.SYMBOLS)
+    contract = HistoricalSourceContract("fixture", "b" * 64, "fixture-complete", members)
+    inputs = AuthenticatedInputs(contract, "c" * 64, "d" * 64, 60,
+                                 tmp_path, tmp_path / "not-opened.parquet")
+    run_id = "20261018T100000000000Z_ba64f4bc"
+    run_dir = tmp_path / run_id
+    run_dir.mkdir()
+    monkeypatch.setattr(runner, "LEDGER_ROOT", tmp_path / "ledger")
+    env = SimpleNamespace(identity_sha256="e" * 64, source_revision="f" * 40)
+    phase = runner._fold_stage(run_dir=run_dir, env=env, runner_sha="1" * 64,
+        feature_path=feature_path, feature_sha=sha256(feature_path.read_bytes()).hexdigest(),
+        inputs=inputs, targets=targets, fold=fold, horizon=60)
+    assert len(phase.positions) == 1 and len(phase.records) == 4
+    assert all(record.matched for record in phase.records)
+    persisted = json.loads(gzip.decompress((run_dir / "E60_F1.json.gz").read_bytes()))
+    assert len(persisted["primary_scores"]) == len(persisted["comparator_scores"]) == len(persisted["shadow_scores"]) == 4
+    before = (run_dir / "E60_F1.json.gz").read_bytes()
+    reused = runner._fold_stage(run_dir=run_dir, env=env, runner_sha="1" * 64,
+        feature_path=feature_path, feature_sha=sha256(feature_path.read_bytes()).hexdigest(),
+        inputs=inputs, targets=targets, fold=fold, horizon=60)
+    assert reused == phase and (run_dir / "E60_F1.json.gz").read_bytes() == before
+    failed_run = tmp_path / "20261018T100001000000Z_ba64f4bc"
+    failed_run.mkdir()
+    def comparator_failure(**_kwargs):
+        raise ValueError("synthetic comparator failure")
+    monkeypatch.setattr(runner, "fit_comparator", comparator_failure)
+    primary_phase = runner._fold_stage(run_dir=failed_run, env=env, runner_sha="1" * 64,
+        feature_path=feature_path, feature_sha=sha256(feature_path.read_bytes()).hexdigest(),
+        inputs=inputs, targets=targets, fold=fold, horizon=60)
+    report = json.loads(gzip.decompress((failed_run / "E60_F1.json.gz").read_bytes()))
+    assert len(primary_phase.records) == 4 and all(r.matched for r in primary_phase.records)
+    assert report["comparator"] is None and report["comparator_status"]["status"] == "FIT_FAILED"
+    assert len(report["shadow_scores"]) == 4
