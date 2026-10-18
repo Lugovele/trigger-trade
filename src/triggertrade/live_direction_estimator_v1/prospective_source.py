@@ -54,6 +54,7 @@ class ProspectiveSourceVersion:
     raw_payload_sha256: str | None = None
     supersedes_version_id: str | None = None
     supersession_evidence_ref: str | None = None
+    collector_clock_evidence_ref: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "interval_start", utc(self.interval_start))
@@ -100,6 +101,7 @@ class ProspectiveSourceVersion:
             ("raw_payload_sha256", self.raw_payload_sha256 or ""),
             ("supersedes_version_id", self.supersedes_version_id or ""),
             ("supersession_evidence_ref", self.supersession_evidence_ref or ""),
+            ("collector_clock_evidence_ref", self.collector_clock_evidence_ref or ""),
             ("required_evidence_kinds", ",".join(self.required_evidence_kinds)),
         )
         return SourceMinute(
@@ -130,6 +132,7 @@ class ProspectiveSourceVersion:
             "raw_payload_ref": self.raw_payload_ref, "raw_payload_sha256": self.raw_payload_sha256,
             "supersedes_version_id": self.supersedes_version_id,
             "supersession_evidence_ref": self.supersession_evidence_ref,
+            "collector_clock_evidence_ref": self.collector_clock_evidence_ref,
         }
 
 
