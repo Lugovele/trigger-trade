@@ -9,6 +9,7 @@ description = "Small personal crypto trading bot scaffold with safe paper-mode d
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "numpy>=2.2.5,<3",
     "psycopg[binary]>=3.2",
 ]
 
