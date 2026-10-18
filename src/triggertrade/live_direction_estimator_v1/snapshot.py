@@ -31,6 +31,8 @@ class SupersessionPolicy:
 
     policy_id: str
     rank_by_version: Mapping[str, int]
+    authority_ref: str | None = None
+    authenticated_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -43,6 +45,21 @@ class OriginSnapshot:
     local_minutes: tuple[SourceMinute, ...]
     btc_minutes: tuple[SourceMinute, ...]
     source_snapshot_id: str
+    supersession_audit: tuple[tuple[str, str], ...] = ()
+
+    def to_audit_dict(self) -> dict[str, object]:
+        return {
+            "physical_symbol": self.physical_symbol,
+            "prediction_origin": self.prediction_origin.isoformat(),
+            "feature_timestamp": self.feature_timestamp.isoformat(),
+            "information_cutoff": self.information_cutoff.isoformat(),
+            "provenance_mode": self.provenance_mode,
+            "source_snapshot_id": self.source_snapshot_id,
+            "supersession_audit": dict(self.supersession_audit),
+            "local_minutes": [minute.to_audit_dict() for minute in self.local_minutes],
+            "btc_minutes": ([] if self.physical_symbol == "BTCUSDT" else
+                            [minute.to_audit_dict() for minute in self.btc_minutes]),
+        }
 
 
 @dataclass(frozen=True)
@@ -51,10 +68,11 @@ class SnapshotResult:
     reasons: tuple[str, ...]
 
 
-def _select(rows: list[SourceMinute], mode: str, cutoff: datetime, policy: SupersessionPolicy | None) -> tuple[SourceMinute | None, set[str]]:
+def _select(rows: list[SourceMinute], mode: str, cutoff: datetime,
+            policy: SupersessionPolicy | None) -> tuple[SourceMinute | None, set[str], bool]:
     reasons: set[str] = set()
     if not rows:
-        return None, {"MISSING_REQUIRED_MINUTE"}
+        return None, {"MISSING_REQUIRED_MINUTE"}, False
     candidates: list[SourceMinute] = []
     for row in rows:
         if not row.completed:
@@ -70,27 +88,27 @@ def _select(rows: list[SourceMinute], mode: str, cutoff: datetime, policy: Super
                 continue
         candidates.append(row)
     if not candidates:
-        return None, reasons
+        return None, reasons, False
     # Exact retransmissions are harmless; same version with different content is not.
     unique: dict[str, SourceMinute] = {}
     for row in candidates:
         previous = unique.get(row.version_id)
         if previous is not None and previous != row:
-            return None, {"SOURCE_VERSION_CONFLICT"}
+            return None, {"SOURCE_VERSION_CONFLICT"}, False
         unique[row.version_id] = row
     if len(unique) > 1:
         if policy is None or not policy.policy_id or any(v not in policy.rank_by_version for v in unique):
-            return None, {"SOURCE_VERSION_CONFLICT"}
+            return None, {"SOURCE_VERSION_CONFLICT"}, False
         highest = max(policy.rank_by_version[v] for v in unique)
         winners = [r for v, r in unique.items() if policy.rank_by_version[v] == highest]
         if len(winners) != 1:
-            return None, {"SOURCE_VERSION_CONFLICT"}
+            return None, {"SOURCE_VERSION_CONFLICT"}, False
         selected = winners[0]
     else:
         selected = next(iter(unique.values()))
     if not selected.valid_ohlc:
-        return None, {"INVALID_REQUIRED_OHLC"}
-    return selected, set()
+        return None, {"INVALID_REQUIRED_OHLC"}, len(unique) > 1
+    return selected, set(), len(unique) > 1
 
 
 def build_snapshot(
@@ -125,6 +143,7 @@ def build_snapshot(
             continue
         indexed.setdefault((row.physical_symbol, row.interval_start), []).append(row)
     selected: dict[str, tuple[SourceMinute, ...]] = {}
+    used_policy = False
     for needed in required_symbols:
         minutes: list[SourceMinute] = []
         for i in range(SUPPORT_MINUTES):
@@ -133,8 +152,9 @@ def build_snapshot(
             exact = [r for r in interval_rows if r.interval_end == start + MINUTE]
             if interval_rows and not exact:
                 reasons.add("MISSING_REQUIRED_MINUTE")
-            minute, minute_reasons = _select(exact, mode, origin, policy)
+            minute, minute_reasons, minute_used_policy = _select(exact, mode, origin, policy)
             reasons.update(minute_reasons)
+            used_policy = used_policy or minute_used_policy
             if minute is not None:
                 minutes.append(minute)
         selected[needed] = tuple(minutes)
@@ -146,7 +166,7 @@ def build_snapshot(
         (r.physical_symbol, r.interval_start.isoformat(), r.version_id, r.open, r.high, r.low, r.close,
          r.collector_received_at.isoformat() if r.collector_received_at else None, r.collector_receipt_ref,
          tuple(t.isoformat() for t in r.evidence_available_at), r.evidence_refs,
-         r.availability_contract_id, r.completion_contract_id, r.source_ref)
+         r.availability_contract_id, r.completion_contract_id, r.source_ref, r.audit_fields)
         for group in (local,) if group
         for r in group
     ]
@@ -155,9 +175,19 @@ def build_snapshot(
             (r.physical_symbol, r.interval_start.isoformat(), r.version_id, r.open, r.high, r.low, r.close,
              r.collector_received_at.isoformat() if r.collector_received_at else None, r.collector_receipt_ref,
              tuple(t.isoformat() for t in r.evidence_available_at), r.evidence_refs,
-             r.availability_contract_id, r.completion_contract_id, r.source_ref)
+             r.availability_contract_id, r.completion_contract_id, r.source_ref, r.audit_fields)
             for r in btc
         )
-    digest = sha256(json.dumps((mode, origin.isoformat(), policy.policy_id if policy else None, identity),
+    # The policy can resolve a conflict, but an unused policy must not change
+    # the identity of otherwise identical selected source versions/evidence.
+    policy_audit = ()
+    if used_policy and policy is not None:
+        policy_audit = (
+            ("policy_id", policy.policy_id),
+            ("authority_ref", policy.authority_ref or ""),
+            ("authenticated_at", policy.authenticated_at.isoformat() if policy.authenticated_at else ""),
+            ("version_ranks", json.dumps(sorted(policy.rank_by_version.items()), separators=(",", ":"))),
+        )
+    digest = sha256(json.dumps((mode, origin.isoformat(), identity, policy_audit),
                                separators=(",", ":"), allow_nan=False).encode()).hexdigest()
-    return SnapshotResult(OriginSnapshot(symbol, origin, u, origin, mode, local, btc, digest), ())
+    return SnapshotResult(OriginSnapshot(symbol, origin, u, origin, mode, local, btc, digest, policy_audit), ())

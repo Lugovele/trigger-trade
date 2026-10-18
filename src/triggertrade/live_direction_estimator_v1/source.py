@@ -39,6 +39,7 @@ class SourceMinute:
     availability_contract_id: str | None = None
     completion_contract_id: str | None = None
     source_ref: str | None = None
+    audit_fields: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
         for field in ("interval_start", "interval_end", "collector_received_at"):
@@ -47,6 +48,7 @@ class SourceMinute:
                 object.__setattr__(self, field, utc(value))
         object.__setattr__(self, "evidence_available_at", tuple(utc(t) for t in self.evidence_available_at))
         object.__setattr__(self, "evidence_refs", tuple(self.evidence_refs))
+        object.__setattr__(self, "audit_fields", tuple(tuple(pair) for pair in self.audit_fields))
         for field in ("open", "high", "low", "close"):
             object.__setattr__(self, field, float(getattr(self, field)))
         if not self.version_id:
@@ -68,6 +70,24 @@ class SourceMinute:
     def valid_ohlc(self) -> bool:
         o, h, l, c = self.open, self.high, self.low, self.close
         return all(isfinite(x) and x > 0 for x in (o, h, l, c)) and l <= o <= h and l <= c <= h
+
+    def to_audit_dict(self) -> dict[str, object]:
+        return {
+            "physical_symbol": self.physical_symbol,
+            "interval_start": self.interval_start.isoformat(),
+            "interval_end": self.interval_end.isoformat(),
+            "open": self.open, "high": self.high, "low": self.low, "close": self.close,
+            "version_id": self.version_id, "completed": self.completed,
+            "collector_received_at": self.collector_received_at.isoformat() if self.collector_received_at else None,
+            "collector_receipt_ref": self.collector_receipt_ref,
+            "evidence_available_at": [t.isoformat() for t in self.evidence_available_at],
+            "evidence_refs": list(self.evidence_refs),
+            "source_available_at": self.source_available_at.isoformat() if self.source_available_at else None,
+            "availability_contract_id": self.availability_contract_id,
+            "completion_contract_id": self.completion_contract_id,
+            "source_ref": self.source_ref,
+            "audit_fields": dict(self.audit_fields),
+        }
 
     @classmethod
     def from_historical_row(cls, row: Mapping[str, object], *, version_id: str,
