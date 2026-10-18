@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from decimal import Decimal
 from hashlib import sha256
 import hmac
@@ -11,7 +12,7 @@ import re
 import time
 from typing import Any, Callable
 from urllib.error import HTTPError
-from urllib.parse import urlencode
+from urllib.parse import parse_qs, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
 from triggertrade.config import ApiCredentials, BybitConfig
@@ -68,11 +69,15 @@ class BybitDemoClient:
         credentials: ApiCredentials | None = None,
         transport: HttpTransport | None = None,
         clock_ms: Callable[[], int] | None = None,
+        public_kline_capture: Callable[[str, bytes, datetime], None] | None = None,
+        receipt_clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._config = config or BybitConfig()
         self._credentials = credentials
         self._transport = transport or _urlopen_transport
         self._clock_ms = clock_ms or (lambda: int(time.time() * 1000))
+        self._public_kline_capture = public_kline_capture
+        self._receipt_clock = receipt_clock or (lambda: datetime.now(UTC))
 
     @property
     def base_url(self) -> str:
@@ -371,8 +376,20 @@ class BybitDemoClient:
         }
 
     def _send(self, request: Request) -> BybitResponse:
+        capture_linear_kline = False
+        if self._public_kline_capture is not None:
+            parsed_url = urlsplit(request.full_url)
+            query = parse_qs(parsed_url.query)
+            capture_linear_kline = (parsed_url.path == "/v5/market/kline" and
+                                    query.get("category") == ["linear"] and
+                                    query.get("interval") == ["1"])
         try:
             payload = self._transport(request, 10)
+            if capture_linear_kline:
+                # Timestamp immediately after IO, before JSON parsing. The
+                # hook receives public kline bytes, never private APIs.
+                received_at = self._receipt_clock()
+                self._public_kline_capture(request.full_url, payload, received_at)
         except HTTPError as exc:
             raise BybitApiError(f"Bybit API HTTP error: {exc.code}") from exc
         except OSError as exc:
