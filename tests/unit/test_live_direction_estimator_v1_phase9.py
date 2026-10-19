@@ -7,7 +7,9 @@ from datetime import UTC, datetime, timedelta
 import inspect
 import json
 from math import log
+from unittest.mock import patch
 
+import numpy as np
 import pytest
 
 from triggertrade.live_direction_estimator_v1.calendar import (
@@ -33,6 +35,7 @@ from triggertrade.live_direction_estimator_v1.rolling_shadow import (
     score_shadow, shadow_window, subtract_calendar_months,
 )
 from triggertrade.live_direction_estimator_v1.source import SYMBOLS
+from tools.lde_v1.benchmark_comparator_split import reference_best_split
 
 FIVE = timedelta(minutes=5)
 
@@ -122,6 +125,83 @@ def test_split_thresholds_gain_ties_strict_positive_and_smoothing():
         tuple(((2, 0, 0)[c] + 3 * prior[c]) / 5 for c in range(3)))
 
 
+@pytest.mark.parametrize("values,labels,minimum", [
+    ((0.0, 0.0, 0.0, 0.0), (0, 1, 2, 0), 1),
+    ((-0.0, 0.0, 1.0, 1.0, 2.0, 2.0), (0, 1, 2, 0, 1, 2), 1),
+    ((1.0, float.fromhex("0x1.0000000000001p+0"), 2.0, 3.0), (0, 1, 1, 2), 1),
+    ((0.0, 1.0, 1.0, 2.0, 3.0, 3.0), (0, 0, 1, 1, 2, 2), 2),
+])
+def test_optimized_split_exact_reference_edge_cases(values, labels, minimum):
+    states = tuple(tuple(value if feature < 3 else float((i + feature) % 4)
+                         for feature in range(35)) for i, value in enumerate(values))
+    indices = tuple(range(len(states)))
+    parent = tuple(sum(label == c for label in labels) for c in range(3))
+    expected = reference_best_split(states, labels, indices, (1, 2, 3, 4, 5),
+                                    minimum, parent)
+    assert _best_split(states, labels, indices, (1, 2, 3, 4, 5), minimum, parent) == expected
+
+
+def test_optimized_split_exact_reference_deterministic_randomized_fixtures():
+    generator = np.random.Generator(np.random.PCG64(8841))
+    for n in (9, 17, 31, 53):
+        raw = generator.integers(-4, 5, size=(n, 35))
+        states = tuple(tuple(float(v) for v in row) for row in raw)
+        labels = tuple(int(v) for v in generator.integers(0, 3, size=n))
+        indices = tuple(range(n))
+        parent = tuple(sum(label == c for label in labels) for c in range(3))
+        candidates = (1, 7, 13, 29, 35)
+        assert _best_split(states, labels, indices, candidates, max(1, n // 10), parent) == \
+            reference_best_split(states, labels, indices, candidates, max(1, n // 10), parent)
+
+
+def test_optimized_forest_preserves_rng_topology_and_serialization():
+    n = 41
+    states = tuple(tuple(float((i * (j + 5) + i // 3) % 11) for j in range(35))
+                   for i in range(n))
+    labels = tuple((i * 5 + i // 7) % 3 for i in range(n))
+    indices = tuple(range(n))
+    prior = pooled_prior(labels)
+    minimum = min_leaf_rows(n)
+    def forest(splitter):
+        generator = np.random.PCG64(SEED_BASE + 60)
+        draws = []
+        def random_index(m):
+            value = randint_raw(generator.random_raw, m)
+            draws.append((m, value))
+            return value
+        with patch("triggertrade.live_direction_estimator_v1.comparator._best_split", splitter):
+            trees = tuple(_grow(states, labels, indices, 0, "", minimum, prior, random_index)
+                          for _ in range(5))
+        return trees, tuple(draws), json.dumps([tree.to_dict() for tree in trees],
+                                               sort_keys=True, separators=(",", ":"))
+    assert forest(_best_split) == forest(reference_best_split)
+
+
+def test_optimized_comparator_artifact_and_scores_are_exact_reference():
+    primary, base, calibration, score, bm, cm, sm = _population()
+    optimized = fit_comparator(primary=primary, base_manifest=bm,
+                               calibration_manifest=cm, base_rows=base,
+                               calibration_rows=calibration)
+    with patch("triggertrade.live_direction_estimator_v1.comparator._best_split",
+               reference_best_split):
+        reference = fit_comparator(primary=primary, base_manifest=bm,
+                                   calibration_manifest=cm, base_rows=base,
+                                   calibration_rows=calibration)
+    assert optimized == reference
+    assert optimized.to_json() == reference.to_json()
+    assert optimized.artifact_sha256 == reference.artifact_sha256
+    primary_scores = score_bundle(primary, scored_manifest=sm, scored_rows=score)
+    optimized_scores = score_comparator(
+        optimized, primary=primary, scored_manifest=sm, scored_rows=score,
+        primary_scored_rows=primary_scores)
+    reference_scores = score_comparator(
+        reference, primary=primary, scored_manifest=sm, scored_rows=score,
+        primary_scored_rows=primary_scores)
+    assert optimized_scores == reference_scores
+    assert tuple(row.prediction.calibrated.predicted_class for row in optimized_scores) == \
+        tuple(row.prediction.calibrated.predicted_class for row in reference_scores)
+
+
 def test_comparator_exact_primary_population_preprocessing_own_calibration_determinism():
     primary, base, calibration, score, bm, cm, sm = _population()
     before = primary.manifest.to_json(), primary.preprocessing.to_dict(), primary.calibrator.to_json()
@@ -175,6 +255,19 @@ def test_comparator_exact_primary_population_preprocessing_own_calibration_deter
     with pytest.raises(ValueError, match="matched primary SCORE"):
         score_comparator(c1, primary=primary, scored_manifest=bm, scored_rows=base,
                          primary_scored_rows=primary_scores)
+
+
+def test_comparator_progress_hook_is_observational_and_rng_neutral():
+    primary, base, calibration, _, bm, cm, _ = _population()
+    plain = fit_comparator(primary=primary, base_manifest=bm, calibration_manifest=cm,
+                           base_rows=base, calibration_rows=calibration)
+    events = []
+    reported = fit_comparator(primary=primary, base_manifest=bm, calibration_manifest=cm,
+                              base_rows=base, calibration_rows=calibration,
+                              progress=lambda done, total: events.append((done, total)))
+    assert reported == plain
+    assert reported.to_json() == plain.to_json()
+    assert events == [(done, TREES) for done in range(16, TREES + 1, 16)]
 
 
 def test_comparator_seed_resets_per_fit_and_horizon_independence():

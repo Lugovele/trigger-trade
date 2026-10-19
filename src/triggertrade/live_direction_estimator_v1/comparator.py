@@ -132,20 +132,38 @@ def _best_split(states: tuple[tuple[float, ...], ...], labels: tuple[int, ...],
                 ) -> tuple[int, float, float, tuple[int, ...], tuple[int, ...]] | None:
     best = None
     for feature in candidates:  # sorted one-based feature indices
-        values = sorted({states[i][feature - 1] for i in indices})
-        for lower, upper in zip(values, values[1:]):
-            cut = split_cut(lower, upper)
-            left = tuple(i for i in indices if states[i][feature - 1] <= cut)
-            right = tuple(i for i in indices if states[i][feature - 1] > cut)
-            if len(left) < minimum or len(right) < minimum:
+        column = feature - 1
+        # Keep the reference set's representative for equal values (notably
+        # -0.0/+0.0), so even a cut rounded to an endpoint is bit-identical.
+        values = sorted({states[i][column] for i in indices})
+        ordered = sorted(indices, key=lambda i: states[i][column])
+        left_counts = [0, 0, 0]
+        distinct = 0
+        for position, row_index in enumerate(ordered[:-1]):
+            left_counts[labels[row_index]] += 1
+            if states[row_index][column] == states[ordered[position + 1]][column]:
                 continue
-            gain = gini_gain(parent, _counts(left, labels), _counts(right, labels))
+            left_size = position + 1
+            right_size = len(indices) - left_size
+            lower, upper = values[distinct], values[distinct + 1]
+            distinct += 1
+            if left_size < minimum or right_size < minimum:
+                continue
+            cut = split_cut(lower, upper)
+            left = tuple(left_counts)
+            right = tuple(parent[c] - left[c] for c in range(3))
+            gain = gini_gain(parent, left, right)
             if gain <= 0:
                 continue
             if (best is None or gain > best[2] or
                     (gain == best[2] and (feature, cut) < (best[0], best[1]))):
-                best = feature, cut, gain, left, right
-    return best
+                best = feature, cut, gain
+    if best is None:
+        return None
+    feature, cut, gain = best
+    left = tuple(i for i in indices if states[i][feature - 1] <= cut)
+    right = tuple(i for i in indices if states[i][feature - 1] > cut)
+    return feature, cut, gain, left, right
 
 
 def _grow(states: tuple[tuple[float, ...], ...], labels: tuple[int, ...],
@@ -271,7 +289,8 @@ class ComparatorScoredRow:
 
 def fit_comparator(*, primary: FitBundle, base_manifest: RowManifest,
                    calibration_manifest: RowManifest, base_rows: Iterable[RowMetadata],
-                   calibration_rows: Iterable[RowMetadata]) -> ComparatorArtifact:
+                   calibration_rows: Iterable[RowMetadata],
+                   progress: Callable[[int, int], None] | None = None) -> ComparatorArtifact:
     """Fit only the primary's exact base and month using its frozen preprocessing."""
     primary.verify_hashes()
     parent = primary.manifest
@@ -297,8 +316,12 @@ def fit_comparator(*, primary: FitBundle, base_manifest: RowManifest,
     random_index = lambda m: randint_raw(generator.random_raw, m)
     minimum = min_leaf_rows(n)
     indices = tuple(range(n))
-    trees = tuple(_grow(states, labels, indices, 0, "", minimum, prior, random_index)
-                  for _ in range(TREES))
+    built_trees = []
+    for tree_index in range(TREES):
+        built_trees.append(_grow(states, labels, indices, 0, "", minimum, prior, random_index))
+        if progress is not None and (tree_index + 1) % 16 == 0:
+            progress(tree_index + 1, TREES)
+    trees = tuple(built_trees)
 
     def raw_logits(values: tuple[float, ...]) -> tuple[float, float, float]:
         probability = tuple(sum(_leaf(tree, values)[c] for tree in trees) / TREES

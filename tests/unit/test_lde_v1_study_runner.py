@@ -88,7 +88,8 @@ def test_committed_runner_rejects_redirected_registered_path(committed_runner_re
 
 
 def test_dry_run_builds_frozen_plan_without_writes(tmp_path, monkeypatch):
-    env = SimpleNamespace(identity_sha256="a" * 64, source_revision="b" * 40)
+    env = SimpleNamespace(identity_sha256="a" * 64, source_revision="b" * 40,
+                          spec_sha256="c" * 64, registry_sha256="d" * 64)
     monkeypatch.setattr(runner, "_preflight", lambda: (env, object()))
     monkeypatch.setattr(runner, "RUN_ROOT", tmp_path / "uncreated")
     result = runner.dry_run()
@@ -118,7 +119,10 @@ def test_sealed_stage_resume_integrity_and_no_overwrite(tmp_path):
         runner._sealed_read(partial, parents=parents)
 
 
-@pytest.mark.parametrize("partial_name", [".incomplete-abc", ".features-incomplete-abc", "half.tmp"])
+@pytest.mark.parametrize("partial_name", [
+    ".incomplete-abc", ".features-incomplete-abc",
+    ".features-import-incomplete-abc", "half.tmp",
+])
 def test_resume_refuses_interrupted_stage_files(tmp_path, monkeypatch, partial_name):
     env = SimpleNamespace(identity_sha256="a" * 64, source_revision="b" * 40,
                           registry_sha256="c" * 64, spec_sha256="d" * 64)
@@ -136,11 +140,263 @@ def test_resume_refuses_interrupted_stage_files(tmp_path, monkeypatch, partial_n
         "historical_source_manifest_sha256": runner.SOURCE_SHA256,
         "canonical_release_manifest_sha256": runner.RELEASE_SHA256,
         "label_members": {"60": "f" * 64, "120": "f" * 64},
-        "feature_end_exclusive": runner.iso(runner.FEATURE_STOP)}
+        "feature_end_exclusive": runner.iso(runner.FEATURE_STOP),
+        "feature_materialization": {"feature_materialization_mode": "GENERATED_CURRENT"}}
     (run_dir / "run_manifest.json").write_text(runner.canonical_json(expected), encoding="utf-8")
     (run_dir / partial_name).write_bytes(b"partial")
     with pytest.raises(DevelopmentInputError, match="incomplete temporary stage"):
         runner._run(resume_id=run_id)
+
+
+def _feature_reuse_fixture(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    run_root = repo / "runtime/lde_v1/development"
+    producer_id = "20261018T112509949034Z_a4936aa1"
+    producer_revision = "a" * 40
+    producer_environment = "b" * 64
+    artifact_bytes = b"exact-gzip-shaped-feature-bytes\x00\xff"
+    artifact_sha = sha256(artifact_bytes).hexdigest()
+    monkeypatch.setattr(runner, "REPO", repo)
+    monkeypatch.setattr(runner, "RUN_ROOT", run_root)
+    monkeypatch.setattr(runner, "PRODUCER_RUN_ID", producer_id)
+    monkeypatch.setattr(runner, "PRODUCER_REVISION", producer_revision)
+    monkeypatch.setattr(runner, "PRODUCER_ENVIRONMENT_SHA256", producer_environment)
+    monkeypatch.setattr(runner, "PRODUCER_FEATURE_SHA256", artifact_sha)
+    monkeypatch.setattr(runner, "PRODUCER_FEATURE_ROWS", 2)
+    producer_runner = b"print('sealed producer runner')\n"
+    monkeypatch.setattr(runner, "_git_bytes", lambda revision, relative: producer_runner)
+    contract_identity = "c" * 64
+    contract_descriptor = {
+        "feature_watermark": "U = T - 1m", "provenance_mode": "EVENT_TIME_ONLY",
+        "support_minutes": 1445, "target_fields": "ABSENT",
+    }
+    monkeypatch.setattr(runner, "_feature_contract_identity", lambda **_kwargs:
+                        (contract_identity, contract_descriptor))
+    env = SimpleNamespace(identity_sha256="d" * 64, source_revision="e" * 40,
+                          registry_sha256="f" * 64, spec_sha256="1" * 64)
+    source_contract = SimpleNamespace(corpus_id="synthetic-corpus",
+        manifest_sha256=runner.SOURCE_SHA256, members=(
+        SimpleNamespace(physical_symbol="BTCUSDT", declared_sha256="2" * 64),))
+    producer_dir = run_root / producer_id
+    producer_dir.mkdir(parents=True)
+    artifact_name = f"features_{artifact_sha}.jsonl.gz"
+    artifact_path = producer_dir / artifact_name
+    artifact_path.write_bytes(artifact_bytes)
+    manifest = {
+        "run_id": producer_id,
+        "plan": {"source_revision": producer_revision,
+                 "environment_sha256": producer_environment,
+                 "spec_id": runner.SPEC_ID, "spec_version": runner.SPEC_VERSION,
+                 "feature_registry": runner.FEATURE_REGISTRY},
+        "runner_sha256": sha256(producer_runner).hexdigest(),
+        "historical_source_manifest_sha256": runner.SOURCE_SHA256,
+        "feature_end_exclusive": runner.iso(runner.FEATURE_STOP),
+    }
+    manifest_path = producer_dir / "run_manifest.json"
+    seal_path = producer_dir / f"{artifact_name}.seal.json"
+
+    def write_manifest(value=manifest):
+        manifest_path.write_text(runner.canonical_json(value), encoding="utf-8")
+        monkeypatch.setattr(runner, "PRODUCER_RUN_MANIFEST_SHA256",
+                            sha256(manifest_path.read_bytes()).hexdigest())
+
+    seal = {
+        "artifact": artifact_name, "sha256": artifact_sha,
+        "parents": {"environment": producer_environment,
+                    "runner": manifest["runner_sha256"], "source": runner.SOURCE_SHA256,
+                    "registry": env.registry_sha256, "spec": env.spec_sha256,
+                    "origin_range": runner.digest((runner.iso(runner.D0),
+                                                    runner.iso(runner.FEATURE_STOP)))},
+        "completed_at": "2026-10-18T11:25:09Z",
+    }
+
+    def write_seal(value=seal):
+        seal_path.write_text(runner.canonical_json(value), encoding="utf-8")
+        monkeypatch.setattr(runner, "PRODUCER_FEATURE_SEAL_SHA256",
+                            sha256(seal_path.read_bytes()).hexdigest())
+
+    write_manifest()
+    write_seal()
+    return SimpleNamespace(
+        repo=repo, run_root=run_root, producer_id=producer_id, producer_dir=producer_dir,
+        artifact_path=artifact_path, artifact_bytes=artifact_bytes, artifact_sha=artifact_sha,
+        manifest=manifest, manifest_path=manifest_path, seal=seal, seal_path=seal_path,
+        write_manifest=write_manifest, write_seal=write_seal, env=env,
+        source_contract=source_contract, contract_identity=contract_identity,
+    )
+
+
+def test_authenticated_feature_reuse_accepts_exact_producer_and_imports_exact_bytes(
+        tmp_path, monkeypatch):
+    fixture = _feature_reuse_fixture(tmp_path, monkeypatch)
+    evidence = runner._authenticate_feature_reuse(
+        producer_run_id=fixture.producer_id, env=fixture.env,
+        source_contract=fixture.source_contract)
+    assert evidence["compatibility_verdict"] == "PASS"
+    assert evidence["producer_feature_sha256"] == fixture.artifact_sha
+    assert evidence["feature_contract"]["target_fields"] == "ABSENT"
+    new_run = fixture.run_root / "20261019T100000000000Z_eeeeeeee"
+    new_run.mkdir()
+    parents = {"environment": fixture.env.identity_sha256, "runner": "3" * 64,
+               "source": runner.SOURCE_SHA256, "registry": fixture.env.registry_sha256,
+               "spec": fixture.env.spec_sha256,
+               "origin_range": runner.digest((runner.iso(runner.D0), runner.iso(runner.FEATURE_STOP)))}
+    imported, imported_sha = runner._import_features(new_run, evidence, parents)
+    assert imported.read_bytes() == fixture.artifact_bytes
+    assert imported_sha == fixture.artifact_sha
+    imported_seal = json.loads(imported.with_name(imported.name + ".seal.json").read_text())
+    assert imported_seal["parents"]["producer_run_manifest"] == \
+        evidence["producer_run_manifest_sha256"]
+    assert imported_seal["parents"]["producer_feature_seal"] == \
+        evidence["producer_feature_seal_sha256"]
+    assert imported_seal["parents"]["feature_contract"] == fixture.contract_identity
+    assert not any(path.name.startswith("E60_F1") for path in new_run.iterdir())
+    assert "E60" not in imported.name and "E120" not in imported.name
+    assert runner._import_features(new_run, evidence, parents) == (imported, imported_sha)
+    manifest_evidence = {key: value for key, value in evidence.items()
+                         if key != "producer_artifact_path"}
+    (new_run / "run_manifest.json").write_text(runner.canonical_json({
+        "run_id": new_run.name,
+        "runner_sha256": parents["runner"],
+        "plan": {"environment_sha256": fixture.env.identity_sha256,
+                 "source_revision": fixture.env.source_revision,
+                 "registry_sha256": fixture.env.registry_sha256,
+                 "spec_sha256": fixture.env.spec_sha256},
+        "feature_materialization": manifest_evidence,
+    }), encoding="utf-8")
+    status = runner._status(new_run.name)
+    assert status["feature_materialization_mode"] == "REUSED_AUTHENTICATED"
+    assert status["hash_verified_files"][imported.name] == fixture.artifact_sha
+
+
+@pytest.mark.parametrize("failure", [
+    "wrong_feature", "missing_seal", "modified_seal", "wrong_manifest",
+    "wrong_source", "wrong_registry", "wrong_spec", "wrong_origin",
+])
+def test_authenticated_feature_reuse_rejects_tampered_evidence(
+        tmp_path, monkeypatch, failure):
+    fixture = _feature_reuse_fixture(tmp_path, monkeypatch)
+    if failure == "wrong_feature":
+        fixture.artifact_path.write_bytes(fixture.artifact_bytes + b"x")
+    elif failure == "missing_seal":
+        fixture.seal_path.unlink()
+    elif failure == "modified_seal":
+        fixture.seal_path.write_bytes(fixture.seal_path.read_bytes() + b" ")
+    elif failure == "wrong_manifest":
+        fixture.manifest_path.write_bytes(fixture.manifest_path.read_bytes() + b" ")
+    elif failure == "wrong_source":
+        fixture.manifest["historical_source_manifest_sha256"] = "9" * 64
+        fixture.write_manifest()
+    elif failure == "wrong_registry":
+        fixture.seal["parents"]["registry"] = "9" * 64
+        fixture.write_seal()
+    elif failure == "wrong_spec":
+        fixture.seal["parents"]["spec"] = "9" * 64
+        fixture.write_seal()
+    elif failure == "wrong_origin":
+        fixture.seal["parents"]["origin_range"] = "9" * 64
+        fixture.write_seal()
+    with pytest.raises(DevelopmentInputError):
+        runner._authenticate_feature_reuse(
+            producer_run_id=fixture.producer_id, env=fixture.env,
+            source_contract=fixture.source_contract)
+
+
+def test_feature_reuse_rejects_contract_change_but_ignores_comparator_only_change(
+        tmp_path, monkeypatch):
+    feature_contract_identity = runner._feature_contract_identity
+    fixture = _feature_reuse_fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(runner, "_feature_contract_identity", lambda **_kwargs:
+                        (_ for _ in ()).throw(DevelopmentInputError(
+                            "feature-generation code contract changed")))
+    with pytest.raises(DevelopmentInputError, match="feature-generation code contract changed"):
+        runner._authenticate_feature_reuse(
+            producer_run_id=fixture.producer_id, env=fixture.env,
+            source_contract=fixture.source_contract)
+
+    function_source = ("\n".join(f"def {name}():\n    return 1"
+                                   for name in runner.FEATURE_RUNNER_FUNCTIONS) + "\n").encode()
+    feature_bytes = b"same feature code\n"
+    def git_bytes(revision, relative):
+        if relative == "tools/lde_v1/run_development_study.py":
+            return function_source
+        assert relative in runner.FEATURE_CODE_FILES
+        return feature_bytes
+    monkeypatch.setattr(runner, "_git_bytes", git_bytes)
+    monkeypatch.setattr(runner, "_feature_contract_identity", feature_contract_identity)
+    identity, descriptor = feature_contract_identity(
+        producer_revision="a" * 40, current_revision="b" * 40,
+        source_contract=fixture.source_contract, spec_sha256="1" * 64,
+        registry_sha256="f" * 64)
+    assert len(identity) == 64 and descriptor["target_fields"] == "ABSENT"
+
+    def changed_git_bytes(revision, relative):
+        data = git_bytes(revision, relative)
+        if revision == "b" * 40 and relative == runner.FEATURE_CODE_FILES[0]:
+            return data + b"changed"
+        return data
+    monkeypatch.setattr(runner, "_git_bytes", changed_git_bytes)
+    with pytest.raises(DevelopmentInputError, match="feature-generation code contract changed"):
+        feature_contract_identity(
+            producer_revision="a" * 40, current_revision="b" * 40,
+            source_contract=fixture.source_contract, spec_sha256="1" * 64,
+            registry_sha256="f" * 64)
+
+
+def test_feature_import_rejects_overwrite_and_redirected_producer(tmp_path, monkeypatch):
+    fixture = _feature_reuse_fixture(tmp_path, monkeypatch)
+    evidence = runner._authenticate_feature_reuse(
+        producer_run_id=fixture.producer_id, env=fixture.env,
+        source_contract=fixture.source_contract)
+    new_run = fixture.run_root / "20261019T100000000000Z_eeeeeeee"
+    new_run.mkdir()
+    final = new_run / f"features_{fixture.artifact_sha}.jsonl.gz"
+    final.write_bytes(b"different")
+    with pytest.raises(DevelopmentInputError, match="partial stage|cannot be overwritten"):
+        runner._import_features(new_run, evidence, {})
+
+    original_is_symlink = Path.is_symlink
+    monkeypatch.setattr(Path, "is_symlink", lambda path:
+                        path == fixture.artifact_path or original_is_symlink(path))
+    with pytest.raises(DevelopmentInputError, match="redirected evidence path"):
+        runner._authenticate_feature_reuse(
+            producer_run_id=fixture.producer_id, env=fixture.env,
+            source_contract=fixture.source_contract)
+
+
+def test_reuse_dry_run_is_explicit_read_only_and_new_run_id(tmp_path, monkeypatch):
+    env = SimpleNamespace(identity_sha256="a" * 64, source_revision="b" * 40,
+                          registry_sha256="c" * 64, spec_sha256="d" * 64)
+    monkeypatch.setattr(runner, "_preflight", lambda: (env, object()))
+    monkeypatch.setattr(runner, "RUN_ROOT", tmp_path / "uncreated")
+    monkeypatch.setattr(runner, "authenticate_inputs", lambda *_args, **_kwargs:
+                        SimpleNamespace(source_contract=object()))
+    calls = []
+    monkeypatch.setattr(runner, "_authenticate_feature_reuse", lambda **kwargs:
+                        calls.append(kwargs) or {"compatibility_verdict": "PASS"})
+    result = runner.dry_run(reuse_features_from_run=runner.PRODUCER_RUN_ID)
+    assert calls and result["feature_reuse"]["compatibility_verdict"] == "PASS"
+    assert runner.PRODUCER_RUN_ID not in result["would_create"]
+    assert not runner.RUN_ROOT.exists()
+
+
+def test_old_interrupted_run_cannot_resume_under_changed_manifest(tmp_path, monkeypatch):
+    env = SimpleNamespace(identity_sha256="a" * 64, source_revision="new" + "b" * 37,
+                          registry_sha256="c" * 64, spec_sha256="d" * 64)
+    monkeypatch.setattr(runner, "_preflight", lambda: (env, object()))
+    monkeypatch.setattr(runner, "_committed_runner", lambda: "e" * 64)
+    inputs = SimpleNamespace(label_member_sha256="f" * 64, source_contract=object())
+    monkeypatch.setattr(runner, "authenticate_inputs", lambda *_args, **_kwargs: inputs)
+    monkeypatch.setattr(runner, "RUN_ROOT", tmp_path)
+    monkeypatch.setattr(runner, "REPO", tmp_path)
+    old = tmp_path / runner.PRODUCER_RUN_ID
+    old.mkdir()
+    (old / "run_manifest.json").write_text(runner.canonical_json({
+        "run_id": runner.PRODUCER_RUN_ID,
+        "plan": {"source_revision": runner.PRODUCER_REVISION},
+    }), encoding="utf-8")
+    with pytest.raises(DevelopmentInputError, match="resume run manifest/parent identity mismatch"):
+        runner._run(resume_id=runner.PRODUCER_RUN_ID)
 
 
 def test_status_rejects_seal_path_traversal(tmp_path, monkeypatch):

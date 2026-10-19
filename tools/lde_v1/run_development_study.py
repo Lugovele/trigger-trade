@@ -7,6 +7,7 @@ development fixture and prints the frozen plan without creating run evidence.
 from __future__ import annotations
 
 import argparse
+import ast
 from contextlib import ExitStack
 import csv
 from dataclasses import asdict, is_dataclass
@@ -38,6 +39,7 @@ from triggertrade.live_direction_estimator_v1.development_readiness import (
 from triggertrade.live_direction_estimator_v1.historical_source import with_verified_member_digest
 from triggertrade.live_direction_estimator_v1.source import SYMBOLS, MINUTE
 from triggertrade.live_direction_estimator_v1.features import RawFeatureRow
+from triggertrade.live_direction_estimator_v1.features import NAMES as FEATURE_NAMES
 from triggertrade.live_direction_estimator_v1.manifests import build_manifest, canonical_json, digest
 from triggertrade.live_direction_estimator_v1.orchestration import (
     IdentityReferences, fit_pipeline, score_bundle,
@@ -62,6 +64,28 @@ LEDGER_ROOT = RUN_ROOT / "experiment_ledger"
 EARLY_ORIGIN = datetime(2024, 10, 3, tzinfo=UTC)
 FEATURE_STOP = H1_START  # Exclusive: retain the final purge rows for manifest accounting.
 RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}[0-9]{6}Z_[0-9a-f]{8}\Z")
+PRODUCER_RUN_ID = "20261018T112509949034Z_a4936aa1"
+PRODUCER_REVISION = "a4936aa118f66659a8c89e86a3f714655bb7c293"
+PRODUCER_ENVIRONMENT_SHA256 = "54eaf648c7b55d1f74796549aeda4479bb0017e4a32534b252953b802eef0ca2"
+PRODUCER_FEATURE_SHA256 = "489e73111eb9e004d793b6fb883c54691765391be025a5cc9182e1442f588297"
+PRODUCER_FEATURE_ROWS = 733_824
+PRODUCER_RUN_MANIFEST_SHA256 = "936ac081889f78f264d0dd0afbf86489e2660d7a1cc43576d6e30586368eb9c6"
+PRODUCER_FEATURE_SEAL_SHA256 = "601ae083e1fa3fae1af01ee73eebff3ed996b9b98206dafa3e2afff1bed0e4e0"
+FEATURE_CODE_FILES = (
+    "src/triggertrade/live_direction_estimator_v1/__init__.py",
+    "src/triggertrade/live_direction_estimator_v1/calendar.py",
+    "src/triggertrade/live_direction_estimator_v1/source.py",
+    "src/triggertrade/live_direction_estimator_v1/snapshot.py",
+    "src/triggertrade/live_direction_estimator_v1/features.py",
+    "src/triggertrade/live_direction_estimator_v1/historical_source.py",
+    "src/triggertrade/live_direction_estimator_v1/manifests.py",
+    "src/triggertrade/live_direction_estimator_v1/registry_identity.py",
+    "src/triggertrade/live_direction_estimator_v1/development_readiness.py",
+)
+FEATURE_RUNNER_FUNCTIONS = (
+    "_wire", "_iter_member", "_feature_rows_from_authenticated_sources",
+    "_feature_wire", "_materialize_features",
+)
 
 
 def _log(*items: object) -> None:
@@ -182,6 +206,7 @@ def _preflight() -> tuple[object, object]:
 def _plan(env) -> dict:
     return {"spec_id": SPEC_ID, "spec_version": SPEC_VERSION,
             "feature_registry": FEATURE_REGISTRY, "environment_sha256": env.identity_sha256,
+            "spec_sha256": env.spec_sha256, "registry_sha256": env.registry_sha256,
             "source_revision": env.source_revision,
             "horizons": [60, 120], "h1_governance_status": "CLEANLINESS_UNVERIFIED",
             "folds": [{"fit_id": f.fit_id,
@@ -193,12 +218,19 @@ def _plan(env) -> dict:
                             "E120_EVALUATION_BOOTSTRAP", "DOSSIER"]}
 
 
-def dry_run() -> dict:
+def dry_run(*, reuse_features_from_run: str | None = None) -> dict:
     env, _ = _preflight()
     plan = _plan(env)
+    reuse = None
+    if reuse_features_from_run is not None:
+        inputs = authenticate_inputs(REPO, horizon_minutes=60)
+        reuse = _authenticate_feature_reuse(
+            producer_run_id=reuse_features_from_run, env=env,
+            source_contract=inputs.source_contract)
     proposed = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ") + "_" + env.source_revision[:8]
     return {"mode": "DRY_RUN", "plan": plan,
             "would_create": str(RUN_ROOT / proposed),
+            "feature_reuse": reuse,
             "permanent_ledger_entries": 0, "model_fits": 0}
 
 
@@ -236,6 +268,124 @@ def _committed_runner() -> str:
         raise DevelopmentInputError("runner differs from committed HEAD")
     committed = git("cat-file", "blob", committed_oid.decode("ascii"))
     return sha256(committed).hexdigest()
+
+
+def _git_bytes(revision: str, relative: str) -> bytes:
+    import subprocess
+    result = subprocess.run(["git", "show", f"{revision}:{relative}"], cwd=REPO,
+                            capture_output=True, check=False)
+    if result.returncode != 0:
+        raise DevelopmentInputError(f"feature contract source unavailable: {revision}:{relative}")
+    return result.stdout
+
+
+def _runner_feature_ast(source: bytes) -> str:
+    module = ast.parse(source.decode("utf-8"))
+    functions = {node.name: node for node in module.body if isinstance(node, ast.FunctionDef)}
+    if set(FEATURE_RUNNER_FUNCTIONS) - functions.keys():
+        raise DevelopmentInputError("feature materialization function missing")
+    return digest(tuple(ast.dump(functions[name], include_attributes=False)
+                        for name in FEATURE_RUNNER_FUNCTIONS))
+
+
+def _feature_contract_identity(*, producer_revision: str, current_revision: str,
+                               source_contract, spec_sha256: str,
+                               registry_sha256: str) -> tuple[str, dict[str, object]]:
+    producer_files = {path: sha256(_git_bytes(producer_revision, path)).hexdigest()
+                      for path in FEATURE_CODE_FILES}
+    current_files = {path: sha256(_git_bytes(current_revision, path)).hexdigest()
+                     for path in FEATURE_CODE_FILES}
+    runner_path = "tools/lde_v1/run_development_study.py"
+    producer_runner = _runner_feature_ast(_git_bytes(producer_revision, runner_path))
+    current_runner = _runner_feature_ast(_git_bytes(current_revision, runner_path))
+    if producer_files != current_files or producer_runner != current_runner:
+        raise DevelopmentInputError("feature-generation code contract changed")
+    descriptor = {
+        "spec_id": SPEC_ID, "spec_version": SPEC_VERSION, "spec_sha256": spec_sha256,
+        "feature_registry": FEATURE_REGISTRY, "registry_sha256": registry_sha256,
+        "feature_names": FEATURE_NAMES, "feature_artifact_sha256": PRODUCER_FEATURE_SHA256,
+        "historical_corpus_id": source_contract.corpus_id,
+        "historical_source_manifest_sha256": source_contract.manifest_sha256,
+        "source_members": tuple((m.physical_symbol, m.declared_sha256)
+                                for m in source_contract.members),
+        "feature_origin_range": (iso(D0), iso(FEATURE_STOP)),
+        "feature_watermark": "U = T - 1m", "provenance_mode": "EVENT_TIME_ONLY",
+        "snapshot_contract": "IMMUTABLE_ORIGIN_T;INFORMATION_CUTOFF_T;NO_ENDPOINT_FALLBACK",
+        "support_minutes": 1445, "target_fields": "ABSENT",
+        "code_files": tuple(sorted(producer_files.items())),
+        "runner_feature_ast_sha256": producer_runner,
+    }
+    return digest(descriptor), descriptor
+
+
+def _authenticate_feature_reuse(*, producer_run_id: str, env, source_contract) -> dict[str, object]:
+    if producer_run_id != PRODUCER_RUN_ID:
+        raise DevelopmentInputError("feature producer run is not registered")
+    producer_dir = RUN_ROOT / producer_run_id
+    _guard_run_dir(producer_dir)
+    manifest_path = producer_dir / "run_manifest.json"
+    artifact_name = f"features_{PRODUCER_FEATURE_SHA256}.jsonl.gz"
+    artifact_path = producer_dir / artifact_name
+    seal_path = producer_dir / f"{artifact_name}.seal.json"
+    for path in (manifest_path, artifact_path, seal_path):
+        _reject_reparse_components(path)
+        if not path.is_file():
+            raise DevelopmentInputError(f"producer feature evidence missing: {path.name}")
+    manifest = _read_json(manifest_path)
+    if not isinstance(manifest, dict) or not isinstance(manifest.get("plan"), dict):
+        raise DevelopmentInputError("producer run manifest is malformed")
+    plan = manifest.get("plan", {})
+    committed_runner_sha = sha256(_git_bytes(
+        PRODUCER_REVISION, "tools/lde_v1/run_development_study.py")).hexdigest()
+    if (_file_sha256(manifest_path) != PRODUCER_RUN_MANIFEST_SHA256 or
+            manifest.get("run_id") != producer_run_id or
+            plan.get("source_revision") != PRODUCER_REVISION or
+            plan.get("environment_sha256") != PRODUCER_ENVIRONMENT_SHA256 or
+            plan.get("spec_id") != SPEC_ID or plan.get("spec_version") != SPEC_VERSION or
+            plan.get("feature_registry") != FEATURE_REGISTRY or
+            manifest.get("historical_source_manifest_sha256") != SOURCE_SHA256 or
+            manifest.get("feature_end_exclusive") != iso(FEATURE_STOP) or
+            manifest.get("runner_sha256") != committed_runner_sha):
+        raise DevelopmentInputError("producer run manifest identity mismatch")
+    seal = _read_json(seal_path)
+    if not isinstance(seal, dict) or not isinstance(seal.get("parents"), dict):
+        raise DevelopmentInputError("producer feature seal is malformed")
+    try:
+        completed_at = datetime.fromisoformat(
+            str(seal["completed_at"]).replace("Z", "+00:00"))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise DevelopmentInputError("producer feature seal is malformed") from exc
+    if completed_at.utcoffset() != timedelta(0):
+        raise DevelopmentInputError("producer feature seal is not UTC")
+    origin_range = digest((iso(D0), iso(FEATURE_STOP)))
+    expected_parents = {
+        "environment": PRODUCER_ENVIRONMENT_SHA256,
+        "runner": manifest.get("runner_sha256"), "source": SOURCE_SHA256,
+        "registry": env.registry_sha256, "spec": env.spec_sha256,
+        "origin_range": origin_range,
+    }
+    if (_file_sha256(seal_path) != PRODUCER_FEATURE_SEAL_SHA256 or
+            seal.get("artifact") != artifact_name or seal.get("sha256") != PRODUCER_FEATURE_SHA256 or
+            seal.get("parents") != expected_parents or
+            _file_sha256(artifact_path) != PRODUCER_FEATURE_SHA256):
+        raise DevelopmentInputError("producer feature artifact or seal mismatch")
+    contract_sha, contract = _feature_contract_identity(
+        producer_revision=PRODUCER_REVISION, current_revision=env.source_revision,
+        source_contract=source_contract, spec_sha256=env.spec_sha256,
+        registry_sha256=env.registry_sha256)
+    return {
+        "feature_materialization_mode": "REUSED_AUTHENTICATED",
+        "producer_run_id": producer_run_id,
+        "producer_source_revision": PRODUCER_REVISION,
+        "producer_feature_rows": PRODUCER_FEATURE_ROWS,
+        "producer_feature_sha256": PRODUCER_FEATURE_SHA256,
+        "producer_run_manifest_sha256": _file_sha256(manifest_path),
+        "producer_feature_seal_sha256": _file_sha256(seal_path),
+        "current_feature_contract_identity": contract_sha,
+        "feature_contract": contract,
+        "compatibility_verdict": "PASS",
+        "producer_artifact_path": str(artifact_path),
+    }
 
 
 def _registration(env, horizon: int):
@@ -370,6 +520,48 @@ def _materialize_features(run_dir: Path, inputs, parents: dict[str, str]) -> tup
     _seal_temp(temporary, final, parents=parents)
     _log("FEATURES", "complete", count, content_sha)
     return final, content_sha
+
+
+def _import_features(run_dir: Path, evidence: dict[str, object],
+                     feature_parents: dict[str, str]) -> tuple[Path, str]:
+    source = Path(str(evidence["producer_artifact_path"]))
+    _reject_reparse_components(source)
+    if _file_sha256(source) != PRODUCER_FEATURE_SHA256:
+        raise DevelopmentInputError("producer feature bytes changed before import")
+    parents = dict(feature_parents)
+    parents.update({
+        "materialization_mode": "REUSED_AUTHENTICATED",
+        "producer_run_manifest": str(evidence["producer_run_manifest_sha256"]),
+        "producer_feature_seal": str(evidence["producer_feature_seal_sha256"]),
+        "producer_feature_artifact": PRODUCER_FEATURE_SHA256,
+        "feature_contract": str(evidence["current_feature_contract_identity"]),
+    })
+    final = run_dir / f"features_{PRODUCER_FEATURE_SHA256}.jsonl.gz"
+    existing = _sealed_read(final, parents=parents, read_payload=False)
+    if existing is not None:
+        if _file_sha256(final) != PRODUCER_FEATURE_SHA256:
+            raise DevelopmentInputError("imported feature artifact identity mismatch")
+        return final, PRODUCER_FEATURE_SHA256
+    if final.exists() or final.is_symlink():
+        raise DevelopmentInputError("imported feature artifact cannot be overwritten")
+    with tempfile.NamedTemporaryFile(dir=run_dir, prefix=".features-import-incomplete-",
+                                     delete=False) as output:
+        temporary = Path(output.name)
+        _reject_reparse_components(temporary)
+        copied = sha256()
+        with source.open("rb") as input_stream:
+            while chunk := input_stream.read(1024 * 1024):
+                output.write(chunk)
+                copied.update(chunk)
+        output.flush(); os.fsync(output.fileno())
+    if copied.hexdigest() != PRODUCER_FEATURE_SHA256:
+        raise DevelopmentInputError("feature import copy hash mismatch")
+    _seal_temp(temporary, final, parents=parents)
+    if _file_sha256(final) != PRODUCER_FEATURE_SHA256:
+        raise DevelopmentInputError("imported feature post-seal hash mismatch")
+    _log("FEATURES", "reused authenticated", PRODUCER_FEATURE_ROWS, PRODUCER_FEATURE_SHA256,
+         "producer", evidence["producer_run_id"])
+    return final, PRODUCER_FEATURE_SHA256
 
 
 def _read_features(path: Path):
@@ -533,7 +725,10 @@ def _fold_stage(*, run_dir: Path, env, runner_sha: str, feature_path: Path,
     try:
         comparator = fit_comparator(primary=bundle, base_manifest=manifests["BASE"],
                                     calibration_manifest=manifests["CALIBRATION"],
-                                    base_rows=joined["BASE"], calibration_rows=joined["CALIBRATION"])
+                                    base_rows=joined["BASE"], calibration_rows=joined["CALIBRATION"],
+                                    progress=lambda done, total: _log(
+                                        "E" + str(horizon), fold.fit_id,
+                                        "comparator trees", f"{done}/{total}"))
     except (ValueError, ArithmeticError, RuntimeError) as exc:
         comparator = None
         comparator_scores = ()
@@ -658,7 +853,8 @@ def _finish_horizon(*, run_dir: Path, env, runner_sha: str, horizon: int,
     return artifact_sha
 
 
-def _run(*, resume_id: str | None = None) -> dict:
+def _run(*, resume_id: str | None = None,
+         reuse_features_from_run: str | None = None) -> dict:
     env, _ = _preflight()
     runner_sha = _committed_runner()
     run_id = resume_id or (datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ") +
@@ -668,13 +864,23 @@ def _run(*, resume_id: str | None = None) -> dict:
     run_dir = RUN_ROOT / run_id
     _guard_run_dir(run_dir)
     plan = _plan(env)
+    source_inputs = authenticate_inputs(REPO, horizon_minutes=60)
+    reuse_evidence = (_authenticate_feature_reuse(
+        producer_run_id=reuse_features_from_run, env=env,
+        source_contract=source_inputs.source_contract)
+        if reuse_features_from_run is not None else None)
+    manifest_reuse = ({key: value for key, value in reuse_evidence.items()
+                       if key != "producer_artifact_path"}
+                      if reuse_evidence is not None else
+                      {"feature_materialization_mode": "GENERATED_CURRENT"})
     expected_manifest = {"run_id": run_id, "plan": plan,
                          "runner_sha256": runner_sha,
                          "historical_source_manifest_sha256": SOURCE_SHA256,
                          "canonical_release_manifest_sha256": RELEASE_SHA256,
                          "label_members": {str(h): authenticate_inputs(REPO, horizon_minutes=h).label_member_sha256
                                            for h in (60, 120)},
-                         "feature_end_exclusive": iso(FEATURE_STOP)}
+                         "feature_end_exclusive": iso(FEATURE_STOP),
+                         "feature_materialization": manifest_reuse}
     if resume_id is None:
         RUN_ROOT.mkdir(parents=True, exist_ok=True)
         _guard_run_dir(run_dir)
@@ -686,14 +892,17 @@ def _run(*, resume_id: str | None = None) -> dict:
         if _read_json(run_dir / "run_manifest.json") != expected_manifest:
             raise DevelopmentInputError("resume run manifest/parent identity mismatch")
     if (any(run_dir.glob("*.tmp")) or any(run_dir.glob(".incomplete-*")) or
-            any(run_dir.glob(".features-incomplete-*"))):
+            any(run_dir.glob(".features-incomplete-*")) or
+            any(run_dir.glob(".features-import-incomplete-*"))):
         raise DevelopmentInputError("incomplete temporary stage present; manual audit required")
     _log("run", run_id, "authenticated plan", env.identity_sha256)
-    source_inputs = authenticate_inputs(REPO, horizon_minutes=60)
     feature_parents = {"environment": env.identity_sha256, "runner": runner_sha,
                        "source": SOURCE_SHA256, "registry": env.registry_sha256,
                        "spec": env.spec_sha256, "origin_range": digest((iso(D0), iso(FEATURE_STOP)))}
-    feature_path, feature_sha = _materialize_features(run_dir, source_inputs, feature_parents)
+    if reuse_evidence is None:
+        feature_path, feature_sha = _materialize_features(run_dir, source_inputs, feature_parents)
+    else:
+        feature_path, feature_sha = _import_features(run_dir, reuse_evidence, feature_parents)
     results = {}
     for horizon in (60, 120):
         inputs = authenticate_inputs(REPO, horizon_minutes=horizon)
@@ -743,6 +952,38 @@ def _status(run_id: str) -> dict:
             raise DevelopmentInputError(f"corrupted run artifact: {artifact}")
         stages[artifact.name] = seal["sha256"]
         stage_seals[artifact.name] = seal
+    feature_materialization = manifest.get("feature_materialization", {})
+    if feature_materialization.get("feature_materialization_mode") == "REUSED_AUTHENTICATED":
+        feature_name = f"features_{PRODUCER_FEATURE_SHA256}.jsonl.gz"
+        expected_reuse = {
+            "producer_run_id": PRODUCER_RUN_ID,
+            "producer_source_revision": PRODUCER_REVISION,
+            "producer_feature_rows": PRODUCER_FEATURE_ROWS,
+            "producer_feature_sha256": PRODUCER_FEATURE_SHA256,
+            "producer_run_manifest_sha256": PRODUCER_RUN_MANIFEST_SHA256,
+            "producer_feature_seal_sha256": PRODUCER_FEATURE_SEAL_SHA256,
+            "compatibility_verdict": "PASS",
+        }
+        if (any(feature_materialization.get(key) != value
+                for key, value in expected_reuse.items()) or
+                feature_materialization.get("producer_artifact_path") is not None or
+                stages.get(feature_name) != PRODUCER_FEATURE_SHA256):
+            raise DevelopmentInputError("reused feature provenance mismatch")
+        expected_parents = {
+            "environment": manifest["plan"]["environment_sha256"],
+            "runner": manifest["runner_sha256"], "source": SOURCE_SHA256,
+            "registry": manifest["plan"]["registry_sha256"],
+            "spec": manifest["plan"]["spec_sha256"],
+            "origin_range": digest((iso(D0), iso(FEATURE_STOP))),
+            "materialization_mode": "REUSED_AUTHENTICATED",
+            "producer_run_manifest": PRODUCER_RUN_MANIFEST_SHA256,
+            "producer_feature_seal": PRODUCER_FEATURE_SEAL_SHA256,
+            "producer_feature_artifact": PRODUCER_FEATURE_SHA256,
+            "feature_contract": feature_materialization.get(
+                "current_feature_contract_identity"),
+        }
+        if stage_seals[feature_name].get("parents") != expected_parents:
+            raise DevelopmentInputError("reused feature seal provenance mismatch")
     registrations = {}
     for horizon in (60, 120):
         name = f"E{horizon}_pre_run_ledger.json"
@@ -780,6 +1021,8 @@ def _status(run_id: str) -> dict:
         registrations[str(horizon)] = entry_sha
     return {"run_id": run_id, "environment_sha256": manifest["plan"]["environment_sha256"],
             "hash_verified_files": stages, "pre_run_ledger_entries": registrations,
+            "feature_materialization_mode": feature_materialization.get(
+                "feature_materialization_mode", "LEGACY_UNDECLARED"),
             "dossier_files_present_and_hashed": all(
                 f"E{h}_development_dossier.json.gz" in stages for h in (60, 120))}
 
@@ -791,15 +1034,19 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--execute", action="store_true")
     mode.add_argument("--resume", metavar="RUN_ID")
     mode.add_argument("--status", metavar="RUN_ID")
+    parser.add_argument("--reuse-features-from-run", metavar="PRODUCER_RUN_ID")
     args = parser.parse_args(argv)
     try:
         if args.dry_run:
-            result = dry_run()
+            result = dry_run(reuse_features_from_run=args.reuse_features_from_run)
         elif args.execute:
-            result = _run()
+            result = _run(reuse_features_from_run=args.reuse_features_from_run)
         elif args.resume:
-            result = _run(resume_id=args.resume)
+            result = _run(resume_id=args.resume,
+                          reuse_features_from_run=args.reuse_features_from_run)
         else:
+            if args.reuse_features_from_run is not None:
+                raise DevelopmentInputError("feature reuse option is invalid with status")
             result = _status(args.status)
         print(canonical_json(result), flush=True)
         return 0
