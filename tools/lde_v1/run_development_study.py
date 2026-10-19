@@ -690,7 +690,11 @@ def _stage_ledger(*, env, run_id: str, horizon: int, stage: str,
                 e.horizon_minutes == horizon and e.fit_or_cohort_id == fit_scope]
     artifact_hashes = tuple(sorted((("stage_artifact", artifact_sha),
                                      ("environment", env.identity_sha256))))
-    manifest_hashes = tuple(sorted(parents.items()))
+    # Seal parents may carry a semantic stage label. Keep that seal identity
+    # intact, but commit the label as a digest in the ledger's SHA-only field.
+    manifest_hashes = tuple(sorted(
+        (name, digest((value, horizon, stage)) if name == "stage" else value)
+        for name, value in parents.items()))
     if matching:
         if (len(matching) != 1 or matching[0].artifact_hashes != artifact_hashes or
                 matching[0].manifest_hashes != manifest_hashes):

@@ -9,6 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import gzip
 import json
+import re
 import subprocess
 
 import pytest
@@ -120,6 +121,96 @@ def test_sealed_stage_resume_integrity_and_no_overwrite(tmp_path):
     partial.write_bytes(b"unsealed")
     with pytest.raises(DevelopmentInputError, match="partial stage"):
         runner._sealed_read(partial, parents=parents)
+
+
+def test_staged_ledger_hash_fields_and_append_only_identity(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner, "LEDGER_ROOT", tmp_path / "ledger")
+    env = SimpleNamespace(identity_sha256="a" * 64, source_revision="b" * 40)
+    common = {"environment": env.identity_sha256, "fit": "c" * 64,
+              "runner": "d" * 64}
+    cases = (
+        ("F1_PRIMARY", {**common, "stage": "PRIMARY_FOLD"}),
+        ("F1_COMPARATOR", {**common, "stage": "REPORT_ONLY_COMPARATOR",
+                           "primary_stage": "e" * 64}),
+        ("F1", {**common, "primary_stage": "e" * 64,
+                "comparator_stage": "f" * 64}),
+        ("DOSSIER", {"environment": env.identity_sha256, "folds": "1" * 64,
+                     "runner": "d" * 64}),
+    )
+    for index, (stage, parents) in enumerate(cases):
+        original_parents = parents.copy()
+        runner._stage_ledger(env=env, run_id="synthetic", horizon=60, stage=stage,
+                             artifact_sha=f"{index + 2:x}" * 64, parents=parents)
+        assert parents == original_parents
+        entry = ExperimentLedger(runner.LEDGER_ROOT).read_all()[-1]
+        assert entry.fit_or_cohort_id == f"synthetic:{stage}"
+        for pairs in (entry.manifest_hashes, entry.artifact_hashes):
+            assert pairs == tuple(sorted(pairs))
+            assert len({name for name, _ in pairs}) == len(pairs)
+            assert all(re.fullmatch(r"[0-9a-f]{64}", value) for _, value in pairs)
+        if "stage" in parents:
+            assert dict(entry.manifest_hashes)["stage"] == runner.digest(
+                (parents["stage"], 60, stage))
+        else:
+            assert "stage" not in dict(entry.manifest_hashes)
+        assert dict(entry.artifact_hashes)["stage_artifact"] == f"{index + 2:x}" * 64
+        runner._stage_ledger(env=env, run_id="synthetic", horizon=60, stage=stage,
+                             artifact_sha=f"{index + 2:x}" * 64, parents=parents)
+        assert len(ExperimentLedger(runner.LEDGER_ROOT).read_all()) == index + 1
+    entries = ExperimentLedger(runner.LEDGER_ROOT).read_all()
+    assert all(entry.previous_entry_sha256 == previous.entry_sha256
+               for previous, entry in zip(entries, entries[1:]))
+    with pytest.raises(ValueError, match="sorted unique SHA-256 identity pairs"):
+        runner._stage_ledger(env=env, run_id="synthetic", horizon=60,
+                             stage="INVALID", artifact_sha="9" * 64,
+                             parents={**common, "unexpected": "semantic literal"})
+    assert len(ExperimentLedger(runner.LEDGER_ROOT).read_all()) == 4
+
+
+def test_synthetic_primary_completion_reaches_comparator_scheduling_boundary(
+        tmp_path, monkeypatch):
+    run_dir = tmp_path / "synthetic-run"
+    run_dir.mkdir()
+    monkeypatch.setattr(runner, "LEDGER_ROOT", tmp_path / "ledger")
+    monkeypatch.setattr(runner, "FOLDS", (SimpleNamespace(fit_id="F1"),))
+    inputs = SimpleNamespace(label_member_sha256="c" * 64)
+    env = SimpleNamespace(identity_sha256="a" * 64, source_revision="b" * 40)
+    monkeypatch.setattr(runner, "authenticate_inputs", lambda *_args, **_kwargs: inputs)
+    monkeypatch.setattr(runner, "read_label_range", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(runner, "_registration", lambda *_args: SimpleNamespace(
+        entry_sha256="d" * 64))
+    monkeypatch.setattr(runner, "_preserve_registration", lambda **_kwargs: "e" * 64)
+    events = []
+    monkeypatch.setattr(runner, "_log", lambda *args: events.append(args))
+
+    def sealed_primary(*, run_dir, env, runner_sha, feature_sha, inputs, fold,
+                       horizon, pre_run_reference_sha, **_kwargs):
+        parents = runner._fold_parents(
+            env=env, runner_sha=runner_sha, feature_sha=feature_sha,
+            inputs=inputs, fold=fold, horizon=horizon,
+            pre_run_reference_sha=pre_run_reference_sha)
+        path = runner._primary_path(run_dir, horizon, fold.fit_id)
+        sha = runner._sealed_write(path, b"synthetic primary", parents=runner._primary_parents(parents))
+        events.append(("PRIMARY DURABLE COMPLETE", sha))
+        return path, sha
+
+    monkeypatch.setattr(runner, "_prepare_primary_stage", sealed_primary)
+    inputs_out, reference, primary_hashes, jobs = runner._prepare_horizon_stages(
+        run_dir=run_dir, env=env, runner_sha="f" * 64,
+        feature_path=tmp_path / "unused-features", feature_sha="1" * 64,
+        feature_parents={"environment": env.identity_sha256}, horizon=60)
+    assert inputs_out is inputs and reference == "e" * 64
+    assert events[-1][0] == "PRIMARY DURABLE COMPLETE"
+    entries = ExperimentLedger(runner.LEDGER_ROOT).read_all()
+    assert len(entries) == 1 and entries[0].fit_or_cohort_id == "synthetic-run:F1_PRIMARY"
+    assert primary_hashes == {"F1": jobs[0].primary_sha}
+    seal = json.loads((run_dir / "E60_F1.primary.json.gz.seal.json").read_text())
+    assert seal["parents"]["stage"] == "PRIMARY_FOLD"
+    scheduled = []
+    monkeypatch.setattr(runner, "_schedule_comparator_jobs",
+                        lambda queued, *, workers: (scheduled.extend(queued) or {}, {}))
+    runner._schedule_comparator_jobs(jobs, workers=1)
+    assert scheduled == list(jobs)
 
 
 @pytest.mark.parametrize("partial_name", [
