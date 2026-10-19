@@ -414,11 +414,14 @@ def _registration(env, horizon: int):
     entries = [e for e in ledger.read_all()
                if e.action == registration.action and e.horizon_minutes == horizon and
                e.fit_or_cohort_id == registration.scope]
-    if entries:
-        if (len(entries) != 1 or dict(entries[0].artifact_hashes).get("pre_run_registration") !=
-                registration.identity_sha256 or entries[0].code_revision_or_hash != env.source_revision):
-            raise DevelopmentInputError("conflicting or duplicate permanent pre-run registration")
-        return entries[0]
+    current = [e for e in entries if e.code_revision_or_hash == env.source_revision]
+    if any(dict(e.artifact_hashes).get("pre_run_registration") !=
+           registration.identity_sha256 for e in current):
+        raise DevelopmentInputError("conflicting permanent pre-run registration for current revision")
+    if len(current) > 1:
+        raise DevelopmentInputError("duplicate permanent pre-run registration for current revision")
+    if current:
+        return current[0]
     return registration.append_to(ledger, horizon_minutes=horizon, actor="manual-lde-v1-runner")
 
 

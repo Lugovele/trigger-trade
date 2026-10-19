@@ -17,7 +17,10 @@ from tools.lde_v1 import run_development_study as runner
 from triggertrade.live_direction_estimator_v1.historical_source import (
     HistoricalMember, HistoricalSourceContract,
 )
-from triggertrade.live_direction_estimator_v1.development_readiness import AuthenticatedInputs, DevelopmentInputError
+from triggertrade.live_direction_estimator_v1.development_readiness import (
+    AuthenticatedInputs, DevelopmentInputError, DevelopmentPreRunRegistration,
+)
+from triggertrade.live_direction_estimator_v1.experiment_ledger import ExperimentLedger
 
 
 @pytest.fixture
@@ -501,6 +504,15 @@ def test_pre_run_ledger_reference_is_sealed_and_resume_checks_identity(tmp_path,
     monkeypatch.setattr(runner, "ExperimentLedger", lambda *_args:
                         SimpleNamespace(read_all=lambda: (good_entry,)))
     assert runner._status(run_id)["pre_run_ledger_entries"] == {"60": "d" * 64}
+    assert runner._status(run_id)["dossier_files_present_and_hashed"] is False
+    other_entry = SimpleNamespace(**{**vars(good_entry), "entry_sha256": "e" * 64})
+    monkeypatch.setattr(runner, "ExperimentLedger", lambda *_args:
+                        SimpleNamespace(read_all=lambda: (other_entry, good_entry)))
+    assert runner._status(run_id)["pre_run_ledger_entries"] == {"60": "d" * 64}
+    monkeypatch.setattr(runner, "ExperimentLedger", lambda *_args:
+                        SimpleNamespace(read_all=lambda: (other_entry,)))
+    with pytest.raises(DevelopmentInputError, match="ledger entry missing"):
+        runner._status(run_id)
     bad_entry = SimpleNamespace(entry_sha256="d" * 64, horizon_minutes=60,
                                 action="DEVELOPMENT_PREFLIGHT_REGISTERED",
                                 artifact_hashes=(("pre_run_registration", "f" * 64),),
@@ -524,6 +536,106 @@ def test_pre_run_ledger_reference_is_sealed_and_resume_checks_identity(tmp_path,
         runner._preserve_registration(
             run_dir=run_dir, env=env, runner_sha="e" * 64, horizon=60,
             entry=SimpleNamespace(entry_sha256="f" * 64))
+
+
+def _registration_fixture(revision: str, *, configuration: str = "a" * 64):
+    return DevelopmentPreRunRegistration(
+        spec_id=runner.SPEC_ID, spec_version=runner.SPEC_VERSION,
+        spec_sha256="b" * 64, source_revision=revision,
+        registry_sha256="c" * 64, dependency_lock_sha256="d" * 64,
+        serializer_environment_sha256="e" * 64,
+        historical_source_manifest_sha256="f" * 64,
+        canonical_release_manifest_sha256="1" * 64,
+        architecture_sha256="2" * 64, configuration_sha256=configuration,
+        freeze_sha256="3" * 64, harness_sha256="4" * 64,
+        h1_governance_status="CLEANLINESS_UNVERIFIED",
+        h1_not_used_for_fitting=True, prospective_not_used_for_fitting=True)
+
+
+@pytest.mark.parametrize("prior_revisions,include_current", [
+    ((), False),
+    ((), True),
+    (("a" * 40,), False),
+    (("a" * 40, "b" * 40), False),
+    (("a" * 40,), True),
+])
+def test_registration_revision_scope_and_append_only(
+        tmp_path, monkeypatch, prior_revisions, include_current):
+    root = tmp_path / "ledger"
+    monkeypatch.setattr(runner, "LEDGER_ROOT", root)
+    current = _registration_fixture("c" * 40)
+    for revision in prior_revisions:
+        _registration_fixture(revision).append_to(
+            ExperimentLedger(root), horizon_minutes=60, actor="test")
+    exact = (current.append_to(ExperimentLedger(root), horizon_minutes=60,
+                               actor="test") if include_current else None)
+    before = {path.name: path.read_bytes() for path in root.glob("*.json")}
+    monkeypatch.setattr(runner.DevelopmentPreRunRegistration, "from_environment",
+                        staticmethod(lambda _env: current))
+    selected = runner._registration(SimpleNamespace(source_revision=current.source_revision), 60)
+    after = {path.name: path.read_bytes() for path in root.glob("*.json")}
+    assert all(after[name] == contents for name, contents in before.items())
+    assert len(after) == len(before) + (0 if include_current else 1)
+    assert selected.code_revision_or_hash == current.source_revision
+    assert dict(selected.artifact_hashes)["pre_run_registration"] == current.identity_sha256
+    if exact is not None:
+        assert selected.entry_sha256 == exact.entry_sha256
+    else:
+        assert selected.entry_sha256 == ExperimentLedger(root).read_all()[-1].entry_sha256
+
+
+def test_duplicate_current_registration_fails_closed_without_ledger_mutation(tmp_path, monkeypatch):
+    root = tmp_path / "ledger"
+    monkeypatch.setattr(runner, "LEDGER_ROOT", root)
+    current = _registration_fixture("c" * 40)
+    for _ in range(2):
+        current.append_to(ExperimentLedger(root), horizon_minutes=60, actor="test")
+    before = {path.name: path.read_bytes() for path in root.glob("*.json")}
+    monkeypatch.setattr(runner.DevelopmentPreRunRegistration, "from_environment",
+                        staticmethod(lambda _env: current))
+    with pytest.raises(DevelopmentInputError, match="duplicate permanent pre-run registration"):
+        runner._registration(SimpleNamespace(source_revision=current.source_revision), 60)
+    assert before == {path.name: path.read_bytes() for path in root.glob("*.json")}
+
+
+def test_same_revision_conflicting_registration_fails_closed_without_ledger_mutation(
+        tmp_path, monkeypatch):
+    root = tmp_path / "ledger"
+    monkeypatch.setattr(runner, "LEDGER_ROOT", root)
+    current = _registration_fixture("c" * 40)
+    conflicting = replace(current, configuration_sha256="9" * 64)
+    conflicting.append_to(ExperimentLedger(root), horizon_minutes=60, actor="test")
+    before = {path.name: path.read_bytes() for path in root.glob("*.json")}
+    monkeypatch.setattr(runner.DevelopmentPreRunRegistration, "from_environment",
+                        staticmethod(lambda _env: current))
+    with pytest.raises(DevelopmentInputError, match="conflicting permanent pre-run registration"):
+        runner._registration(SimpleNamespace(source_revision=current.source_revision), 60)
+    assert before == {path.name: path.read_bytes() for path in root.glob("*.json")}
+
+
+def test_retained_pre_run_ledger_is_read_only_historical_evidence(tmp_path, monkeypatch):
+    root = runner.REPO / "runtime/lde_v1/development/experiment_ledger"
+    if not root.is_dir():
+        pytest.skip("retained local ledger unavailable")
+    before = {path.name: path.read_bytes() for path in root.glob("*.json")}
+    entries = ExperimentLedger(root).read_all()
+    assert any(entry.action == "DEVELOPMENT_PREFLIGHT_REGISTERED" and
+               entry.horizon_minutes == 60 and
+               entry.fit_or_cohort_id == "F1_F5_DEVELOPMENT" and
+               entry.code_revision_or_hash == runner.PRODUCER_REVISION
+               for entry in entries)
+    copied_root = tmp_path / "ledger-copy"
+    copied_root.mkdir()
+    for name, contents in before.items():
+        (copied_root / name).write_bytes(contents)
+    monkeypatch.setattr(runner, "LEDGER_ROOT", copied_root)
+    current = _registration_fixture("c" * 40)
+    monkeypatch.setattr(runner.DevelopmentPreRunRegistration, "from_environment",
+                        staticmethod(lambda _env: current))
+    selected = runner._registration(SimpleNamespace(source_revision=current.source_revision), 60)
+    assert selected.sequence == len(entries) + 1
+    assert selected.code_revision_or_hash == current.source_revision
+    assert before == {path.name: path.read_bytes() for path in root.glob("*.json")}
 
 
 def test_historical_evaluation_record_roundtrip_without_asof_claim():
