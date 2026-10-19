@@ -642,6 +642,20 @@ def test_tiny_fold_wires_primary_comparator_shadow_and_resume(tmp_path, monkeypa
     run_dir.mkdir()
     monkeypatch.setattr(runner, "LEDGER_ROOT", tmp_path / "ledger")
     env = SimpleNamespace(identity_sha256="e" * 64, source_revision="f" * 40)
+    primary_path, primary_sha = runner._prepare_primary_stage(
+        run_dir=run_dir, env=env, runner_sha="1" * 64, feature_path=feature_path,
+        feature_sha=sha256(feature_path.read_bytes()).hexdigest(), inputs=inputs,
+        targets=targets, fold=fold, horizon=60)
+    assert primary_path.is_file() and len(primary_sha) == 64
+    assert not (run_dir / "E60_F1.json.gz").exists()
+    original_fit_pipeline = runner.fit_pipeline
+    monkeypatch.setattr(runner, "fit_pipeline", lambda **_kwargs:
+                        (_ for _ in ()).throw(AssertionError("sealed primary was recomputed")))
+    assert runner._prepare_primary_stage(
+        run_dir=run_dir, env=env, runner_sha="1" * 64, feature_path=feature_path,
+        feature_sha=sha256(feature_path.read_bytes()).hexdigest(), inputs=inputs,
+        targets=targets, fold=fold, horizon=60)[1] == primary_sha
+    monkeypatch.setattr(runner, "fit_pipeline", original_fit_pipeline)
     phase = runner._fold_stage(run_dir=run_dir, env=env, runner_sha="1" * 64,
         feature_path=feature_path, feature_sha=sha256(feature_path.read_bytes()).hexdigest(),
         inputs=inputs, targets=targets, fold=fold, horizon=60)
@@ -656,6 +670,10 @@ def test_tiny_fold_wires_primary_comparator_shadow_and_resume(tmp_path, monkeypa
     assert reused == phase and (run_dir / "E60_F1.json.gz").read_bytes() == before
     failed_run = tmp_path / "20261018T100001000000Z_ba64f4bc"
     failed_run.mkdir()
+    failed_primary, failed_primary_sha = runner._prepare_primary_stage(
+        run_dir=failed_run, env=env, runner_sha="1" * 64, feature_path=feature_path,
+        feature_sha=sha256(feature_path.read_bytes()).hexdigest(), inputs=inputs,
+        targets=targets, fold=fold, horizon=60)
     def comparator_failure(**_kwargs):
         raise ValueError("synthetic comparator failure")
     monkeypatch.setattr(runner, "fit_comparator", comparator_failure)
@@ -664,5 +682,164 @@ def test_tiny_fold_wires_primary_comparator_shadow_and_resume(tmp_path, monkeypa
         inputs=inputs, targets=targets, fold=fold, horizon=60)
     report = json.loads(gzip.decompress((failed_run / "E60_F1.json.gz").read_bytes()))
     assert len(primary_phase.records) == 4 and all(r.matched for r in primary_phase.records)
+    assert failed_primary.is_file() and sha256(failed_primary.read_bytes()).hexdigest() == failed_primary_sha
     assert report["comparator"] is None and report["comparator_status"]["status"] == "FIT_FAILED"
     assert len(report["shadow_scores"]) == 4
+    failed_primary.write_bytes(b"corrupt")
+    with pytest.raises(DevelopmentInputError, match="seal mismatch"):
+        runner._prepare_primary_stage(
+            run_dir=failed_run, env=env, runner_sha="1" * 64, feature_path=feature_path,
+            feature_sha=sha256(feature_path.read_bytes()).hexdigest(), inputs=inputs,
+            targets=targets, fold=fold, horizon=60)
+
+
+def _comparator_stage_fixture(tmp_path, monkeypatch):
+    run_root = tmp_path / "runs"
+    run_dir = run_root / "20261019T100000000000Z_13d242c0"
+    run_dir.mkdir(parents=True)
+    monkeypatch.setattr(runner, "RUN_ROOT", run_root)
+    monkeypatch.setattr(runner, "REPO", tmp_path)
+    job = runner.ComparatorJob(
+        str(tmp_path), str(run_dir), "a" * 64, str(run_dir / "features.jsonl.gz"),
+        "b" * 64, 60, "F1", "c" * 64, "d" * 64, "e" * 64, "f" * 64, ())
+    output = {"horizon": 60, "fit_id": "F1", "parents": runner._comparator_parents(job),
+              "primary_bundle_sha256": "1" * 64, "comparator": None,
+              "comparator_scores": [], "fit_error": "ValueError: synthetic",
+              "completed_at": "2026-10-19T10:00:00.000000Z"}
+    return job, output
+
+
+def test_comparator_stage_publish_isolated_immutable_and_corruption_detected(tmp_path, monkeypatch):
+    job, output = _comparator_stage_fixture(tmp_path, monkeypatch)
+    temporary = runner._write_comparator_temp(job, output)
+    persisted, artifact_sha = runner._publish_comparator_stage(temporary, job=job)
+    final = runner._comparator_stage_dir(Path(job.run_dir), 60, "F1")
+    assert persisted == output and len(artifact_sha) == 64 and final.is_dir()
+    with pytest.raises(DevelopmentInputError, match="already exists"):
+        runner._publish_comparator_stage(runner._write_comparator_temp(job, output), job=job)
+    (final / "artifact.json.gz").write_bytes(b"corrupt")
+    with pytest.raises(DevelopmentInputError, match="seal mismatch"):
+        runner._read_comparator_stage(final, job=job)
+
+
+def test_comparator_publish_rejects_worker_path_escape_and_lock_collision(tmp_path, monkeypatch):
+    job, output = _comparator_stage_fixture(tmp_path, monkeypatch)
+    # Deliberately keep the malicious worker path outside the authenticated run directory.
+    outside = tmp_path / (".E60_F1.comparator-incomplete-" + "a" * 32)
+    outside.mkdir()
+    with pytest.raises(DevelopmentInputError, match="temporary path"):
+        runner._publish_comparator_stage(outside, job=job)
+    temporary = runner._write_comparator_temp(job, output)
+    with runner._comparator_publish_lock(job):
+        with pytest.raises(DevelopmentInputError, match="publish collision"):
+            runner._publish_comparator_stage(temporary, job=job)
+
+
+def test_comparator_publish_rejects_redirected_lock_without_writing(tmp_path, monkeypatch):
+    job, _ = _comparator_stage_fixture(tmp_path, monkeypatch)
+    lock = Path(job.run_dir) / ".E60_F1.comparator-publish.lock"
+    lock.write_bytes(b"")
+    original_is_symlink = Path.is_symlink
+    monkeypatch.setattr(Path, "is_symlink", lambda path:
+                        path == lock or original_is_symlink(path))
+    with pytest.raises(DevelopmentInputError, match="redirected evidence path"):
+        with runner._comparator_publish_lock(job):
+            pass
+    assert lock.read_bytes() == b""
+
+
+def test_interrupted_comparator_temp_never_counts_as_complete(tmp_path, monkeypatch):
+    job, output = _comparator_stage_fixture(tmp_path, monkeypatch)
+    temporary = runner._write_comparator_temp(job, output)
+    final = runner._comparator_stage_dir(Path(job.run_dir), 60, "F1")
+    assert temporary.is_dir() and not final.exists()
+    with pytest.raises(DevelopmentInputError, match="missing or invalid"):
+        runner._read_comparator_stage(final, job=job)
+
+
+def test_worker_rechecks_committed_runner_and_environment_identity(tmp_path, monkeypatch):
+    job, _ = _comparator_stage_fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(runner, "_committed_runner", lambda: "0" * 64)
+    with pytest.raises(DevelopmentInputError, match="runner identity mismatch"):
+        runner._verify_worker_identity(job)
+    monkeypatch.setattr(runner, "_committed_runner", lambda: job.runner_sha)
+    verified = []
+    environment = SimpleNamespace(identity_sha256="0" * 64,
+                                  verify=lambda: verified.append(True))
+    monkeypatch.setattr(runner, "build_development_environment", lambda **_kwargs: environment)
+    with pytest.raises(DevelopmentInputError, match="environment identity mismatch"):
+        runner._verify_worker_identity(job)
+    assert verified == [True]
+    environment.identity_sha256 = job.environment_sha
+    runner._verify_worker_identity(job)
+
+
+def test_e120_preparation_failure_preserves_independent_e60_work():
+    events = []
+    def prepare(horizon):
+        events.append(horizon)
+        if horizon == 120:
+            raise DevelopmentInputError("synthetic E120 failure")
+        return "inputs60", "registration60", {"F1": "a" * 64}, ("E60-job",)
+    contexts, jobs, deferred = runner._prepare_independent_horizons(prepare)
+    assert events == [60, 120]
+    assert contexts == {60: ("inputs60", "registration60", {"F1": "a" * 64})}
+    assert jobs == ("E60-job",)
+    assert isinstance(deferred, DevelopmentInputError)
+    with pytest.raises(DevelopmentInputError, match="synthetic E60 failure"):
+        runner._prepare_independent_horizons(
+            lambda horizon: (_ for _ in ()).throw(
+                DevelopmentInputError("synthetic E60 failure")))
+
+
+@pytest.mark.parametrize("workers", [0, -1, 5, True, 1.5])
+def test_invalid_comparator_worker_counts_fail_closed(workers):
+    with pytest.raises(DevelopmentInputError, match="integer in \\[1,4\\]"):
+        runner._validate_worker_count(workers)
+    assert runner._validate_worker_count(1) == 1
+
+
+def test_comparator_scheduler_returns_canonical_caller_order_on_reuse(tmp_path, monkeypatch):
+    base_job, output = _comparator_stage_fixture(tmp_path, monkeypatch)
+    jobs = []
+    for horizon, fit_id in ((60, "F1"), (60, "F2"), (120, "F1")):
+        job = replace(base_job, horizon=horizon, fit_id=fit_id,
+                      canonical_label_sha=("f" if horizon == 60 else "9") * 64)
+        runner._publish_comparator_stage(runner._write_comparator_temp(job, {
+            **output, "horizon": horizon, "fit_id": fit_id,
+            "parents": runner._comparator_parents(job)}), job=job)
+        jobs.append(job)
+    result, failures = runner._schedule_comparator_jobs(tuple(jobs), workers=4)
+    assert tuple(result) == tuple(job.key for job in jobs)
+    assert failures == {}
+
+
+def test_e120_worker_failure_is_collected_without_discarding_e60_result(tmp_path, monkeypatch):
+    base_job, output = _comparator_stage_fixture(tmp_path, monkeypatch)
+    e60 = base_job
+    e120 = replace(base_job, horizon=120, fit_id="F1", canonical_label_sha="9" * 64)
+    def worker(job):
+        if job.horizon == 120:
+            raise DevelopmentInputError("synthetic E120 worker failure")
+        return str(runner._write_comparator_temp(job, output))
+    monkeypatch.setattr(runner, "_comparator_worker", worker)
+    results, failures = runner._schedule_comparator_jobs((e60, e120), workers=1)
+    assert tuple(results) == (e60.key,)
+    assert tuple(failures) == (e120.key,)
+    assert isinstance(failures[e120.key], DevelopmentInputError)
+    assert runner._comparator_stage_dir(Path(e60.run_dir), 60, "F1").is_dir()
+    assert not runner._comparator_stage_dir(Path(e120.run_dir), 120, "F1").exists()
+
+
+def test_corrupt_existing_e120_stage_does_not_discard_valid_e60_result(tmp_path, monkeypatch):
+    e60, output = _comparator_stage_fixture(tmp_path, monkeypatch)
+    e120 = replace(e60, horizon=120, fit_id="F1", canonical_label_sha="9" * 64)
+    runner._publish_comparator_stage(runner._write_comparator_temp(e60, output), job=e60)
+    e120_output = {**output, "horizon": 120, "parents": runner._comparator_parents(e120)}
+    runner._publish_comparator_stage(runner._write_comparator_temp(e120, e120_output), job=e120)
+    e120_artifact = runner._comparator_stage_dir(Path(e120.run_dir), 120, "F1") / "artifact.json.gz"
+    e120_artifact.write_bytes(b"corrupt")
+    results, failures = runner._schedule_comparator_jobs((e60, e120), workers=1)
+    assert tuple(results) == (e60.key,)
+    assert tuple(failures) == (e120.key,)
+    assert isinstance(failures[e120.key], DevelopmentInputError)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 import inspect
@@ -35,7 +36,10 @@ from triggertrade.live_direction_estimator_v1.rolling_shadow import (
     score_shadow, shadow_window, subtract_calendar_months,
 )
 from triggertrade.live_direction_estimator_v1.source import SYMBOLS
-from tools.lde_v1.benchmark_comparator_split import reference_best_split
+from tools.lde_v1 import run_development_study as study_runner
+from tools.lde_v1.benchmark_comparator_split import (
+    optimized_benchmark, parallel_benchmark, reference_best_split,
+)
 
 FIVE = timedelta(minutes=5)
 
@@ -152,6 +156,19 @@ def test_optimized_split_exact_reference_deterministic_randomized_fixtures():
         candidates = (1, 7, 13, 29, 35)
         assert _best_split(states, labels, indices, candidates, max(1, n // 10), parent) == \
             reference_best_split(states, labels, indices, candidates, max(1, n // 10), parent)
+
+
+def test_optimized_scaling_benchmark_is_bounded_and_preserves_registered_contract():
+    result = optimized_benchmark(rows=24, trees=2)
+    assert (result["rows"], result["feature_count"], result["trees"]) == (24, 35, 2)
+    assert (result["maximum_depth"], result["node_candidate_features"]) == (4, 5)
+    assert result["minimum_leaf_rows"] == 1
+    assert result["rng_generator"] == "PCG64"
+    assert result["elapsed_seconds"] > 0 and result["seconds_per_tree"] > 0
+    with pytest.raises(ValueError, match="row count"):
+        optimized_benchmark(rows=20_001, trees=1)
+    with pytest.raises(ValueError, match="tree count"):
+        optimized_benchmark(rows=24, trees=33)
 
 
 def test_optimized_forest_preserves_rng_topology_and_serialization():
@@ -282,6 +299,32 @@ def test_comparator_seed_resets_per_fit_and_horizon_independence():
     assert a60.artifact_sha256 != a120.artifact_sha256
     assert fit_comparator(primary=p60, base_manifest=bm60, calibration_manifest=cm60,
                           base_rows=b60, calibration_rows=c60).trees == a60.trees
+
+
+def test_process_worker_counts_preserve_exact_comparator_artifact_scores_and_rng():
+    primary, base, calibration, score, bm, cm, sm = _population()
+    primary_scores = score_bundle(primary, scored_manifest=sm, scored_rows=score)
+    work = study_runner.ComparatorWork(60, "F1", primary, bm, cm, sm, base,
+                                       calibration, score, primary_scores)
+    expected = study_runner._fit_comparator_work(work)
+    expected.pop("completed_at")
+    assert expected["comparator"]["artifact_sha256"]
+    for workers in (1, 2, 4):
+        with ProcessPoolExecutor(max_workers=workers) as executor:
+            outputs = tuple(executor.map(study_runner._fit_comparator_work, (work,) * 4))
+        for output in outputs:
+            output.pop("completed_at")
+            assert output == expected
+            assert output["comparator"]["artifact_sha256"] == expected["comparator"]["artifact_sha256"]
+
+
+def test_parallel_benchmark_contract_is_bounded_and_exact_across_process_counts():
+    result = parallel_benchmark(rows=24, trees=2, jobs=2, worker_counts=(1, 2, 4))
+    assert result["total_tree_work"] == 4
+    assert result["exact_across_worker_counts"]
+    assert tuple(m["workers"] for m in result["measurements"]) == (1, 2, 4)
+    hashes = tuple(m["exact_forest_hashes"] for m in result["measurements"])
+    assert hashes[0] == hashes[1] == hashes[2]
 
 
 def test_shadow_calendar_exact_six_calendar_months_and_boundaries():
