@@ -171,6 +171,8 @@ def test_synthetic_primary_completion_reaches_comparator_scheduling_boundary(
         tmp_path, monkeypatch):
     run_dir = tmp_path / "synthetic-run"
     run_dir.mkdir()
+    monkeypatch.setattr(runner, "REPO", tmp_path)
+    monkeypatch.setattr(runner, "RUN_ROOT", tmp_path)
     monkeypatch.setattr(runner, "LEDGER_ROOT", tmp_path / "ledger")
     monkeypatch.setattr(runner, "FOLDS", (SimpleNamespace(fit_id="F1"),))
     inputs = SimpleNamespace(label_member_sha256="c" * 64)
@@ -195,15 +197,29 @@ def test_synthetic_primary_completion_reaches_comparator_scheduling_boundary(
         return path, sha
 
     monkeypatch.setattr(runner, "_prepare_primary_stage", sealed_primary)
+    feature_parents = {"environment": env.identity_sha256, "runner": "f" * 64,
+                       "source": runner.SOURCE_SHA256, "registry": "2" * 64,
+                       "spec": "3" * 64, "origin_range": "4" * 64,
+                       "materialization_mode": "REUSED_AUTHENTICATED",
+                       "producer_run_manifest": "5" * 64,
+                       "producer_feature_seal": "6" * 64,
+                       "producer_feature_artifact": "7" * 64,
+                       "feature_contract": "8" * 64}
+    feature_path = run_dir / "features_synthetic.jsonl.gz"
+    feature_sha = runner._sealed_write(feature_path, b"synthetic feature",
+                                       parents=feature_parents)
+    verified_parents = runner._feature_seal_parents(
+        feature_path, expected=feature_parents, artifact_sha=feature_sha)
     inputs_out, reference, primary_hashes, jobs = runner._prepare_horizon_stages(
         run_dir=run_dir, env=env, runner_sha="f" * 64,
-        feature_path=tmp_path / "unused-features", feature_sha="1" * 64,
-        feature_parents={"environment": env.identity_sha256}, horizon=60)
+        feature_path=feature_path, feature_sha=feature_sha,
+        feature_parents=verified_parents, horizon=60)
     assert inputs_out is inputs and reference == "e" * 64
     assert events[-1][0] == "PRIMARY DURABLE COMPLETE"
     entries = ExperimentLedger(runner.LEDGER_ROOT).read_all()
     assert len(entries) == 1 and entries[0].fit_or_cohort_id == "synthetic-run:F1_PRIMARY"
     assert primary_hashes == {"F1": jobs[0].primary_sha}
+    assert jobs[0].feature_parents == tuple(sorted(feature_parents.items()))
     seal = json.loads((run_dir / "E60_F1.primary.json.gz.seal.json").read_text())
     assert seal["parents"]["stage"] == "PRIMARY_FOLD"
     scheduled = []
@@ -211,6 +227,13 @@ def test_synthetic_primary_completion_reaches_comparator_scheduling_boundary(
                         lambda queued, *, workers: (scheduled.extend(queued) or {}, {}))
     runner._schedule_comparator_jobs(jobs, workers=1)
     assert scheduled == list(jobs)
+    monkeypatch.setattr(runner, "_verify_worker_identity", lambda _job: None)
+    monkeypatch.setattr(runner, "_read_primary_stage", lambda *_args, **_kwargs:
+                        (_ for _ in ()).throw(RuntimeError("authenticated scheduling boundary")))
+    monkeypatch.setattr(runner, "_fit_comparator_work", lambda *_args, **_kwargs:
+                        (_ for _ in ()).throw(AssertionError("comparator fit executed")))
+    with pytest.raises(RuntimeError, match="authenticated scheduling boundary"):
+        runner._comparator_worker(jobs[0])
 
 
 @pytest.mark.parametrize("partial_name", [
@@ -320,6 +343,145 @@ def _feature_reuse_fixture(tmp_path, monkeypatch):
     )
 
 
+def _feature_worker_boundary(monkeypatch, *, repo, run_root, path, artifact_sha,
+                             parents, label_sha="a" * 64):
+    monkeypatch.setattr(runner, "REPO", repo)
+    monkeypatch.setattr(runner, "RUN_ROOT", run_root)
+    monkeypatch.setattr(runner, "_verify_worker_identity", lambda _job: None)
+    monkeypatch.setattr(runner, "authenticate_inputs", lambda *_args, **_kwargs:
+                        SimpleNamespace(label_member_sha256=label_sha))
+    monkeypatch.setattr(runner, "_read_primary_stage", lambda *_args, **_kwargs:
+                        (_ for _ in ()).throw(RuntimeError("authenticated feature boundary")))
+    monkeypatch.setattr(runner, "_fit_comparator_work", lambda *_args, **_kwargs:
+                        (_ for _ in ()).throw(AssertionError("comparator fit executed")))
+    return runner.ComparatorJob(
+        str(repo), str(path.parent), parents["runner"], str(path), artifact_sha,
+        60, "F1", None, "b" * 64, parents["environment"], label_sha,
+        tuple(sorted(parents.items())))
+
+
+def test_reused_feature_worker_accepts_exact_imported_parents(tmp_path, monkeypatch):
+    fixture = _feature_reuse_fixture(tmp_path, monkeypatch)
+    evidence = runner._authenticate_feature_reuse(
+        producer_run_id=fixture.producer_id, env=fixture.env,
+        source_contract=fixture.source_contract)
+    run_dir = fixture.run_root / "20261019T100000000000Z_eeeeeeee"
+    run_dir.mkdir()
+    base = {"environment": fixture.env.identity_sha256, "runner": "3" * 64,
+            "source": runner.SOURCE_SHA256, "registry": fixture.env.registry_sha256,
+            "spec": fixture.env.spec_sha256,
+            "origin_range": runner.digest((runner.iso(runner.D0), runner.iso(runner.FEATURE_STOP)))}
+    path, artifact_sha = runner._import_features(run_dir, evidence, base)
+    parents = runner._feature_seal_parents(
+        path, expected=runner._expected_feature_parents(base, evidence),
+        artifact_sha=artifact_sha)
+    assert parents == json.loads(path.with_name(path.name + ".seal.json").read_text())["parents"]
+    job = _feature_worker_boundary(monkeypatch, repo=fixture.repo,
+                                   run_root=fixture.run_root, path=path,
+                                   artifact_sha=artifact_sha, parents=parents)
+    with pytest.raises(RuntimeError, match="authenticated feature boundary"):
+        runner._comparator_worker(job)
+
+
+def test_generated_feature_worker_accepts_exact_generated_parents(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    run_root = repo / "runs"
+    run_dir = run_root / "20261019T100000000000Z_eeeeeeee"
+    run_dir.mkdir(parents=True)
+    monkeypatch.setattr(runner, "_feature_rows_from_authenticated_sources",
+                        lambda _inputs: iter(()))
+    base = {"environment": "a" * 64, "runner": "b" * 64,
+            "source": runner.SOURCE_SHA256, "registry": "c" * 64,
+            "spec": "d" * 64,
+            "origin_range": runner.digest((runner.iso(runner.D0),
+                                           runner.iso(runner.FEATURE_STOP)))}
+    path, artifact_sha = runner._materialize_features(run_dir, object(), base)
+    parents = runner._feature_seal_parents(path, expected=base, artifact_sha=artifact_sha)
+    assert parents == base
+    job = _feature_worker_boundary(monkeypatch, repo=repo, run_root=run_root,
+                                   path=path, artifact_sha=artifact_sha, parents=parents)
+    with pytest.raises(RuntimeError, match="authenticated feature boundary"):
+        runner._comparator_worker(job)
+    (run_dir / "run_manifest.json").write_text(runner.canonical_json({
+        "run_id": run_dir.name, "runner_sha256": base["runner"],
+        "plan": {"environment_sha256": base["environment"],
+                 "registry_sha256": base["registry"], "spec_sha256": base["spec"]},
+        "feature_materialization": {"feature_materialization_mode": "GENERATED_CURRENT"},
+    }), encoding="utf-8")
+    assert runner._status(run_dir.name)["hash_verified_files"][path.name] == artifact_sha
+    seal_path = path.with_name(path.name + ".seal.json")
+    seal = json.loads(seal_path.read_text())
+    seal["parents"]["runner"] = "0" * 64
+    seal_path.write_text(runner.canonical_json(seal), encoding="utf-8")
+    with pytest.raises(DevelopmentInputError, match="stage seal mismatch"):
+        runner._status(run_dir.name)
+
+
+@pytest.mark.parametrize("changed_parent", [
+    "missing_reuse", "producer_run_manifest", "producer_feature_seal",
+    "producer_feature_artifact", "feature_contract", "environment",
+])
+def test_reused_feature_worker_rejects_inexact_parents(tmp_path, monkeypatch,
+                                                        changed_parent):
+    fixture = _feature_reuse_fixture(tmp_path, monkeypatch)
+    evidence = runner._authenticate_feature_reuse(
+        producer_run_id=fixture.producer_id, env=fixture.env,
+        source_contract=fixture.source_contract)
+    run_dir = fixture.run_root / "20261019T100000000000Z_eeeeeeee"
+    run_dir.mkdir()
+    base = {"environment": fixture.env.identity_sha256, "runner": "3" * 64,
+            "source": runner.SOURCE_SHA256, "registry": fixture.env.registry_sha256,
+            "spec": fixture.env.spec_sha256,
+            "origin_range": runner.digest((runner.iso(runner.D0), runner.iso(runner.FEATURE_STOP)))}
+    path, artifact_sha = runner._import_features(run_dir, evidence, base)
+    parents = runner._feature_seal_parents(
+        path, expected=runner._expected_feature_parents(base, evidence),
+        artifact_sha=artifact_sha)
+    altered = dict(parents)
+    if changed_parent == "missing_reuse":
+        altered.pop("producer_run_manifest")
+    else:
+        altered[changed_parent] = "0" * 64
+    job = _feature_worker_boundary(monkeypatch, repo=fixture.repo,
+                                   run_root=fixture.run_root, path=path,
+                                   artifact_sha=artifact_sha, parents=altered)
+    with pytest.raises(DevelopmentInputError, match="stage seal mismatch"):
+        runner._comparator_worker(job)
+
+
+@pytest.mark.parametrize("reuse", [False, True])
+def test_run_passes_current_run_exact_seal_parents_to_preparation(tmp_path, monkeypatch,
+                                                                   reuse):
+    fixture = _feature_reuse_fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(runner, "_preflight", lambda: (fixture.env, object()))
+    monkeypatch.setattr(runner, "_committed_runner", lambda: "3" * 64)
+    inputs = SimpleNamespace(label_member_sha256="a" * 64,
+                             source_contract=fixture.source_contract)
+    monkeypatch.setattr(runner, "authenticate_inputs", lambda *_args, **_kwargs: inputs)
+    monkeypatch.setattr(runner, "_feature_rows_from_authenticated_sources",
+                        lambda _inputs: iter(()))
+    captured = []
+
+    def capture_prepare(**kwargs):
+        path = kwargs["feature_path"]
+        seal = json.loads(path.with_name(path.name + ".seal.json").read_text())
+        assert kwargs["feature_parents"] == seal["parents"]
+        assert runner._feature_seal_parents(
+            path, expected=kwargs["feature_parents"],
+            artifact_sha=kwargs["feature_sha"]) == seal["parents"]
+        captured.append(tuple(sorted(kwargs["feature_parents"].items())))
+        return None
+
+    monkeypatch.setattr(runner, "_prepare_horizon_stages", capture_prepare)
+    monkeypatch.setattr(runner, "_prepare_independent_horizons",
+                        lambda prepare: (prepare(60) or {}, (), None))
+    monkeypatch.setattr(runner, "_schedule_comparator_jobs",
+                        lambda jobs, *, workers: ({}, {}))
+    runner._run(reuse_features_from_run=fixture.producer_id if reuse else None)
+    assert len(captured) == 1
+    assert len(captured[0]) == (11 if reuse else 6)
+
+
 def test_authenticated_feature_reuse_accepts_exact_producer_and_imports_exact_bytes(
         tmp_path, monkeypatch):
     fixture = _feature_reuse_fixture(tmp_path, monkeypatch)
@@ -358,9 +520,29 @@ def test_authenticated_feature_reuse_accepts_exact_producer_and_imports_exact_by
                  "spec_sha256": fixture.env.spec_sha256},
         "feature_materialization": manifest_evidence,
     }), encoding="utf-8")
+    seen_parents = []
+    original_feature_seal_parents = runner._feature_seal_parents
+
+    def capture_status_parents(path, *, expected, artifact_sha):
+        actual = original_feature_seal_parents(
+            path, expected=expected, artifact_sha=artifact_sha)
+        seen_parents.append(actual)
+        return actual
+
+    monkeypatch.setattr(runner, "_feature_seal_parents", capture_status_parents)
     status = runner._status(new_run.name)
     assert status["feature_materialization_mode"] == "REUSED_AUTHENTICATED"
     assert status["hash_verified_files"][imported.name] == fixture.artifact_sha
+    assert seen_parents == [imported_seal["parents"]]
+    missing_contract = dict(manifest_evidence)
+    missing_contract.pop("current_feature_contract_identity")
+    with pytest.raises(DevelopmentInputError, match="missing or invalid feature reuse parent"):
+        runner._expected_feature_parents(parents, missing_contract)
+    imported_seal["parents"].pop("producer_feature_seal")
+    imported.with_name(imported.name + ".seal.json").write_text(
+        runner.canonical_json(imported_seal), encoding="utf-8")
+    with pytest.raises(DevelopmentInputError, match="stage seal mismatch"):
+        runner._status(new_run.name)
 
 
 @pytest.mark.parametrize("failure", [

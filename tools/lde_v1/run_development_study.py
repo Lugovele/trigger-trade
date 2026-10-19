@@ -544,20 +544,47 @@ def _materialize_features(run_dir: Path, inputs, parents: dict[str, str]) -> tup
     return final, content_sha
 
 
+def _feature_seal_parents(path: Path, *, expected: dict[str, str],
+                          artifact_sha: str) -> dict[str, str]:
+    """Return the current-run seal's exact parents after authenticating its identity."""
+    if _sealed_read(path, parents=expected, read_payload=False) is None:
+        raise DevelopmentInputError("feature artifact is not sealed")
+    if _file_sha256(path) != artifact_sha:
+        raise DevelopmentInputError("feature artifact identity mismatch")
+    seal_path = path.with_name(path.name + ".seal.json")
+    _reject_reparse_components(seal_path)
+    parents = _read_json(seal_path).get("parents")
+    if parents != expected:
+        raise DevelopmentInputError("feature seal parent identity mismatch")
+    return dict(parents)
+
+
+def _expected_feature_parents(base: dict[str, str],
+                              reuse: dict[str, object] | None) -> dict[str, str]:
+    parents = dict(base)
+    if reuse is not None:
+        for field in ("producer_run_manifest_sha256", "producer_feature_seal_sha256",
+                      "current_feature_contract_identity"):
+            value = reuse.get(field)
+            if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
+                raise DevelopmentInputError(f"missing or invalid feature reuse parent: {field}")
+        parents.update({
+            "materialization_mode": "REUSED_AUTHENTICATED",
+            "producer_run_manifest": reuse["producer_run_manifest_sha256"],
+            "producer_feature_seal": reuse["producer_feature_seal_sha256"],
+            "producer_feature_artifact": PRODUCER_FEATURE_SHA256,
+            "feature_contract": reuse["current_feature_contract_identity"],
+        })
+    return parents
+
+
 def _import_features(run_dir: Path, evidence: dict[str, object],
                      feature_parents: dict[str, str]) -> tuple[Path, str]:
     source = Path(str(evidence["producer_artifact_path"]))
     _reject_reparse_components(source)
     if _file_sha256(source) != PRODUCER_FEATURE_SHA256:
         raise DevelopmentInputError("producer feature bytes changed before import")
-    parents = dict(feature_parents)
-    parents.update({
-        "materialization_mode": "REUSED_AUTHENTICATED",
-        "producer_run_manifest": str(evidence["producer_run_manifest_sha256"]),
-        "producer_feature_seal": str(evidence["producer_feature_seal_sha256"]),
-        "producer_feature_artifact": PRODUCER_FEATURE_SHA256,
-        "feature_contract": str(evidence["current_feature_contract_identity"]),
-    })
+    parents = _expected_feature_parents(feature_parents, evidence)
     final = run_dir / f"features_{PRODUCER_FEATURE_SHA256}.jsonl.gz"
     existing = _sealed_read(final, parents=parents, read_payload=False)
     if existing is not None:
@@ -1284,6 +1311,7 @@ def _finish_horizon(*, run_dir: Path, env, runner_sha: str, horizon: int,
 def _prepare_horizon_stages(*, run_dir: Path, env, runner_sha: str,
                             feature_path: Path, feature_sha: str,
                             feature_parents: dict[str, str], horizon: int):
+    _feature_seal_parents(feature_path, expected=feature_parents, artifact_sha=feature_sha)
     inputs = authenticate_inputs(REPO, horizon_minutes=horizon)
     _log(f"E{horizon}", "canonical target authentication start")
     targets = read_label_range(inputs, symbols=SYMBOLS, start=D0,
@@ -1387,6 +1415,9 @@ def _run(*, resume_id: str | None = None,
         feature_path, feature_sha = _materialize_features(run_dir, source_inputs, feature_parents)
     else:
         feature_path, feature_sha = _import_features(run_dir, reuse_evidence, feature_parents)
+    feature_parents = _feature_seal_parents(
+        feature_path, expected=_expected_feature_parents(feature_parents, reuse_evidence),
+        artifact_sha=feature_sha)
     contexts, jobs, deferred_e120_error = _prepare_independent_horizons(
         lambda horizon: _prepare_horizon_stages(
             run_dir=run_dir, env=env, runner_sha=runner_sha,
@@ -1414,6 +1445,9 @@ def _run(*, resume_id: str | None = None,
                                        end=H1_START, max_row_groups=2_000)
             phases = []
             for fold in FOLDS:
+                _feature_seal_parents(
+                    feature_path, expected=dict(horizon_jobs[fold.fit_id].feature_parents),
+                    artifact_sha=feature_sha)
                 phase = _assemble_staged_fold(
                     run_dir=run_dir, env=env, runner_sha=runner_sha,
                     feature_path=feature_path, feature_sha=feature_sha, inputs=inputs,
@@ -1476,6 +1510,16 @@ def _status(run_id: str) -> dict:
         stages[artifact.name] = seal["sha256"]
         stage_seals[artifact.name] = seal
     feature_materialization = manifest.get("feature_materialization", {})
+    feature_names = [name for name in stages
+                     if name.startswith("features_") and name.endswith(".jsonl.gz")]
+    if feature_names:
+        base_feature_parents = {
+            "environment": manifest["plan"]["environment_sha256"],
+            "runner": manifest["runner_sha256"], "source": SOURCE_SHA256,
+            "registry": manifest["plan"]["registry_sha256"],
+            "spec": manifest["plan"]["spec_sha256"],
+            "origin_range": digest((iso(D0), iso(FEATURE_STOP))),
+        }
     if feature_materialization.get("feature_materialization_mode") == "REUSED_AUTHENTICATED":
         feature_name = f"features_{PRODUCER_FEATURE_SHA256}.jsonl.gz"
         expected_reuse = {
@@ -1492,21 +1536,19 @@ def _status(run_id: str) -> dict:
                 feature_materialization.get("producer_artifact_path") is not None or
                 stages.get(feature_name) != PRODUCER_FEATURE_SHA256):
             raise DevelopmentInputError("reused feature provenance mismatch")
-        expected_parents = {
-            "environment": manifest["plan"]["environment_sha256"],
-            "runner": manifest["runner_sha256"], "source": SOURCE_SHA256,
-            "registry": manifest["plan"]["registry_sha256"],
-            "spec": manifest["plan"]["spec_sha256"],
-            "origin_range": digest((iso(D0), iso(FEATURE_STOP))),
-            "materialization_mode": "REUSED_AUTHENTICATED",
-            "producer_run_manifest": PRODUCER_RUN_MANIFEST_SHA256,
-            "producer_feature_seal": PRODUCER_FEATURE_SEAL_SHA256,
-            "producer_feature_artifact": PRODUCER_FEATURE_SHA256,
-            "feature_contract": feature_materialization.get(
-                "current_feature_contract_identity"),
-        }
-        if stage_seals[feature_name].get("parents") != expected_parents:
-            raise DevelopmentInputError("reused feature seal provenance mismatch")
+        _feature_seal_parents(
+            run_dir / feature_name,
+            expected=_expected_feature_parents(base_feature_parents, feature_materialization),
+            artifact_sha=PRODUCER_FEATURE_SHA256)
+    elif feature_materialization.get("feature_materialization_mode") == "GENERATED_CURRENT":
+        if len(feature_names) > 1:
+            raise DevelopmentInputError("multiple feature materializations")
+        if feature_names:
+            _feature_seal_parents(run_dir / feature_names[0],
+                                  expected=_expected_feature_parents(base_feature_parents, None),
+                                  artifact_sha=stages[feature_names[0]])
+    elif feature_names:
+        raise DevelopmentInputError("unknown feature materialization mode")
     registrations = {}
     for horizon in (60, 120):
         name = f"E{horizon}_pre_run_ledger.json"
@@ -1543,7 +1585,6 @@ def _status(run_id: str) -> dict:
                     raise DevelopmentInputError("stage pre-run registration parent mismatch")
         registrations[str(horizon)] = entry_sha
     comparator_stages = {}
-    feature_names = [name for name in stages if name.startswith("features_") and name.endswith(".jsonl.gz")]
     for directory in sorted(run_dir.glob("E*_F*.comparator.stage")):
         match = re.fullmatch(r"E(60|120)_(F[1-5])\.comparator\.stage", directory.name)
         if match is None or len(feature_names) != 1:
