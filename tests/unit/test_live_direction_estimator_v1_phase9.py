@@ -220,6 +220,87 @@ def test_optimized_comparator_artifact_and_scores_are_exact_reference():
         tuple(row.prediction.calibrated.predicted_class for row in reference_scores)
 
 
+def test_comparator_batch_verifies_once_and_preserves_exact_public_output(monkeypatch):
+    primary, base, calibration, score, bm, cm, sm = _population()
+    artifact = fit_comparator(primary=primary, base_manifest=bm,
+                              calibration_manifest=cm, base_rows=base,
+                              calibration_rows=calibration)
+    primary_scores = score_bundle(primary, scored_manifest=sm, scored_rows=score)
+    matched = matched_primary_rows(primary=primary, scored_manifest=sm,
+                                   scored_rows=score, primary_scored_rows=primary_scores)
+    from triggertrade.live_direction_estimator_v1.preprocessing import transform
+    from triggertrade.live_direction_estimator_v1.comparator import ComparatorScoredRow
+    reference = tuple(ComparatorScoredRow(member.prediction_origin, row.physical_symbol,
+                      artifact.horizon_minutes, sm.manifest_sha256,
+                      artifact.predict(transform(row.feature_row, primary.preprocessing).values))
+                      for row, member in matched)
+    assert len(reference) > 1 and len({row.physical_symbol for row in reference}) > 1
+    calls = 0
+    original_verify = ComparatorArtifact.verify
+
+    def counted_verify(self):
+        nonlocal calls
+        calls += 1
+        return original_verify(self)
+
+    monkeypatch.setattr(ComparatorArtifact, "verify", counted_verify)
+    result = score_comparator(artifact, primary=primary, scored_manifest=sm,
+                              scored_rows=score, primary_scored_rows=primary_scores)
+    assert calls == 1
+    assert result == reference
+    assert tuple(asdict(row) for row in result) == tuple(asdict(row) for row in reference)
+    serialized = canonical_json([asdict(row) for row in result])
+    assert serialized == canonical_json([asdict(row) for row in reference])
+    assert digest([asdict(row) for row in result]) == digest([asdict(row) for row in reference])
+    assert tuple((row.prediction_origin, row.physical_symbol) for row in result) == \
+        tuple(member.key for _, member in matched)
+    assert all(row.primary_score_manifest_sha256 == sm.manifest_sha256 and
+               row.prediction.comparator_sha256 == artifact.artifact_sha256 for row in result)
+    for row in score[:2]:
+        artifact.predict(transform(row.feature_row, primary.preprocessing).values)
+    assert calls == 3  # Two independent public calls each verify again.
+
+
+def test_comparator_batch_and_public_prediction_fail_closed(monkeypatch):
+    primary, base, calibration, score, bm, cm, sm = _population()
+    artifact = fit_comparator(primary=primary, base_manifest=bm,
+                              calibration_manifest=cm, base_rows=base,
+                              calibration_rows=calibration)
+    primary_scores = score_bundle(primary, scored_manifest=sm, scored_rows=score)
+    from triggertrade.live_direction_estimator_v1.preprocessing import transform
+    values = transform(score[0].feature_row, primary.preprocessing).values
+    invalid = replace(artifact, artifact_sha256="0" * 64)
+    with pytest.raises(ValueError, match="comparator artifact identity"):
+        invalid.predict(values)
+    visited = []
+    original_predict_verified = ComparatorArtifact._predict_verified
+
+    def counted_predict(self, state):
+        visited.append(state)
+        return original_predict_verified(self, state)
+
+    monkeypatch.setattr(ComparatorArtifact, "_predict_verified", counted_predict)
+    with pytest.raises(ValueError, match="comparator artifact identity"):
+        score_comparator(invalid, primary=primary, scored_manifest=sm,
+                         scored_rows=score, primary_scored_rows=primary_scores)
+    assert visited == []
+    with pytest.raises(ValueError, match="35 finite"):
+        artifact.predict(values[:-1])
+    with pytest.raises(ValueError, match="35 finite"):
+        artifact.predict((float("nan"),) + values[1:])
+    with pytest.raises(ValueError, match="invalid raw feature row"):
+        transform(replace(score[0].feature_row, physical_symbol="INVALID"), primary.preprocessing)
+    with pytest.raises(ValueError):
+        replace(score[0], feature_row=replace(score[0].feature_row, physical_symbol="INVALID"))
+    with pytest.raises(ValueError):
+        replace(score[0], feature_row=replace(
+            score[0].feature_row, values=score[0].feature_row.values[:-1]))
+    with pytest.raises(ValueError, match="matched primary SCORE"):
+        score_comparator(replace(artifact, primary_bundle_sha256="0" * 64),
+                         primary=primary, scored_manifest=sm, scored_rows=score,
+                         primary_scored_rows=primary_scores)
+
+
 def test_comparator_exact_primary_population_preprocessing_own_calibration_determinism():
     primary, base, calibration, score, bm, cm, sm = _population()
     before = primary.manifest.to_json(), primary.preprocessing.to_dict(), primary.calibrator.to_json()

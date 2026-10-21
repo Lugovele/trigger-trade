@@ -266,6 +266,10 @@ class ComparatorArtifact:
 
     def predict(self, values: Iterable[float]) -> ComparatorPrediction:
         self.verify()
+        return self._predict_verified(values)
+
+    def _predict_verified(self, values: Iterable[float]) -> ComparatorPrediction:
+        """Predict within a batch whose artifact was already verified."""
         state = tuple(float(v) for v in values)
         if len(state) != FEATURE_COUNT or not all(isfinite(v) for v in state):
             raise ValueError("35 finite primary-processed columns required")
@@ -362,5 +366,5 @@ def score_comparator(artifact: ComparatorArtifact, *, primary: FitBundle,
         scored_rows=scored_rows, primary_scored_rows=primary_scored_rows)
     return tuple(ComparatorScoredRow(member.prediction_origin, row.physical_symbol,
         artifact.horizon_minutes, scored_manifest.manifest_sha256,
-        artifact.predict(transform(row.feature_row, primary.preprocessing).values))
+        artifact._predict_verified(transform(row.feature_row, primary.preprocessing).values))
         for row, member in matched)
