@@ -10,6 +10,7 @@ import argparse
 import ast
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from contextlib import ExitStack, contextmanager
+from functools import lru_cache
 import csv
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import UTC, datetime, timedelta
@@ -21,6 +22,7 @@ import re
 import stat
 import sys
 import tempfile
+import threading
 from collections import deque
 import os
 from uuid import uuid4
@@ -103,10 +105,524 @@ FEATURE_RUNNER_FUNCTIONS = (
 COMPARATOR_WORKERS_DEFAULT = 1
 COMPARATOR_WORKERS_MAX = 4
 _FOLD_RUNTIME_WEIGHT = {"F1": 56, "F2": 94, "F3": 134, "F4": 173, "F5": 213}
+_ACTIVE_PROGRESS: dict | None = None
+_PROGRESS_LOCK = threading.Lock()
+PRIMARY_CODE_FILES = (
+    "src/triggertrade/live_direction_estimator_v1/__init__.py",
+    "src/triggertrade/live_direction_estimator_v1/calendar.py",
+    "src/triggertrade/live_direction_estimator_v1/manifests.py",
+    "src/triggertrade/live_direction_estimator_v1/orchestration.py",
+    "src/triggertrade/live_direction_estimator_v1/preprocessing.py",
+    "src/triggertrade/live_direction_estimator_v1/model.py",
+    "src/triggertrade/live_direction_estimator_v1/calibration.py",
+    "src/triggertrade/live_direction_estimator_v1/baselines.py",
+    "src/triggertrade/live_direction_estimator_v1/artifact_contract.py",
+    "src/triggertrade/live_direction_estimator_v1/registry_identity.py",
+    "src/triggertrade/live_direction_estimator_v1/development_readiness.py",
+    "src/triggertrade/live_direction_estimator_v1/source.py",
+    "src/triggertrade/live_direction_estimator_v1/features.py",
+    "src/triggertrade/live_direction_estimator_v1/historical_source.py",
+)
+PRIMARY_RUNNER_FUNCTIONS = ("_wire", "_read_features", "_fold_rows")
+LEGACY_PRE_LEDGER_COMPARATOR_SEALS = {
+    (120, "F1"): "9c7522eb287f90384bb237a1083283d43f0cafad60ea41ab05e55ccb7e7305d8",
+    (120, "F2"): "48526e16307de2e993d6735cd801f3bdeb1d8f8e846c81438ebeb282aef077cf",
+    (120, "F3"): "fec7132e3a2a4950da363c197b1c62337d4695d8cfc6137e330fe0ffe9536807",
+    (120, "F4"): "6c17244e3fe14abffb6f0a2e63cae2183276a203841b5ea8921603398432b61a",
+    (120, "F5"): "bf97e3636f33a95a0de6f12135538ba743a832a0a07eb6940d55ae9f223a3182",
+}
+LEGACY_PRIMARY_SEALS = {
+    (60, "F1"): "ecf8ae7fb5485b8705a491bd87b6e4d6008a4636de5390e946a8cc6a2a44e349",
+    (60, "F2"): "d04ec2c28245c063e28c64328d20f270b336d8b80b5f190e95f3595ab218f3a0",
+    (60, "F3"): "6377f3e71ce8237c6009426118d5b1ec7decc4b4440a054aad6810dd0c9120c1",
+    (60, "F4"): "5c11c703c27832961c17625820b52db85051c5fc9b55b9019255abaf515d8b58",
+    (60, "F5"): "19030f997031744ce0828f983b4984d24001e8a76560caa89af38622cdb71764",
+    (120, "F1"): "fc6bf92cb210727fee391e85f680322e9c218099f66a1bc320c9bb10a0f19a96",
+    (120, "F2"): "91606e16b772a2641b4cc03d6690b1f4e5d528e147c3d2acfa2c62170210dcb1",
+    (120, "F3"): "023eb87c032e68f301541c9ba5f5c2d2805a21de3c64538d5a212f5b45a58ff3",
+    (120, "F4"): "02db574956ac761a12a3d62bded471fd734f017c0396658fa92ee9fd770e545a",
+    (120, "F5"): "1e40e0d6c14866f2d1ed08b822327f46945bf8b45caa0e782eacd9459b48d42c",
+}
+LEGACY_E60_COMPARATOR_SEALS = {
+    (60, "F1"): "36ab65f5da78c9f60bcfa8e3edebf4b2ad2e3ec3df1436eacc2d71cdfbddcdd9",
+    (60, "F2"): "33b5cabe6773dcb57c6bb1be08fc2a28205f9fc06107100c0bde91e28e9a3bfe",
+    (60, "F3"): "d9fa3e48a4897cafbb92bebe62a7c0a46b4c9fd58f7598b408a483e8f7dfd7aa",
+    (60, "F4"): "5aa6a55bb94d3ff9bed959f4f8dc7aed7c5fbeabb911a9d14ab2337cfca73174",
+    (60, "F5"): "17e27336d1a9f6902eeaf7879b7c4de55bd8d1484f9138db64c63015718bcedd",
+}
+COMPARATOR_TRAINING_FUNCTIONS = (
+    "min_leaf_rows", "sample_features", "split_cut", "_counts", "gini",
+    "gini_gain", "pooled_prior", "leaf_probabilities", "_best_split",
+    "_grow", "_leaf", "fit_comparator",
+)
+
+
+def _selected_ast(source: bytes, functions: tuple[str, ...]) -> str:
+    module = ast.parse(source.decode("utf-8"))
+    found = {node.name: node for node in module.body if isinstance(node, ast.FunctionDef)}
+    if set(functions) - found.keys():
+        raise DevelopmentInputError("stage compatibility function missing")
+    return digest(tuple(ast.dump(found[name], include_attributes=False) for name in functions))
+
+
+def _primary_generation_ast(source: bytes) -> str:
+    module = ast.parse(source.decode())
+    function = next((node for node in module.body if isinstance(node, ast.FunctionDef) and
+                     node.name == "_prepare_primary_stage"), None)
+    if function is None:
+        raise DevelopmentInputError("primary generation path missing")
+    start = next((index for index, node in enumerate(function.body) if
+                  isinstance(node, ast.Expr) and isinstance(node.value, ast.Call) and
+                  isinstance(node.value.func, ast.Name) and node.value.func.id == "_log" and
+                  any(isinstance(arg, ast.Constant) and arg.value == "primary manifest rows start"
+                      for arg in node.value.args)), None)
+    end = next((index for index, node in enumerate(function.body) if
+                isinstance(node, ast.Assign) and isinstance(node.value, ast.Call) and
+                isinstance(node.value.func, ast.Name) and node.value.func.id == "_sealed_write"), None)
+    if start is None or end is None or end <= start:
+        raise DevelopmentInputError("primary serialization contract missing")
+    return digest(tuple(ast.dump(node, include_attributes=False)
+                        for node in function.body[start:end + 1]))
+
+
+def _primary_generation_code(revision: str) -> str:
+    return _primary_generation_ast(_git_bytes(revision,
+        "tools/lde_v1/run_development_study.py"))
+
+
+def _verify_stage_worktree(revision: str) -> None:
+    import subprocess
+    paths = (*PRIMARY_CODE_FILES,
+             "src/triggertrade/live_direction_estimator_v1/comparator.py",
+             "src/triggertrade/live_direction_estimator_v1/evaluation_bootstrap.py",
+             "requirements-lde-v1.lock")
+    for relative in paths:
+        path = REPO / relative
+        _reject_reparse_components(path)
+        if not path.is_file():
+            raise DevelopmentInputError(f"stage code missing: {relative}")
+        attributes = subprocess.run(
+            ["git", "check-attr", "-z", "filter", "--", relative],
+            cwd=REPO, capture_output=True, check=True).stdout.split(b"\0")
+        if len(attributes) != 4 or attributes[1:3] != [b"filter", b"unspecified"]:
+            raise DevelopmentInputError(f"stage code has an unsupported Git filter: {relative}")
+        working = path.read_bytes()
+        if working.replace(b"\r\n", b"\n") != _git_bytes(revision, relative):
+            raise DevelopmentInputError(f"stage code differs from committed revision: {relative}")
+    relative = "tools/lde_v1/run_development_study.py"
+    committed, working = _git_bytes(revision, relative), (REPO / relative).read_bytes()
+    if (_selected_ast(committed, PRIMARY_RUNNER_FUNCTIONS) !=
+            _selected_ast(working, PRIMARY_RUNNER_FUNCTIONS) or
+            _primary_generation_ast(committed) != _primary_generation_ast(working)):
+        raise DevelopmentInputError("primary runner computation differs from committed revision")
+
+
+def _comparator_scoring_code(revision: str) -> str:
+    """Normalize the verified-batch optimization, retaining score semantics."""
+    module = ast.parse(_git_bytes(revision,
+        "src/triggertrade/live_direction_estimator_v1/comparator.py").decode())
+    scoring = next(node for node in module.body if isinstance(node, ast.FunctionDef) and
+                   node.name == "score_comparator")
+    artifact = next(node for node in module.body if isinstance(node, ast.ClassDef) and
+                    node.name == "ComparatorArtifact")
+    methods = {node.name: node for node in artifact.body if isinstance(node, ast.FunctionDef)}
+    prediction = methods.get("_predict_verified", methods["predict"])
+    prediction_body = prediction.body[:]
+    if prediction.name == "predict":
+        if not (isinstance(prediction_body[0], ast.Expr) and
+                isinstance(prediction_body[0].value, ast.Call) and
+                isinstance(prediction_body[0].value.func, ast.Attribute) and
+                prediction_body[0].value.func.attr == "verify"):
+            raise DevelopmentInputError("old comparator prediction verification changed")
+        prediction_body = prediction_body[1:]
+    if (prediction_body and isinstance(prediction_body[0], ast.Expr) and
+            isinstance(prediction_body[0].value, ast.Constant) and
+            isinstance(prediction_body[0].value.value, str)):
+        prediction_body = prediction_body[1:]
+    score_dump = ast.dump(scoring, include_attributes=False).replace(
+        "attr='_predict_verified'", "attr='predict'")
+    return digest((score_dump, tuple(ast.dump(node, include_attributes=False)
+                                    for node in prediction_body)))
+
+
+def _comparator_training_code(revision: str) -> str:
+    """Hash fitting code and frozen constants, excluding public/batch score methods."""
+    path = "src/triggertrade/live_direction_estimator_v1/comparator.py"
+    module = ast.parse(_git_bytes(revision, path).decode("utf-8"))
+    names = {"COMPARATOR_ID", "TREES", "MAX_DEPTH", "NODE_FEATURES",
+             "FEATURE_COUNT", "PRIOR_CONCENTRATION", "SEED_BASE", "REGISTRY_DESCRIPTOR"}
+    parts = []
+    for node in module.body:
+        if isinstance(node, ast.Assign) and any(
+                isinstance(target, ast.Name) and target.id in names for target in node.targets):
+            parts.append(ast.dump(node, include_attributes=False))
+        elif isinstance(node, ast.FunctionDef) and node.name in COMPARATOR_TRAINING_FUNCTIONS:
+            parts.append(ast.dump(node, include_attributes=False))
+        elif isinstance(node, ast.ClassDef) and node.name in {"TreeNode", "ComparatorArtifact"}:
+            selected = ([*node.body] if node.name == "TreeNode" else
+                        [child for child in node.body if not isinstance(child, ast.FunctionDef) or
+                         child.name in {"body", "to_json", "from_json", "verify", "to_dict"}])
+            parts.append(ast.dump(ast.ClassDef(node.name, node.bases, node.keywords,
+                                               selected, node.decorator_list),
+                                  include_attributes=False))
+    if len(parts) < len(COMPARATOR_TRAINING_FUNCTIONS) + 2:
+        raise DevelopmentInputError("comparator training contract incomplete")
+    return digest(tuple(parts))
+
+
+def _comparator_rng_code(revision: str) -> str:
+    source = _git_bytes(revision,
+        "src/triggertrade/live_direction_estimator_v1/evaluation_bootstrap.py")
+    module = ast.parse(source.decode("utf-8"))
+    uint64 = [node for node in module.body if isinstance(node, ast.Assign) and
+              any(isinstance(target, ast.Name) and target.id == "UINT64"
+                  for target in node.targets)]
+    if len(uint64) != 1:
+        raise DevelopmentInputError("RandInt bound contract missing")
+    return digest((ast.dump(uint64[0], include_attributes=False),
+                   _selected_ast(source, ("randint_raw",))))
+
+
+def _stage_compatibility(*, kind: str, revision: str, feature_sha: str,
+                         label_sha: str, horizon: int, fold,
+                         primary_sha: str | None = None,
+                         membership: tuple[str, str, str] | None = None) -> str:
+    """Derive the same contract from historical Git objects and the current commit."""
+    code = tuple((path, sha256(_git_bytes(revision, path)).hexdigest())
+                 for path in PRIMARY_CODE_FILES)
+    runner = _selected_ast(_git_bytes(revision, "tools/lde_v1/run_development_study.py"),
+                           PRIMARY_RUNNER_FUNCTIONS)
+    identity = {"contract_version": 1, "kind": kind, "spec": _file_sha256(SPEC),
+                "registry": FEATURE_REGISTRY, "features": feature_sha,
+                "label": label_sha, "source": SOURCE_SHA256, "release": RELEASE_SHA256,
+                "horizon": horizon, "fold": fold.fit_id,
+                "base": fold.base.inequality, "calibration": fold.calibration.inequality,
+                "score": fold.score.inequality,
+                "membership_manifests": membership,
+                "dependency_lock": sha256(_git_bytes(revision, "requirements-lde-v1.lock")).hexdigest(),
+                "primary_code": code, "primary_runner": runner,
+                "primary_generation": _primary_generation_code(revision)}
+    if kind == "COMPARATOR_STAGE":
+        identity.update({"primary_parent": primary_sha,
+                         "training_code": _comparator_training_code(revision),
+                         "rng_code": _comparator_rng_code(revision),
+                         "comparator_config": (256, 4, 5, 20261017, "PCG64.random_raw"),
+                         "calibration_code": code})
+    elif kind != "PRIMARY_FOLD":
+        raise DevelopmentInputError("unknown reusable stage")
+    return digest(identity)
+
+
+def _producer_stage(*, run_id: str, kind: str, horizon: int, fold,
+                    feature_sha: str, label_sha: str, current_revision: str,
+                    primary_sha: str | None = None,
+                    primary_bundle_sha: str | None = None, ledger_entries=None,
+                    feature_verified: bool = False) -> dict:
+    """Authenticate a completed historical stage without changing its run."""
+    if not RUN_ID.fullmatch(run_id):
+        raise DevelopmentInputError("invalid producer run ID")
+    run_dir = RUN_ROOT / run_id
+    _guard_run_dir(run_dir)
+    manifest_path = run_dir / "run_manifest.json"
+    _reject_reparse_components(manifest_path)
+    manifest = _read_json(manifest_path)
+    plan = manifest["plan"]
+    revision = plan["source_revision"]
+    if (not re.fullmatch(r"[0-9a-f]{40}", revision) or
+            not run_id.endswith("_" + revision[:8])):
+        raise DevelopmentInputError("producer revision/run ID mismatch")
+    runner_sha = sha256(_git_bytes(revision, "tools/lde_v1/run_development_study.py")).hexdigest()
+    if (manifest.get("run_id") != run_id or manifest.get("runner_sha256") != runner_sha or
+            manifest.get("label_members", {}).get(str(horizon)) != label_sha or
+            manifest.get("historical_source_manifest_sha256") != SOURCE_SHA256 or
+            manifest.get("canonical_release_manifest_sha256") != RELEASE_SHA256 or
+            plan.get("spec_sha256") != _file_sha256(SPEC) or
+            plan.get("feature_registry") != FEATURE_REGISTRY):
+        raise DevelopmentInputError("producer run identity mismatch")
+    feature_path = run_dir / f"features_{feature_sha}.jsonl.gz"
+    feature_seal = feature_path.with_name(feature_path.name + ".seal.json")
+    for path in (feature_path, feature_seal):
+        _reject_reparse_components(path)
+    if (not feature_path.is_file() or not feature_seal.is_file() or
+            (not feature_verified and _file_sha256(feature_path) != feature_sha) or
+            _read_json(feature_seal).get("sha256") != feature_sha):
+        raise DevelopmentInputError("producer feature parent mismatch")
+    feature_base = {"environment": plan["environment_sha256"], "runner": runner_sha,
+                    "source": SOURCE_SHA256, "registry": plan["registry_sha256"],
+                    "spec": plan["spec_sha256"],
+                    "origin_range": digest((iso(D0), iso(FEATURE_STOP)))}
+    feature_mode = manifest.get("feature_materialization", {})
+    mode = feature_mode.get("feature_materialization_mode")
+    if mode not in {"REUSED_AUTHENTICATED", "GENERATED_CURRENT"}:
+        raise DevelopmentInputError("producer feature provenance is unsupported")
+    if _read_json(feature_seal).get("parents") != _expected_feature_parents(
+            feature_base, feature_mode if mode == "REUSED_AUTHENTICATED" else None):
+        raise DevelopmentInputError("producer feature seal parents mismatch")
+    registration = run_dir / f"E{horizon}_pre_run_ledger.json"
+    _reject_reparse_components(registration)
+    reference = _read_json(registration)
+    reference_sha = _file_sha256(registration)
+    if (reference.get("run_id") != run_id or reference.get("horizon") != horizon or
+            reference.get("source_revision") != revision or
+            reference.get("environment_sha256") != plan["environment_sha256"] or
+            _sealed_read(registration, parents={
+                "run_manifest": _file_sha256(manifest_path), "runner": runner_sha,
+                "permanent_ledger_entry": reference["entry_sha256"]}) is None):
+        raise DevelopmentInputError("producer registration mismatch")
+    entries = ledger_entries if ledger_entries is not None else ExperimentLedger(LEDGER_ROOT).read_all()
+    if not any(e.entry_sha256 == reference["entry_sha256"] and
+               e.action == "DEVELOPMENT_PREFLIGHT_REGISTERED" and
+               e.horizon_minutes == horizon and e.code_revision_or_hash == revision
+               for e in entries):
+        raise DevelopmentInputError("producer registration ledger evidence missing")
+    base = {"environment": plan["environment_sha256"], "runner": runner_sha,
+            "features": feature_sha, "canonical_label": label_sha,
+            "source": SOURCE_SHA256, "release": RELEASE_SHA256,
+            "fit": digest((fold.fit_id, horizon)), "pre_run_registration": reference_sha}
+    if kind == "PRIMARY_FOLD":
+        path = _primary_path(run_dir, horizon, fold.fit_id)
+        parents = _primary_parents(base)
+        ledger_stage = f"{fold.fit_id}_PRIMARY"
+        artifact = path
+        seal_path = path.with_name(path.name + ".seal.json")
+    elif kind == "COMPARATOR_STAGE":
+        if primary_sha is None:
+            raise DevelopmentInputError("comparator requires exact primary parent SHA")
+        path = _comparator_stage_dir(run_dir, horizon, fold.fit_id)
+        parents = {**base, "stage": "REPORT_ONLY_COMPARATOR", "primary_stage": primary_sha}
+        ledger_stage = f"{fold.fit_id}_COMPARATOR"
+        artifact = path / "artifact.json.gz"
+        seal_path = path / "seal.json"
+    else:
+        raise DevelopmentInputError("unknown reusable stage")
+    for candidate in (path, artifact, seal_path):
+        _reject_reparse_components(candidate)
+    if (not artifact.is_file() or not seal_path.is_file() or artifact.is_symlink() or
+            seal_path.is_symlink()):
+        raise DevelopmentInputError("producer stage incomplete")
+    seal = _read_json(seal_path)
+    artifact_sha = _file_sha256(artifact)
+    seal_sha = _file_sha256(seal_path)
+    try:
+        completed = datetime.fromisoformat(str(seal["completed_at"]).replace("Z", "+00:00"))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise DevelopmentInputError("producer stage completion time malformed") from exc
+    if completed.utcoffset() != timedelta(0):
+        raise DevelopmentInputError("producer stage completion time is not UTC")
+    if (seal.get("artifact") != artifact.name or seal.get("parents") != parents or
+            seal.get("sha256") != artifact_sha or
+            (kind == "COMPARATOR_STAGE" and seal.get("job_key") != [horizon, fold.fit_id])):
+        raise DevelopmentInputError("producer stage seal or parent mismatch")
+    output = json.loads(gzip.decompress(artifact.read_bytes()))
+    if (output.get("horizon") != horizon or output.get("fit_id") != fold.fit_id or
+            output.get("parents") != (base if kind == "PRIMARY_FOLD" else parents)):
+        raise DevelopmentInputError("producer payload parent mismatch")
+    if kind == "COMPARATOR_STAGE" and seal["completed_at"] != output.get("completed_at"):
+        raise DevelopmentInputError("comparator completion seal/payload mismatch")
+    if kind == "PRIMARY_FOLD":
+        bundle = _restore_bundle(output)
+        if (bundle.manifest.base_manifest_sha256 != output["manifests"]["BASE"]["manifest_sha256"] or
+                bundle.manifest.calibration_manifest_sha256 !=
+                output["manifests"]["CALIBRATION"]["manifest_sha256"]):
+            raise DevelopmentInputError("producer primary membership mismatch")
+    else:
+        if primary_bundle_sha is None or output.get("primary_bundle_sha256") != primary_bundle_sha:
+            raise DevelopmentInputError("comparator selected primary bundle mismatch")
+        if output.get("comparator") is None or output.get("fit_error") is not None:
+            raise DevelopmentInputError("producer comparator training incomplete")
+        comparator = ComparatorArtifact.from_json(canonical_json(output["comparator"]))
+        if comparator.primary_bundle_sha256 != primary_bundle_sha:
+            raise DevelopmentInputError("producer comparator bundle mismatch")
+    expected_pairs = [("stage_artifact", artifact_sha),
+                      ("environment", plan["environment_sha256"])]
+    expected_manifests = tuple(sorted(
+        (name, digest((value, horizon, ledger_stage)) if name == "stage" else value)
+        for name, value in parents.items()))
+    matching = [e for e in entries if e.action == "DEVELOPMENT_STAGE_COMPLETE" and
+                e.fit_or_cohort_id == f"{run_id}:{ledger_stage}" and
+                e.horizon_minutes == horizon]
+    # The legacy ledger binds artifact bytes but not its seal. The preferred
+    # stopped run is independently anchored by these retained seal hashes.
+    pinned = None
+    if run_id == "20261019T151610975545Z_8d702cc6":
+        key = (horizon, fold.fit_id)
+        pinned = (LEGACY_PRIMARY_SEALS.get(key) if kind == "PRIMARY_FOLD" else
+                  LEGACY_E60_COMPARATOR_SEALS.get(key) or
+                  LEGACY_PRE_LEDGER_COMPARATOR_SEALS.get(key))
+    if not matching and not (
+            kind == "COMPARATOR_STAGE" and
+            run_id == "20261019T151610975545Z_8d702cc6" and
+            (horizon, fold.fit_id) in LEGACY_PRE_LEDGER_COMPARATOR_SEALS):
+        raise DevelopmentInputError("producer stage ledger evidence missing")
+    if matching and dict(matching[0].artifact_hashes).get("stage_seal") is not None:
+        expected_pairs.append(("stage_seal", seal_sha))
+    elif pinned != seal_sha:
+        raise DevelopmentInputError("producer stage seal has no trusted hash anchor")
+    expected_artifacts = tuple(sorted(expected_pairs))
+    if matching and (len(matching) != 1 or
+                     matching[0].artifact_hashes != expected_artifacts or
+                     matching[0].manifest_hashes != expected_manifests or
+                     matching[0].code_revision_or_hash != revision):
+        raise DevelopmentInputError("producer stage ledger evidence mismatched")
+    producer_contract = _stage_compatibility(
+        kind=kind, revision=revision, feature_sha=feature_sha, label_sha=label_sha,
+        horizon=horizon, fold=fold, primary_sha=primary_sha,
+        membership=(tuple(output["manifests"][name]["manifest_sha256"]
+                          for name in ("BASE", "CALIBRATION", "SCORE"))
+                    if kind == "PRIMARY_FOLD" else None))
+    current_contract = _stage_compatibility(
+        kind=kind, revision=current_revision, feature_sha=feature_sha, label_sha=label_sha,
+        horizon=horizon, fold=fold, primary_sha=primary_sha,
+        membership=(tuple(output["manifests"][name]["manifest_sha256"]
+                          for name in ("BASE", "CALIBRATION", "SCORE"))
+                    if kind == "PRIMARY_FOLD" else None))
+    if producer_contract != current_contract:
+        raise DevelopmentInputError("stage compatibility identity mismatch")
+    if (kind == "COMPARATOR_STAGE" and
+            _comparator_scoring_code(revision) != _comparator_scoring_code(current_revision)):
+        raise DevelopmentInputError("stored comparator scores are incompatible")
+    return {"kind": kind, "horizon": horizon, "fit_id": fold.fit_id,
+            "producer_run_id": run_id, "producer_source_revision": revision,
+            "producer_artifact_sha256": artifact_sha,
+            "producer_seal_sha256": seal_sha,
+            "producer_ledger_evidence": ("VERIFIED" if matching else
+                                         "LEGACY_SEALED_PRE_LEDGER"),
+            "producer_stage_identity": digest((kind, horizon, fold.fit_id, artifact_sha)),
+            "compatibility_identity": current_contract,
+            "score_compatibility_identity": (_comparator_scoring_code(current_revision)
+                                             if kind == "COMPARATOR_STAGE" else None),
+            "producer_payload_parents": output["parents"],
+            "primary_bundle_sha256": (bundle.manifest.bundle_sha256
+                                      if kind == "PRIMARY_FOLD" else primary_bundle_sha),
+            "producer_artifact_path": str(artifact),
+            "producer_seal_path": str(seal_path)}
+
+
+def _import_stage(evidence: dict, destination: Path, parents: dict[str, str],
+                  *, comparator: bool = False) -> str:
+    source = Path(evidence["producer_artifact_path"])
+    source_seal = Path(evidence["producer_seal_path"])
+    for path in (source, source_seal, destination):
+        _reject_reparse_components(path)
+    if (_file_sha256(source) != evidence["producer_artifact_sha256"] or
+            _file_sha256(source_seal) != evidence["producer_seal_sha256"]):
+        raise DevelopmentInputError("producer evidence changed before import")
+    provenance = {key: value for key, value in evidence.items()
+                  if key not in {"producer_artifact_path", "producer_seal_path"}}
+    sealed_parents = {**parents, "import_provenance": digest(provenance)}
+    artifact = destination / "artifact.json.gz" if comparator else destination
+    seal_path = destination / "seal.json" if comparator else destination.with_name(
+        destination.name + ".seal.json")
+    if destination.exists() or destination.is_symlink() or seal_path.exists():
+        if (destination.is_symlink() or not artifact.is_file() or not seal_path.is_file() or
+                _file_sha256(artifact) != evidence["producer_artifact_sha256"]):
+            raise DevelopmentInputError("import destination already exists or is incomplete")
+        existing = _read_json(seal_path)
+        if (existing.get("parents") != sealed_parents or existing.get("imported") != provenance or
+                existing.get("sha256") != evidence["producer_artifact_sha256"] or
+                existing.get("artifact") != artifact.name or
+                (comparator and existing.get("job_key") !=
+                 [evidence["horizon"], evidence["fit_id"]])):
+            raise DevelopmentInputError("existing import provenance mismatch")
+        return evidence["producer_artifact_sha256"]
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if comparator:
+        destination.mkdir(exist_ok=False)
+    with tempfile.NamedTemporaryFile(dir=artifact.parent, prefix=".stage-import-incomplete-",
+                                     delete=False) as output:
+        temporary = Path(output.name)
+        copied = sha256()
+        with source.open("rb") as input_stream:
+            while chunk := input_stream.read(1024 * 1024):
+                output.write(chunk)
+                copied.update(chunk)
+        output.flush(); os.fsync(output.fileno())
+    if copied.hexdigest() != evidence["producer_artifact_sha256"]:
+        raise DevelopmentInputError("imported stage copy hash mismatch")
+    temporary.rename(artifact)
+    if _file_sha256(artifact) != copied.hexdigest():
+        raise DevelopmentInputError("imported stage post-copy hash mismatch")
+    seal = {"artifact": artifact.name, "sha256": copied.hexdigest(),
+            "parents": sealed_parents, "imported": provenance,
+            "completed_at": iso(datetime.now(UTC))}
+    if comparator:
+        seal["job_key"] = [evidence["horizon"], evidence["fit_id"]]
+    _write_immutable(seal_path, canonical_json(seal).encode())
+    return copied.hexdigest()
 
 
 def _log(*items: object) -> None:
     print(iso(datetime.now(UTC)), *items, flush=True)
+    if _ACTIVE_PROGRESS is not None:
+        with _PROGRESS_LOCK:
+            _ACTIVE_PROGRESS["current_stage"] = " ".join(map(str, items))
+            _ACTIVE_PROGRESS["last_progress_timestamp"] = iso(datetime.now(UTC))
+            words = [str(item) for item in items]
+            if words and words[0] == "FEATURES":
+                _ACTIVE_PROGRESS.update(phase="FEATURES", phase_key="FEATURES")
+            elif len(words) >= 3 and re.fullmatch(r"E(60|120)", words[0]) and \
+                    re.fullmatch(r"F[1-5]", words[1]):
+                if "primary manifest rows start" in words[2]:
+                    _ACTIVE_PROGRESS.update(phase="PRIMARY", phase_key=f"{words[0]} {words[1]}")
+                elif "shadow fit start" in words[2]:
+                    _ACTIVE_PROGRESS.update(phase="FINAL_FOLD", phase_key=f"{words[0]} {words[1]}")
+            elif len(words) >= 2 and re.fullmatch(r"E(60|120)", words[0]):
+                if "evaluation start" in words[1]:
+                    _ACTIVE_PROGRESS.update(phase="EVALUATION", phase_key=words[0])
+                elif "bootstrap start" in words[1]:
+                    _ACTIVE_PROGRESS.update(phase="BOOTSTRAP", phase_key=words[0])
+                elif "registered bootstrap complete" in words[1]:
+                    _ACTIVE_PROGRESS.update(phase="DOSSIER", phase_key=words[0])
+            _write_progress_locked()
+
+
+def _write_progress_locked() -> None:
+    if _ACTIVE_PROGRESS is None:
+        return
+    _ACTIVE_PROGRESS["heartbeat"] = iso(datetime.now(UTC))
+    path = RUN_ROOT / _ACTIVE_PROGRESS["run_id"] / "progress.json"
+    temporary = path.with_name(".progress-incomplete-" + uuid4().hex)
+    temporary.write_text(canonical_json(_ACTIVE_PROGRESS), encoding="utf-8")
+    os.replace(temporary, path)
+
+
+def _progress_heartbeat() -> None:
+    while _ACTIVE_PROGRESS is not None:
+        with _PROGRESS_LOCK:
+            _write_progress_locked()
+        threading.Event().wait(15)
+
+
+def _record_stage_failure(phase: str, key: str, exc: Exception) -> None:
+    if _ACTIVE_PROGRESS is not None:
+        with _PROGRESS_LOCK:
+            _ACTIVE_PROGRESS.setdefault("stage_failures", {})[f"{phase}:{key}"] = (
+                f"{type(exc).__name__}: {exc}"[:500])
+            _ACTIVE_PROGRESS["last_progress_timestamp"] = iso(datetime.now(UTC))
+            _write_progress_locked()
+
+
+def _progress_is_live(progress: dict) -> bool:
+    try:
+        stamp = datetime.fromisoformat(progress["heartbeat"].replace("Z", "+00:00"))
+        pid = int(progress["runner_pid"])
+        if pid <= 0 or datetime.now(UTC) - stamp > timedelta(seconds=45):
+            return False
+        if os.name == "nt":
+            import ctypes
+            kernel = ctypes.windll.kernel32
+            handle = kernel.OpenProcess(0x1000, False, pid)
+            if not handle:
+                return False
+            try:
+                code = ctypes.c_ulong()
+                return bool(kernel.GetExitCodeProcess(handle, ctypes.byref(code))) and code.value == 259
+            finally:
+                kernel.CloseHandle(handle)
+        os.kill(pid, 0)
+        return True
+    except (KeyError, TypeError, ValueError, OSError):
+        return False
 
 
 def _wire(value):
@@ -237,7 +753,55 @@ def _plan(env) -> dict:
                             "E120_EVALUATION_BOOTSTRAP", "DOSSIER"]}
 
 
-def dry_run(*, reuse_features_from_run: str | None = None) -> dict:
+def _planned_stage_reuse(*, env, feature_sha: str,
+                         primary_run: str | None, comparator_run: str | None) -> dict:
+    if comparator_run is not None and primary_run is None:
+        raise DevelopmentInputError("comparator reuse requires explicit primary reuse")
+    if primary_run is None:
+        return {"primary": {}, "comparators": {}, "first_compute_stage": "E60 F1 PRIMARY"}
+    _verify_stage_worktree(env.source_revision)
+    entries = ExperimentLedger(LEDGER_ROOT).read_all()
+    primary, comparators = {}, {}
+    feature_verified_runs = set()
+    for horizon in (60, 120):
+        label_sha = authenticate_inputs(REPO, horizon_minutes=horizon).label_member_sha256
+        for fold in FOLDS:
+            key = (horizon, fold.fit_id)
+            primary[key] = _producer_stage(
+                run_id=primary_run, kind="PRIMARY_FOLD", horizon=horizon, fold=fold,
+                feature_sha=feature_sha, label_sha=label_sha,
+                current_revision=env.source_revision, ledger_entries=entries,
+                feature_verified=primary_run in feature_verified_runs)
+            feature_verified_runs.add(primary_run)
+            if comparator_run is not None:
+                comparators[key] = _producer_stage(
+                    run_id=comparator_run, kind="COMPARATOR_STAGE", horizon=horizon, fold=fold,
+                    feature_sha=feature_sha, label_sha=label_sha,
+                    primary_sha=primary[key]["producer_artifact_sha256"],
+                    primary_bundle_sha=primary[key]["primary_bundle_sha256"],
+                    current_revision=env.source_revision, ledger_entries=entries,
+                    feature_verified=comparator_run in feature_verified_runs)
+                feature_verified_runs.add(comparator_run)
+    return {"primary": primary, "comparators": comparators,
+            "first_compute_stage": ("E60 F1 SHADOW / FINAL FOLD" if comparator_run else
+                                    "E60 F1 COMPARATOR")}
+
+
+def _public_stage_plan(plan: dict) -> dict:
+    return {"primary": {f"E{h} {fit}": {k: v for k, v in evidence.items()
+                            if k not in {"producer_artifact_path", "producer_seal_path"}}
+                        for (h, fit), evidence in plan["primary"].items()},
+            "comparators": {f"E{h} {fit}": {k: v for k, v in evidence.items()
+                                if k not in {"producer_artifact_path", "producer_seal_path"}}
+                            for (h, fit), evidence in plan["comparators"].items()},
+            "primary_reuse_count": len(plan["primary"]),
+            "comparator_reuse_count": len(plan["comparators"]),
+            "first_compute_stage": plan["first_compute_stage"]}
+
+
+def dry_run(*, reuse_features_from_run: str | None = None,
+            reuse_primary_from_run: str | None = None,
+            reuse_comparators_from_run: str | None = None) -> dict:
     env, _ = _preflight()
     plan = _plan(env)
     reuse = None
@@ -246,10 +810,15 @@ def dry_run(*, reuse_features_from_run: str | None = None) -> dict:
         reuse = _authenticate_feature_reuse(
             producer_run_id=reuse_features_from_run, env=env,
             source_contract=inputs.source_contract)
+    if reuse_primary_from_run is not None and reuse is None:
+        raise DevelopmentInputError("stage reuse requires explicit authenticated feature reuse")
+    stage_plan = _planned_stage_reuse(
+        env=env, feature_sha=PRODUCER_FEATURE_SHA256 if reuse else "",
+        primary_run=reuse_primary_from_run, comparator_run=reuse_comparators_from_run)
     proposed = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ") + "_" + env.source_revision[:8]
     return {"mode": "DRY_RUN", "plan": plan,
             "would_create": str(RUN_ROOT / proposed),
-            "feature_reuse": reuse,
+            "feature_reuse": reuse, "stage_reuse": _public_stage_plan(stage_plan),
             "permanent_ledger_entries": 0, "model_fits": 0}
 
 
@@ -289,6 +858,7 @@ def _committed_runner() -> str:
     return sha256(committed).hexdigest()
 
 
+@lru_cache(maxsize=256)
 def _git_bytes(revision: str, relative: str) -> bytes:
     import subprocess
     result = subprocess.run(["git", "show", f"{revision}:{relative}"], cwd=REPO,
@@ -715,8 +1285,13 @@ def _stage_ledger(*, env, run_id: str, horizon: int, stage: str,
     fit_scope = f"{run_id}:{stage}"
     matching = [e for e in ledger.read_all() if e.action == action and
                 e.horizon_minutes == horizon and e.fit_or_cohort_id == fit_scope]
-    artifact_hashes = tuple(sorted((("stage_artifact", artifact_sha),
-                                     ("environment", env.identity_sha256))))
+    seal_path = _stage_seal_path(run_id, horizon, stage)
+    artifact_pairs = [("stage_artifact", artifact_sha),
+                      ("environment", env.identity_sha256)]
+    if seal_path.is_file():
+        _reject_reparse_components(seal_path)
+        artifact_pairs.append(("stage_seal", _file_sha256(seal_path)))
+    artifact_hashes = tuple(sorted(artifact_pairs))
     # Seal parents may carry a semantic stage label. Keep that seal identity
     # intact, but commit the label as a digest in the ledger's SHA-only field.
     manifest_hashes = tuple(sorted(
@@ -732,6 +1307,42 @@ def _stage_ledger(*, env, run_id: str, horizon: int, stage: str,
                   partition_accessed="F1_F5_DEVELOPMENT", manifest_hashes=manifest_hashes,
                   artifact_hashes=artifact_hashes,
                   code_revision_or_hash=env.source_revision)
+
+
+def _stage_seal_path(run_id: str, horizon: int, stage: str) -> Path:
+    run_dir = RUN_ROOT / run_id
+    if stage.endswith("_PRIMARY"):
+        fit_id = stage.removesuffix("_PRIMARY")
+        path = _primary_path(run_dir, horizon, fit_id)
+        return path.with_name(path.name + ".seal.json")
+    if stage.endswith("_COMPARATOR"):
+        fit_id = stage.removesuffix("_COMPARATOR")
+        return _comparator_stage_dir(run_dir, horizon, fit_id) / "seal.json"
+    name = (f"E{horizon}_development_dossier.json.gz" if stage == "DOSSIER"
+            else f"E{horizon}_{stage}.json.gz")
+    return run_dir / (name + ".seal.json")
+
+
+def _verify_stage_ledger_existing(*, entries, run_id: str, horizon: int,
+                                  stage: str, artifact_sha: str, parents: dict,
+                                  environment_sha: str, revision: str) -> None:
+    seal_path = _stage_seal_path(run_id, horizon, stage)
+    expected_pairs = [("stage_artifact", artifact_sha), ("environment", environment_sha)]
+    if seal_path.is_file():
+        _reject_reparse_components(seal_path)
+        expected_pairs.append(("stage_seal", _file_sha256(seal_path)))
+    expected_artifacts = tuple(sorted(expected_pairs))
+    expected_manifests = tuple(sorted(
+        (name, digest((value, horizon, stage)) if name == "stage" else value)
+        for name, value in parents.items()))
+    matching = [entry for entry in entries if
+                entry.action == "DEVELOPMENT_STAGE_COMPLETE" and
+                entry.horizon_minutes == horizon and
+                entry.fit_or_cohort_id == f"{run_id}:{stage}"]
+    if (len(matching) != 1 or matching[0].artifact_hashes != expected_artifacts or
+            matching[0].manifest_hashes != expected_manifests or
+            matching[0].code_revision_or_hash != revision):
+        raise DevelopmentInputError("current imported stage ledger evidence mismatch")
 
 
 def _fold_stage(*, run_dir: Path, env, runner_sha: str, feature_path: Path,
@@ -833,14 +1444,31 @@ def _primary_parents(parents: dict[str, str]) -> dict[str, str]:
     return {**parents, "stage": "PRIMARY_FOLD"}
 
 
+def _effective_stage_parents(path: Path, base: dict[str, str]) -> tuple[dict[str, str], dict | None]:
+    seal_path = (path / "seal.json" if path.is_dir() else
+                 path.with_name(path.name + ".seal.json"))
+    _reject_reparse_components(seal_path)
+    if not seal_path.is_file():
+        return base, None
+    seal = _read_json(seal_path)
+    imported = seal.get("imported")
+    if imported is None:
+        return base, None
+    if (not isinstance(imported, dict) or
+            seal.get("parents") != {**base, "import_provenance": digest(imported)}):
+        raise DevelopmentInputError("imported stage provenance mismatch")
+    return seal["parents"], imported
+
+
 def _read_primary_stage(path: Path, *, parents: dict[str, str], horizon: int,
                         fit_id: str) -> tuple[dict, FitBundle, tuple[ScoredRow, ...]]:
-    payload = _sealed_read(path, parents=_primary_parents(parents))
+    sealed_parents, imported = _effective_stage_parents(path, _primary_parents(parents))
+    payload = _sealed_read(path, parents=sealed_parents)
     if payload is None:
         raise DevelopmentInputError(f"missing primary stage: E{horizon} {fit_id}")
     output = json.loads(gzip.decompress(payload))
     if (output.get("horizon") != horizon or output.get("fit_id") != fit_id or
-            output.get("parents") != parents):
+            output.get("parents") != (imported["producer_payload_parents"] if imported else parents)):
         raise DevelopmentInputError("primary stage identity mismatch")
     bundle = _restore_bundle(output)
     scores = tuple(_restore_scored(v) for v in output["primary_scores"])
@@ -854,7 +1482,8 @@ def _prepare_primary_stage(*, run_dir: Path, env, runner_sha: str, feature_path:
                             inputs=inputs, fold=fold, horizon=horizon,
                             pre_run_reference_sha=pre_run_reference_sha)
     path = _primary_path(run_dir, horizon, fold.fit_id)
-    if _sealed_read(path, parents=_primary_parents(parents), read_payload=False) is not None:
+    sealed_parents, _ = _effective_stage_parents(path, _primary_parents(parents))
+    if _sealed_read(path, parents=sealed_parents, read_payload=False) is not None:
         _read_primary_stage(path, parents=parents, horizon=horizon, fit_id=fold.fit_id)
         artifact_sha = _file_sha256(path)
         _log(f"E{horizon}", fold.fit_id, "primary reused", artifact_sha)
@@ -979,14 +1608,16 @@ def _read_comparator_stage(directory: Path, *, job: ComparatorJob,
         raise DevelopmentInputError("partial comparator stage")
     seal = _read_json(seal_path)
     artifact_sha = _file_sha256(artifact)
+    sealed_parents, imported = _effective_stage_parents(directory, _comparator_parents(job))
     if (seal.get("job_key") != [job.horizon, job.fit_id] or
             seal.get("artifact") != artifact.name or
-            seal.get("parents") != _comparator_parents(job) or
+            seal.get("parents") != sealed_parents or
             seal.get("sha256") != artifact_sha):
         raise DevelopmentInputError("comparator stage seal mismatch")
     output = json.loads(gzip.decompress(artifact.read_bytes()))
     if (output.get("horizon") != job.horizon or output.get("fit_id") != job.fit_id or
-            output.get("parents") != _comparator_parents(job)):
+            output.get("parents") != (imported["producer_payload_parents"] if imported else
+                                      _comparator_parents(job))):
         raise DevelopmentInputError("comparator stage identity mismatch")
     if output["comparator"] is not None:
         comparator = ComparatorArtifact.from_json(canonical_json(output["comparator"]))
@@ -1141,6 +1772,7 @@ def _schedule_comparator_jobs(jobs: tuple[ComparatorJob, ...], *, workers: int) 
                 results[job.key] = _read_comparator_stage(final, job=job)
             except Exception as exc:
                 failures[job.key] = exc
+                _record_stage_failure("COMPARATOR", f"E{job.horizon} {job.fit_id}", exc)
             else:
                 _log(f"E{job.horizon}", job.fit_id, "comparator reused")
         else:
@@ -1148,20 +1780,44 @@ def _schedule_comparator_jobs(jobs: tuple[ComparatorJob, ...], *, workers: int) 
     ordered = sorted(missing, key=lambda j: (-_FOLD_RUNTIME_WEIGHT[j.fit_id], j.horizon))
     if workers == 1:
         for job in ordered:
+            if _ACTIVE_PROGRESS is not None:
+                with _PROGRESS_LOCK:
+                    _ACTIVE_PROGRESS["running_jobs"] = [f"E{job.horizon} {job.fit_id}"]
+                    _ACTIVE_PROGRESS["worker_pids"] = [os.getpid()]
+                    _write_progress_locked()
             try:
                 results[job.key] = _publish_comparator_stage(
                     Path(_comparator_worker(job)), job=job)
             except Exception as exc:
                 failures[job.key] = exc
+                _record_stage_failure("COMPARATOR", f"E{job.horizon} {job.fit_id}", exc)
+        if _ACTIVE_PROGRESS is not None:
+            with _PROGRESS_LOCK:
+                _ACTIVE_PROGRESS["running_jobs"] = []
+                _ACTIVE_PROGRESS["worker_pids"] = []
+                _write_progress_locked()
     elif ordered:
         with ProcessPoolExecutor(max_workers=workers) as executor:
             futures = {executor.submit(_comparator_worker, job): job for job in ordered}
+            if _ACTIVE_PROGRESS is not None:
+                with _PROGRESS_LOCK:
+                    _ACTIVE_PROGRESS["worker_pids"] = sorted(executor._processes)
+                    # Queued process-pool jobs stay PENDING until independently
+                    # observable; submission alone does not mean computation began.
+                    _ACTIVE_PROGRESS["running_jobs"] = []
+                    _write_progress_locked()
             for future in as_completed(futures):
                 job = futures[future]
                 try:
                     results[job.key] = _publish_comparator_stage(Path(future.result()), job=job)
                 except Exception as exc:
                     failures[job.key] = exc
+                    _record_stage_failure("COMPARATOR", f"E{job.horizon} {job.fit_id}", exc)
+        if _ACTIVE_PROGRESS is not None:
+            with _PROGRESS_LOCK:
+                _ACTIVE_PROGRESS["worker_pids"] = []
+                _ACTIVE_PROGRESS["running_jobs"] = []
+                _write_progress_locked()
     return ({job.key: results[job.key] for job in jobs if job.key in results},
             {job.key: failures[job.key] for job in jobs if job.key in failures})
 
@@ -1310,7 +1966,8 @@ def _finish_horizon(*, run_dir: Path, env, runner_sha: str, horizon: int,
 
 def _prepare_horizon_stages(*, run_dir: Path, env, runner_sha: str,
                             feature_path: Path, feature_sha: str,
-                            feature_parents: dict[str, str], horizon: int):
+                            feature_parents: dict[str, str], horizon: int,
+                            primary_reuse: dict | None = None):
     _feature_seal_parents(feature_path, expected=feature_parents, artifact_sha=feature_sha)
     inputs = authenticate_inputs(REPO, horizon_minutes=horizon)
     _log(f"E{horizon}", "canonical target authentication start")
@@ -1324,6 +1981,16 @@ def _prepare_horizon_stages(*, run_dir: Path, env, runner_sha: str,
         horizon=horizon, entry=entry)
     primary_hashes, horizon_jobs = {}, []
     for fold in FOLDS:
+        reused = (primary_reuse or {}).get((horizon, fold.fit_id))
+        if reused is not None:
+            base_parents = _fold_parents(
+                env=env, runner_sha=runner_sha, feature_sha=feature_sha, inputs=inputs,
+                fold=fold, horizon=horizon, pre_run_reference_sha=pre_run_reference_sha)
+            imported_sha = _import_stage(
+                reused, _primary_path(run_dir, horizon, fold.fit_id),
+                _primary_parents(base_parents))
+            _log(f"E{horizon}", fold.fit_id, "PRIMARY REUSED_AUTHENTICATED",
+                 imported_sha, "producer", reused["producer_run_id"])
         _, primary_sha = _prepare_primary_stage(
             run_dir=run_dir, env=env, runner_sha=runner_sha,
             feature_path=feature_path, feature_sha=feature_sha, inputs=inputs,
@@ -1334,9 +2001,11 @@ def _prepare_horizon_stages(*, run_dir: Path, env, runner_sha: str,
             env=env, runner_sha=runner_sha, feature_sha=feature_sha, inputs=inputs,
             fold=fold, horizon=horizon,
             pre_run_reference_sha=pre_run_reference_sha))
+        effective_primary, _ = _effective_stage_parents(
+            _primary_path(run_dir, horizon, fold.fit_id), primary_parents)
         _stage_ledger(env=env, run_id=run_dir.name, horizon=horizon,
                       stage=f"{fold.fit_id}_PRIMARY", artifact_sha=primary_sha,
-                      parents=primary_parents)
+                      parents=effective_primary)
         horizon_jobs.append(ComparatorJob(
             str(REPO), str(run_dir), runner_sha, str(feature_path), feature_sha,
             horizon, fold.fit_id, pre_run_reference_sha, primary_sha,
@@ -1355,6 +2024,7 @@ def _prepare_independent_horizons(prepare):
             if horizon == 60:
                 raise
             deferred_e120_error = exc
+            _record_stage_failure("PRIMARY", "E120 F1", exc)
             _log("E120", "primary preparation failed; completing independent E60 evidence",
                  f"{type(exc).__name__}: {exc}")
             break
@@ -1365,7 +2035,10 @@ def _prepare_independent_horizons(prepare):
 
 def _run(*, resume_id: str | None = None,
          reuse_features_from_run: str | None = None,
+         reuse_primary_from_run: str | None = None,
+         reuse_comparators_from_run: str | None = None,
          comparator_workers: int = COMPARATOR_WORKERS_DEFAULT) -> dict:
+    global _ACTIVE_PROGRESS
     _validate_worker_count(comparator_workers)
     env, _ = _preflight()
     runner_sha = _committed_runner()
@@ -1381,6 +2054,11 @@ def _run(*, resume_id: str | None = None,
         producer_run_id=reuse_features_from_run, env=env,
         source_contract=source_inputs.source_contract)
         if reuse_features_from_run is not None else None)
+    if reuse_primary_from_run is not None and reuse_evidence is None:
+        raise DevelopmentInputError("stage reuse requires explicit authenticated feature reuse")
+    stage_plan = _planned_stage_reuse(
+        env=env, feature_sha=PRODUCER_FEATURE_SHA256 if reuse_evidence else "",
+        primary_run=reuse_primary_from_run, comparator_run=reuse_comparators_from_run)
     manifest_reuse = ({key: value for key, value in reuse_evidence.items()
                        if key != "producer_artifact_path"}
                       if reuse_evidence is not None else
@@ -1393,6 +2071,8 @@ def _run(*, resume_id: str | None = None,
                                            for h in (60, 120)},
                          "feature_end_exclusive": iso(FEATURE_STOP),
                          "feature_materialization": manifest_reuse}
+    if reuse_primary_from_run is not None:
+        expected_manifest["stage_reuse"] = _public_stage_plan(stage_plan)
     if resume_id is None:
         RUN_ROOT.mkdir(parents=True, exist_ok=True)
         _guard_run_dir(run_dir)
@@ -1407,6 +2087,11 @@ def _run(*, resume_id: str | None = None,
             any(run_dir.glob(".features-incomplete-*")) or
             any(run_dir.glob(".features-import-incomplete-*"))):
         raise DevelopmentInputError("incomplete temporary stage present; manual audit required")
+    _ACTIVE_PROGRESS = {"run_id": run_id, "runner_pid": os.getpid(),
+                        "worker_pids": [], "current_stage": "STARTING",
+                        "last_progress_timestamp": iso(datetime.now(UTC)),
+                        "heartbeat": iso(datetime.now(UTC))}
+    threading.Thread(target=_progress_heartbeat, daemon=True).start()
     _log("run", run_id, "authenticated plan", env.identity_sha256)
     feature_parents = {"environment": env.identity_sha256, "runner": runner_sha,
                        "source": SOURCE_SHA256, "registry": env.registry_sha256,
@@ -1418,11 +2103,34 @@ def _run(*, resume_id: str | None = None,
     feature_parents = _feature_seal_parents(
         feature_path, expected=_expected_feature_parents(feature_parents, reuse_evidence),
         artifact_sha=feature_sha)
-    contexts, jobs, deferred_e120_error = _prepare_independent_horizons(
-        lambda horizon: _prepare_horizon_stages(
+    prepare = lambda horizon: _prepare_horizon_stages(
             run_dir=run_dir, env=env, runner_sha=runner_sha,
             feature_path=feature_path, feature_sha=feature_sha,
-            feature_parents=feature_parents, horizon=horizon))
+            feature_parents=feature_parents, horizon=horizon,
+            primary_reuse=stage_plan["primary"])
+    if stage_plan["primary"]:
+        contexts, job_list = {}, []
+        for horizon in (60, 120):
+            inputs, reference_sha, primary_hashes, horizon_jobs = prepare(horizon)
+            contexts[horizon] = (inputs, reference_sha, primary_hashes)
+            job_list.extend(horizon_jobs)
+        jobs, deferred_e120_error = tuple(job_list), None
+    else:
+        contexts, jobs, deferred_e120_error = _prepare_independent_horizons(prepare)
+    for job in jobs:
+        reused = stage_plan["comparators"].get(job.key)
+        if reused is not None:
+            imported_sha = _import_stage(
+                reused, _comparator_stage_dir(run_dir, job.horizon, job.fit_id),
+                _comparator_parents(job), comparator=True)
+            _stage_ledger(
+                env=env, run_id=run_id, horizon=job.horizon,
+                stage=f"{job.fit_id}_COMPARATOR", artifact_sha=imported_sha,
+                parents=_effective_stage_parents(
+                    _comparator_stage_dir(run_dir, job.horizon, job.fit_id),
+                    _comparator_parents(job))[0])
+            _log(f"E{job.horizon}", job.fit_id, "COMPARATOR REUSED_AUTHENTICATED",
+                 imported_sha, "producer", reused["producer_run_id"])
     _log("comparators", "all primary stages durable", "workers", comparator_workers)
     comparator_results, comparator_failures = _schedule_comparator_jobs(
         tuple(jobs), workers=comparator_workers)
@@ -1440,7 +2148,9 @@ def _run(*, resume_id: str | None = None,
                 _, artifact_sha = comparator_results[job.key]
                 _stage_ledger(env=env, run_id=run_id, horizon=horizon,
                               stage=f"{fold.fit_id}_COMPARATOR", artifact_sha=artifact_sha,
-                              parents=_comparator_parents(job))
+                              parents=_effective_stage_parents(
+                                  _comparator_stage_dir(run_dir, horizon, fold.fit_id),
+                                  _comparator_parents(job))[0])
             targets = read_label_range(inputs, symbols=SYMBOLS, start=D0,
                                        end=H1_START, max_row_groups=2_000)
             phases = []
@@ -1473,6 +2183,11 @@ def _run(*, resume_id: str | None = None,
                 pre_run_reference_sha=pre_run_reference_sha)
         except Exception as exc:
             horizon_errors[horizon] = exc
+            phase = _ACTIVE_PROGRESS.get("phase", "PRIMARY") if _ACTIVE_PROGRESS else "PRIMARY"
+            key = _ACTIVE_PROGRESS.get("phase_key", "") if _ACTIVE_PROGRESS else ""
+            if not str(key).startswith(f"E{horizon}"):
+                phase, key = "PRIMARY", f"E{horizon} F1"
+            _record_stage_failure(phase, key, exc)
     deferred_errors = [
         (horizon, next(i for i, fold in enumerate(FOLDS) if fold.fit_id == fit_id), exc)
         for (horizon, fit_id), exc in comparator_failures.items()]
@@ -1483,6 +2198,7 @@ def _run(*, resume_id: str | None = None,
     if deferred_errors:
         raise min(deferred_errors, key=lambda value: (value[0], value[1]))[2]
     _log("run", run_id, "development dossiers complete")
+    _ACTIVE_PROGRESS = None
     return {"run_id": run_id, "run_dir": str(run_dir), "dossier_sha256": results}
 
 
@@ -1614,12 +2330,202 @@ def _status(run_id: str) -> dict:
         if not path.is_dir() or path.is_symlink():
             raise DevelopmentInputError(f"invalid comparator temporary path: {path}")
         interrupted.append(path.name)
+    planned_reuse = manifest.get("stage_reuse", {})
+    planned_primary = planned_reuse.get("primary", {})
+    planned_comparators = planned_reuse.get("comparators", {})
+    current_entries = ExperimentLedger(LEDGER_ROOT).read_all()
+    for horizon in (60, 120):
+        for fold in FOLDS:
+            key = f"E{horizon} {fold.fit_id}"
+            primary_name = f"E{horizon}_{fold.fit_id}.primary.json.gz"
+            comparator_name = f"E{horizon}_{fold.fit_id}.comparator.stage"
+            final_name = f"E{horizon}_{fold.fit_id}.json.gz"
+            if final_name in stages and (primary_name not in stages or
+                                         comparator_name not in comparator_stages):
+                raise DevelopmentInputError("final fold lacks staged parents")
+            if primary_name not in stages and comparator_name not in comparator_stages:
+                continue
+            primary_path = run_dir / primary_name
+            base = {"environment": manifest["plan"]["environment_sha256"],
+                    "runner": manifest["runner_sha256"],
+                    "features": stages[feature_names[0]] if feature_names else "",
+                    "canonical_label": manifest["label_members"][str(horizon)],
+                    "source": SOURCE_SHA256, "release": RELEASE_SHA256,
+                    "fit": digest((fold.fit_id, horizon))}
+            reference = stages.get(f"E{horizon}_pre_run_ledger.json")
+            if reference:
+                base["pre_run_registration"] = reference
+            if primary_name in stages:
+                effective, imported = _effective_stage_parents(
+                    primary_path, _primary_parents(base))
+                if imported is not None:
+                    if imported != planned_primary.get(key):
+                        raise DevelopmentInputError("primary import differs from run plan")
+                    _read_primary_stage(primary_path, parents=base,
+                                        horizon=horizon, fit_id=fold.fit_id)
+                    _verify_stage_ledger_existing(
+                        entries=current_entries, run_id=run_id, horizon=horizon,
+                        stage=f"{fold.fit_id}_PRIMARY", artifact_sha=stages[primary_name],
+                        parents=effective,
+                        environment_sha=manifest["plan"]["environment_sha256"],
+                        revision=manifest["plan"]["source_revision"])
+                elif key in planned_primary:
+                    raise DevelopmentInputError("planned primary reuse was generated")
+            if comparator_name in comparator_stages:
+                directory = run_dir / comparator_name
+                comparator_base = {**base, "stage": "REPORT_ONLY_COMPARATOR",
+                                   "primary_stage": stages[primary_name]}
+                effective, imported = _effective_stage_parents(directory, comparator_base)
+                if imported is not None:
+                    if imported != planned_comparators.get(key):
+                        raise DevelopmentInputError("comparator import differs from run plan")
+                    _verify_stage_ledger_existing(
+                        entries=current_entries, run_id=run_id, horizon=horizon,
+                        stage=f"{fold.fit_id}_COMPARATOR",
+                        artifact_sha=comparator_stages[comparator_name], parents=effective,
+                        environment_sha=manifest["plan"]["environment_sha256"],
+                        revision=manifest["plan"]["source_revision"])
+                elif key in planned_comparators:
+                    raise DevelopmentInputError("planned comparator reuse was generated")
+            if final_name in stages:
+                final_parents = {**base, "primary_stage": stages[primary_name],
+                                 "comparator_stage": comparator_stages[comparator_name]}
+                if _sealed_read(run_dir / final_name, parents=final_parents,
+                                read_payload=False) is None:
+                    raise DevelopmentInputError("final fold seal missing")
+                _verify_stage_ledger_existing(
+                    entries=current_entries, run_id=run_id, horizon=horizon,
+                    stage=fold.fit_id, artifact_sha=stages[final_name],
+                    parents=final_parents,
+                    environment_sha=manifest["plan"]["environment_sha256"],
+                    revision=manifest["plan"]["source_revision"])
+    for horizon in (60, 120):
+        dossier_name = f"E{horizon}_development_dossier.json.gz"
+        if dossier_name not in stages:
+            continue
+        fold_hashes = tuple((fold.fit_id, stages[f"E{horizon}_{fold.fit_id}.json.gz"])
+                            for fold in FOLDS)
+        dossier_parents = {
+            "environment": manifest["plan"]["environment_sha256"],
+            "runner": manifest["runner_sha256"],
+            "features": stages[feature_names[0]],
+            "canonical_label": manifest["label_members"][str(horizon)],
+            "folds": digest(fold_hashes),
+            "pre_run_registration": stages[f"E{horizon}_pre_run_ledger.json"],
+        }
+        if _sealed_read(run_dir / dossier_name, parents=dossier_parents,
+                        read_payload=False) is None:
+            raise DevelopmentInputError("dossier seal missing")
+        _verify_stage_ledger_existing(
+            entries=current_entries, run_id=run_id, horizon=horizon,
+            stage="DOSSIER", artifact_sha=stages[dossier_name],
+            parents=dossier_parents,
+            environment_sha=manifest["plan"]["environment_sha256"],
+            revision=manifest["plan"]["source_revision"])
+    progress_path = run_dir / "progress.json"
+    _reject_reparse_components(progress_path)
+    progress = _read_json(progress_path) if progress_path.is_file() else {}
+    if progress and progress.get("run_id") != run_id:
+        raise DevelopmentInputError("progress run identity mismatch")
+    feature_state = {"status": ("REUSED_AUTHENTICATED" if
+                     feature_materialization.get("feature_materialization_mode") ==
+                     "REUSED_AUTHENTICATED" and feature_names else
+                     "GENERATED_CURRENT" if feature_names else "PENDING"),
+                     "producer_run": feature_materialization.get("producer_run_id"),
+                     "artifact_sha": stages.get(feature_names[0]) if feature_names else None}
+    primary_state, comparator_state, final_state = {}, {}, {}
+    for horizon in (60, 120):
+        for fold in FOLDS:
+            key = f"E{horizon} {fold.fit_id}"
+            primary_name = f"E{horizon}_{fold.fit_id}.primary.json.gz"
+            comparator_name = f"E{horizon}_{fold.fit_id}.comparator.stage"
+            final_name = f"E{horizon}_{fold.fit_id}.json.gz"
+            primary_import = stage_seals.get(primary_name, {}).get("imported", {})
+            comparator_seal_path = run_dir / comparator_name / "seal.json"
+            comparator_import = (_read_json(comparator_seal_path).get("imported", {})
+                                 if comparator_name in comparator_stages else {})
+            primary_state[key] = {
+                "status": ("REUSED_AUTHENTICATED" if primary_import else
+                           "GENERATED_CURRENT" if primary_name in stages else "PENDING"),
+                "producer_run": primary_import.get("producer_run_id"),
+                "artifact_sha": stages.get(primary_name)}
+            comparator_state[key] = {
+                "status": ("REUSED_AUTHENTICATED" if comparator_import else
+                           "GENERATED_CURRENT" if comparator_name in comparator_stages else
+                           "PENDING"),
+                "producer_run": comparator_import.get("producer_run_id"),
+                "artifact_sha": comparator_stages.get(comparator_name)}
+            final_state[key] = {"status": "GENERATED_CURRENT" if final_name in stages else
+                                "PENDING", "artifact_sha": stages.get(final_name)}
+    dossiers = {f"E{h}": ("GENERATED_CURRENT" if
+                f"E{h}_development_dossier.json.gz" in stages else "PENDING")
+                for h in (60, 120)}
+    active_phase = progress.get("phase")
+    active_key = progress.get("phase_key")
+    progress_live = _progress_is_live(progress) if progress else False
+    active_status = "FAILED" if progress.get("failed") or not progress_live else "RUNNING"
+    if active_phase == "FEATURES" and feature_state["status"] == "PENDING":
+        feature_state["status"] = active_status
+    if active_phase == "PRIMARY" and active_key in primary_state and \
+            primary_state[active_key]["status"] == "PENDING":
+        primary_state[active_key]["status"] = active_status
+    for key in progress.get("running_jobs", []):
+        if key in comparator_state and comparator_state[key]["status"] == "PENDING":
+            comparator_state[key]["status"] = active_status
+    if active_phase == "FINAL_FOLD" and active_key in final_state and \
+            final_state[active_key]["status"] == "PENDING":
+        final_state[active_key]["status"] = active_status
+    evaluation_state, bootstrap_state = dict(dossiers), dict(dossiers)
+    if active_key in dossiers:
+        if active_phase == "EVALUATION":
+            evaluation_state[active_key] = active_status
+        elif active_phase == "BOOTSTRAP":
+            evaluation_state[active_key] = "GENERATED_CURRENT"
+            bootstrap_state[active_key] = active_status
+        elif active_phase == "DOSSIER":
+            evaluation_state[active_key] = "GENERATED_CURRENT"
+            bootstrap_state[active_key] = "GENERATED_CURRENT"
+            if dossiers[active_key] == "PENDING":
+                dossiers[active_key] = active_status
+    for failure_key in progress.get("stage_failures", {}):
+        phase, _, key = failure_key.partition(":")
+        if phase == "PRIMARY" and key in primary_state:
+            primary_state[key]["status"] = "FAILED"
+        elif phase == "COMPARATOR" and key in comparator_state:
+            comparator_state[key]["status"] = "FAILED"
+        elif phase == "FINAL_FOLD" and key in final_state:
+            final_state[key]["status"] = "FAILED"
+        elif phase == "EVALUATION" and key in evaluation_state:
+            evaluation_state[key] = "FAILED"
+        elif phase == "BOOTSTRAP" and key in bootstrap_state:
+            bootstrap_state[key] = "FAILED"
+        elif phase == "DOSSIER" and key in dossiers:
+            dossiers[key] = "FAILED"
+    completion_gate = (all(v["status"] == "GENERATED_CURRENT" for v in final_state.values())
+                       and all(v == "GENERATED_CURRENT" for v in dossiers.values()))
     return {"run_id": run_id, "environment_sha256": manifest["plan"]["environment_sha256"],
             "hash_verified_files": stages, "pre_run_ledger_entries": registrations,
             "hash_verified_comparator_stages": comparator_stages,
             "interrupted_comparator_work": interrupted,
             "feature_materialization_mode": feature_materialization.get(
                 "feature_materialization_mode", "LEGACY_UNDECLARED"),
+            "stage_status": {"features": feature_state, "primary": primary_state,
+                             "comparators": comparator_state, "final_folds": final_state,
+                             "final_fold_count": sum(v["status"] == "GENERATED_CURRENT"
+                                                     for v in final_state.values()),
+                             "evaluation": evaluation_state, "bootstrap": bootstrap_state,
+                             "dossiers": dossiers,
+                             "dossier_count": sum(v == "GENERATED_CURRENT" for v in dossiers.values()),
+                             "primary_reused_count": sum(v["status"] == "REUSED_AUTHENTICATED"
+                                                         for v in primary_state.values()),
+                             "primary_generated_count": sum(v["status"] == "GENERATED_CURRENT"
+                                                            for v in primary_state.values()),
+                             "comparator_reused_count": sum(v["status"] == "REUSED_AUTHENTICATED"
+                                                            for v in comparator_state.values()),
+                             "comparator_generated_count": sum(v["status"] == "GENERATED_CURRENT"
+                                                               for v in comparator_state.values()),
+                             "authoritative_completion_gate": completion_gate},
+            "process": {**progress, "alive_with_fresh_heartbeat": progress_live},
             "dossier_files_present_and_hashed": all(
                 f"E{h}_development_dossier.json.gz" in stages for h in (60, 120))}
 
@@ -1632,27 +2538,43 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--resume", metavar="RUN_ID")
     mode.add_argument("--status", metavar="RUN_ID")
     parser.add_argument("--reuse-features-from-run", metavar="PRODUCER_RUN_ID")
+    parser.add_argument("--reuse-primary-from-run", metavar="PRODUCER_RUN_ID")
+    parser.add_argument("--reuse-comparators-from-run", metavar="PRODUCER_RUN_ID")
     parser.add_argument("--comparator-workers", type=int, default=COMPARATOR_WORKERS_DEFAULT,
                         help="explicit process workers for independent comparators (1-4; default 1)")
     args = parser.parse_args(argv)
     try:
         _validate_worker_count(args.comparator_workers)
         if args.dry_run:
-            result = dry_run(reuse_features_from_run=args.reuse_features_from_run)
+            result = dry_run(reuse_features_from_run=args.reuse_features_from_run,
+                             reuse_primary_from_run=args.reuse_primary_from_run,
+                             reuse_comparators_from_run=args.reuse_comparators_from_run)
         elif args.execute:
             result = _run(reuse_features_from_run=args.reuse_features_from_run,
+                          reuse_primary_from_run=args.reuse_primary_from_run,
+                          reuse_comparators_from_run=args.reuse_comparators_from_run,
                           comparator_workers=args.comparator_workers)
         elif args.resume:
             result = _run(resume_id=args.resume,
                           reuse_features_from_run=args.reuse_features_from_run,
+                          reuse_primary_from_run=args.reuse_primary_from_run,
+                          reuse_comparators_from_run=args.reuse_comparators_from_run,
                           comparator_workers=args.comparator_workers)
         else:
-            if args.reuse_features_from_run is not None or args.comparator_workers != 1:
+            if (args.reuse_features_from_run is not None or
+                    args.reuse_primary_from_run is not None or
+                    args.reuse_comparators_from_run is not None or args.comparator_workers != 1):
                 raise DevelopmentInputError("execution options are invalid with status")
             result = _status(args.status)
         print(canonical_json(result), flush=True)
         return 0
     except (DevelopmentInputError, OSError, ValueError, KeyError) as exc:
+        if _ACTIVE_PROGRESS is not None:
+            with _PROGRESS_LOCK:
+                _ACTIVE_PROGRESS["failed"] = True
+                _ACTIVE_PROGRESS["failure_reason"] = f"{type(exc).__name__}: {exc}"[:500]
+                _ACTIVE_PROGRESS["last_progress_timestamp"] = iso(datetime.now(UTC))
+                _write_progress_locked()
         print(f"LDE_V1_RUN_BLOCKED: {exc}", file=sys.stderr, flush=True)
         return 2
 
