@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ProcessPoolExecutor
-from dataclasses import replace
+from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 import inspect
 import json
@@ -25,14 +25,15 @@ from triggertrade.live_direction_estimator_v1.comparator import (
 from triggertrade.live_direction_estimator_v1.evaluation_bootstrap import randint_raw
 from triggertrade.live_direction_estimator_v1.evaluation_decision import decide_horizon
 from triggertrade.live_direction_estimator_v1.features import RawFeatureRow
-from triggertrade.live_direction_estimator_v1.manifests import RowMetadata, build_manifest
+from triggertrade.live_direction_estimator_v1.manifests import RowMetadata, build_manifest, canonical_json, digest
 from triggertrade.live_direction_estimator_v1.model import CLASSES, LAMBDA, Q_ID
 from triggertrade.live_direction_estimator_v1.orchestration import IdentityReferences, fit_pipeline, score_bundle
 from triggertrade.live_direction_estimator_v1.report_only_status import (
     ReportOnlyStatus, seal_report_only_status,
 )
+from triggertrade.live_direction_estimator_v1.report_only_matching import matched_primary_rows
 from triggertrade.live_direction_estimator_v1.rolling_shadow import (
-    SHADOW_ID, ShadowArtifact, build_shadow_base_manifest, fit_shadow,
+    SHADOW_ID, ShadowArtifact, ShadowScoredRow, build_shadow_base_manifest, fit_shadow,
     score_shadow, shadow_window, subtract_calendar_months,
 )
 from triggertrade.live_direction_estimator_v1.source import SYMBOLS
@@ -395,6 +396,72 @@ def test_shadow_own_family_preprocessing_calibration_hash_roundtrip_matched_keys
     with pytest.raises(ValueError, match="matched primary SCORE"):
         score_shadow(shadow, primary=primary, scored_manifest=bm, scored_rows=base,
                      primary_scored_rows=primary_scores)
+
+
+def test_shadow_batch_verifies_once_and_preserves_exact_public_prediction_output(monkeypatch):
+    primary, base, calibration, score, bm, cm, sm = _population("F2", two_windows=True)
+    shadow = fit_shadow(primary=primary, primary_base_manifest=bm,
+                        calibration_manifest=cm, base_rows=base, calibration_rows=calibration)
+    primary_scores = score_bundle(primary, scored_manifest=sm, scored_rows=score)
+    matched = matched_primary_rows(primary=primary, scored_manifest=sm,
+                                   scored_rows=score, primary_scored_rows=primary_scores)
+    reference = tuple(ShadowScoredRow(member.prediction_origin, row.physical_symbol,
+                      shadow.horizon_minutes, sm.manifest_sha256,
+                      shadow.predict(row.physical_symbol, row.feature_row))
+                      for row, member in matched)
+    assert len(reference) > 1 and len({row.physical_symbol for row in reference}) > 1
+    calls = 0
+    original_verify = ShadowArtifact.verify
+
+    def counted_verify(self):
+        nonlocal calls
+        calls += 1
+        return original_verify(self)
+
+    monkeypatch.setattr(ShadowArtifact, "verify", counted_verify)
+    result = score_shadow(shadow, primary=primary, scored_manifest=sm, scored_rows=score,
+                          primary_scored_rows=primary_scores)
+    assert calls == 1
+    assert result == reference
+    assert tuple(asdict(row) for row in result) == tuple(asdict(row) for row in reference)
+    assert canonical_json([asdict(row) for row in result]) == canonical_json(
+        [asdict(row) for row in reference])
+    assert digest([asdict(row) for row in result]) == digest([asdict(row) for row in reference])
+    assert tuple((row.prediction_origin, row.physical_symbol) for row in result) == \
+        tuple(member.key for _, member in matched)
+    assert all(row.primary_score_manifest_sha256 == sm.manifest_sha256 and
+               row.prediction.shadow_sha256 == shadow.artifact_sha256 for row in result)
+    for row in score[:2]:
+        shadow.predict(row.physical_symbol, row.feature_row)
+    assert calls == 3  # Every independent public call still verifies.
+
+
+def test_shadow_batch_and_public_prediction_fail_closed_on_invalid_artifact_and_rows(monkeypatch):
+    primary, base, calibration, score, bm, cm, sm = _population("F2", two_windows=True)
+    shadow = fit_shadow(primary=primary, primary_base_manifest=bm,
+                        calibration_manifest=cm, base_rows=base, calibration_rows=calibration)
+    primary_scores = score_bundle(primary, scored_manifest=sm, scored_rows=score)
+    invalid = replace(shadow, artifact_sha256="0" * 64)
+    with pytest.raises(ValueError, match="shadow artifact identity"):
+        invalid.predict(score[0].physical_symbol, score[0].feature_row)
+    visited = []
+    original_predict_verified = ShadowArtifact._predict_verified
+
+    def counted_predict(self, symbol, row):
+        visited.append(symbol)
+        return original_predict_verified(self, symbol, row)
+
+    monkeypatch.setattr(ShadowArtifact, "_predict_verified", counted_predict)
+    with pytest.raises(ValueError, match="shadow artifact identity"):
+        score_shadow(invalid, primary=primary, scored_manifest=sm, scored_rows=score,
+                     primary_scored_rows=primary_scores)
+    assert visited == []
+    with pytest.raises(ValueError, match="shadow symbol mismatch"):
+        shadow.predict("BTCUSDT" if score[1].physical_symbol != "BTCUSDT" else "AVAXUSDT",
+                       score[1].feature_row)
+    with pytest.raises(ValueError, match="invalid raw feature row"):
+        shadow.predict(score[0].physical_symbol,
+                       replace(score[0].feature_row, values=(float("nan"),) + score[0].feature_row.values[1:]))
 
 
 def test_f1_shadow_warmup_has_distinct_role_even_when_membership_equals_primary():

@@ -200,6 +200,10 @@ class ShadowArtifact:
 
     def predict(self, physical_symbol: str, raw_feature_row) -> ShadowPrediction:
         self.verify()
+        return self._predict_verified(physical_symbol, raw_feature_row)
+
+    def _predict_verified(self, physical_symbol: str, raw_feature_row) -> ShadowPrediction:
+        """Predict within a batch whose artifact was already verified."""
         if raw_feature_row.physical_symbol != physical_symbol:
             raise ValueError("shadow symbol mismatch")
         processed = transform(raw_feature_row, self.preprocessing)
@@ -279,5 +283,5 @@ def score_shadow(artifact: ShadowArtifact, *, primary: FitBundle,
         scored_rows=scored_rows, primary_scored_rows=primary_scored_rows)
     return tuple(ShadowScoredRow(member.prediction_origin, row.physical_symbol,
         artifact.horizon_minutes, scored_manifest.manifest_sha256,
-        artifact.predict(row.physical_symbol, row.feature_row))
+        artifact._predict_verified(row.physical_symbol, row.feature_row))
         for row, member in matched)
