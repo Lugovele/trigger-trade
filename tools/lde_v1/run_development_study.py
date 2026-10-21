@@ -23,6 +23,7 @@ import stat
 import sys
 import tempfile
 import threading
+import time
 from collections import deque
 import os
 from uuid import uuid4
@@ -1285,18 +1286,9 @@ def _stage_ledger(*, env, run_id: str, horizon: int, stage: str,
     fit_scope = f"{run_id}:{stage}"
     matching = [e for e in ledger.read_all() if e.action == action and
                 e.horizon_minutes == horizon and e.fit_or_cohort_id == fit_scope]
-    seal_path = _stage_seal_path(run_id, horizon, stage)
-    artifact_pairs = [("stage_artifact", artifact_sha),
-                      ("environment", env.identity_sha256)]
-    if seal_path.is_file():
-        _reject_reparse_components(seal_path)
-        artifact_pairs.append(("stage_seal", _file_sha256(seal_path)))
-    artifact_hashes = tuple(sorted(artifact_pairs))
-    # Seal parents may carry a semantic stage label. Keep that seal identity
-    # intact, but commit the label as a digest in the ledger's SHA-only field.
-    manifest_hashes = tuple(sorted(
-        (name, digest((value, horizon, stage)) if name == "stage" else value)
-        for name, value in parents.items()))
+    artifact_hashes, manifest_hashes = _stage_ledger_identity(
+        run_id=run_id, horizon=horizon, stage=stage, artifact_sha=artifact_sha,
+        parents=parents, environment_sha=env.identity_sha256)
     if matching:
         if (len(matching) != 1 or matching[0].artifact_hashes != artifact_hashes or
                 matching[0].manifest_hashes != manifest_hashes):
@@ -1323,26 +1315,56 @@ def _stage_seal_path(run_id: str, horizon: int, stage: str) -> Path:
     return run_dir / (name + ".seal.json")
 
 
-def _verify_stage_ledger_existing(*, entries, run_id: str, horizon: int,
-                                  stage: str, artifact_sha: str, parents: dict,
-                                  environment_sha: str, revision: str) -> None:
+def _stage_ledger_identity(*, run_id: str, horizon: int, stage: str,
+                           artifact_sha: str, parents: dict[str, str],
+                           environment_sha: str) -> tuple[tuple, tuple]:
+    """Canonical ledger identity used by both publication and status."""
     seal_path = _stage_seal_path(run_id, horizon, stage)
-    expected_pairs = [("stage_artifact", artifact_sha), ("environment", environment_sha)]
+    artifact_pairs = [("stage_artifact", artifact_sha),
+                      ("environment", environment_sha)]
     if seal_path.is_file():
         _reject_reparse_components(seal_path)
-        expected_pairs.append(("stage_seal", _file_sha256(seal_path)))
-    expected_artifacts = tuple(sorted(expected_pairs))
-    expected_manifests = tuple(sorted(
+        artifact_pairs.append(("stage_seal", _file_sha256(seal_path)))
+    # Seal parents may carry a semantic stage label. The ledger stores its
+    # stage-scoped digest because ledger manifest values must be SHA-256.
+    manifest_hashes = tuple(sorted(
         (name, digest((value, horizon, stage)) if name == "stage" else value)
         for name, value in parents.items()))
-    matching = [entry for entry in entries if
+    return tuple(sorted(artifact_pairs)), manifest_hashes
+
+
+def _verify_stage_ledger_existing(*, entries, run_id: str, horizon: int,
+                                  stage: str, artifact_sha: str, parents: dict,
+                                  environment_sha: str, revision: str,
+                                  live_ledger_reader=None) -> None:
+    expected_artifacts, expected_manifests = _stage_ledger_identity(
+        run_id=run_id, horizon=horizon, stage=stage, artifact_sha=artifact_sha,
+        parents=parents, environment_sha=environment_sha)
+    def matching_entries(snapshot):
+        return [entry for entry in snapshot if
                 entry.action == "DEVELOPMENT_STAGE_COMPLETE" and
                 entry.horizon_minutes == horizon and
                 entry.fit_or_cohort_id == f"{run_id}:{stage}"]
+    matching = matching_entries(entries)
+    # A live importer publishes the seal immediately before appending its
+    # ledger entry. A status snapshot in that short interval must await the
+    # required evidence, never accept the stage without it. Existing but
+    # changed evidence is rejected immediately.
+    if not matching and live_ledger_reader is not None:
+        for _ in range(40):
+            time.sleep(0.25)
+            matching = matching_entries(live_ledger_reader())
+            if matching:
+                expected_artifacts, expected_manifests = _stage_ledger_identity(
+                    run_id=run_id, horizon=horizon, stage=stage,
+                    artifact_sha=artifact_sha, parents=parents,
+                    environment_sha=environment_sha)
+                break
     if (len(matching) != 1 or matching[0].artifact_hashes != expected_artifacts or
             matching[0].manifest_hashes != expected_manifests or
             matching[0].code_revision_or_hash != revision):
-        raise DevelopmentInputError("current imported stage ledger evidence mismatch")
+        raise DevelopmentInputError(
+            f"current imported stage ledger evidence mismatch: E{horizon} {stage}")
 
 
 def _fold_stage(*, run_dir: Path, env, runner_sha: str, feature_path: Path,
@@ -2334,6 +2356,12 @@ def _status(run_id: str) -> dict:
     planned_primary = planned_reuse.get("primary", {})
     planned_comparators = planned_reuse.get("comparators", {})
     current_entries = ExperimentLedger(LEDGER_ROOT).read_all()
+    progress_path = run_dir / "progress.json"
+    _reject_reparse_components(progress_path)
+    live_ledger_reader = (
+        (lambda: ExperimentLedger(LEDGER_ROOT).read_all())
+        if progress_path.is_file() and _progress_is_live(_read_json(progress_path))
+        else None)
     for horizon in (60, 120):
         for fold in FOLDS:
             key = f"E{horizon} {fold.fit_id}"
@@ -2368,7 +2396,8 @@ def _status(run_id: str) -> dict:
                         stage=f"{fold.fit_id}_PRIMARY", artifact_sha=stages[primary_name],
                         parents=effective,
                         environment_sha=manifest["plan"]["environment_sha256"],
-                        revision=manifest["plan"]["source_revision"])
+                        revision=manifest["plan"]["source_revision"],
+                        live_ledger_reader=live_ledger_reader)
                 elif key in planned_primary:
                     raise DevelopmentInputError("planned primary reuse was generated")
             if comparator_name in comparator_stages:
@@ -2384,7 +2413,8 @@ def _status(run_id: str) -> dict:
                         stage=f"{fold.fit_id}_COMPARATOR",
                         artifact_sha=comparator_stages[comparator_name], parents=effective,
                         environment_sha=manifest["plan"]["environment_sha256"],
-                        revision=manifest["plan"]["source_revision"])
+                        revision=manifest["plan"]["source_revision"],
+                        live_ledger_reader=live_ledger_reader)
                 elif key in planned_comparators:
                     raise DevelopmentInputError("planned comparator reuse was generated")
             if final_name in stages:

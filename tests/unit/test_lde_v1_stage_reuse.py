@@ -141,6 +141,90 @@ def test_imported_current_ledger_is_required(import_fixture):
             parents=parents, environment_sha="a" * 64, revision=CURRENT)
 
 
+@pytest.fixture(params=["PRIMARY", "COMPARATOR"])
+def published_import(import_fixture, tmp_path, monkeypatch, request):
+    source, seal, evidence, _ = import_fixture
+    kind = request.param
+    run_id = "20261021T000000000000Z_464ba257"
+    monkeypatch.setattr(runner, "RUN_ROOT", tmp_path / "runs")
+    monkeypatch.setattr(runner, "LEDGER_ROOT", tmp_path / "ledger")
+    run_dir = runner.RUN_ROOT / run_id
+    run_dir.mkdir(parents=True)
+    stage = f"F1_{kind}"
+    if kind == "PRIMARY":
+        destination = runner._primary_path(run_dir, 60, "F1")
+        base = {"stage": "PRIMARY_FOLD", "environment": "a" * 64}
+    else:
+        destination = runner._comparator_stage_dir(run_dir, 60, "F1")
+        base = {"stage": "REPORT_ONLY_COMPARATOR", "environment": "a" * 64,
+                "primary_stage": "b" * 64}
+        evidence = {**evidence, "kind": "COMPARATOR_STAGE",
+                    "primary_parent_sha256": "b" * 64}
+    artifact_sha = runner._import_stage(
+        evidence, destination, base, comparator=kind == "COMPARATOR")
+    parents, imported = runner._effective_stage_parents(destination, base)
+    env = SimpleNamespace(identity_sha256="a" * 64, source_revision="4" * 40)
+    runner._stage_ledger(env=env, run_id=run_id, horizon=60, stage=stage,
+                         artifact_sha=artifact_sha, parents=parents)
+    entries = runner.ExperimentLedger(runner.LEDGER_ROOT).read_all()
+    return run_id, stage, destination, base, parents, imported, artifact_sha, env, entries
+
+
+def verify_published(published_import, **overrides):
+    run_id, stage, _, _, parents, _, artifact_sha, env, entries = published_import
+    args = dict(entries=entries, run_id=run_id, horizon=60, stage=stage,
+                artifact_sha=artifact_sha, parents=parents,
+                environment_sha=env.identity_sha256, revision=env.source_revision)
+    args.update(overrides)
+    runner._verify_stage_ledger_existing(**args)
+
+
+def test_status_accepts_execution_published_import_and_canonical_identity(published_import):
+    run_id, stage, _, _, parents, _, artifact_sha, env, entries = published_import
+    verify_published(published_import)
+    expected = runner._stage_ledger_identity(
+        run_id=run_id, horizon=60, stage=stage, artifact_sha=artifact_sha,
+        parents=parents, environment_sha=env.identity_sha256)
+    assert (entries[0].artifact_hashes, entries[0].manifest_hashes) == expected
+
+
+def test_status_waits_for_live_import_ledger_then_authenticates(published_import, monkeypatch):
+    monkeypatch.setattr(runner.time, "sleep", lambda _: None)
+    entries = published_import[-1]
+    verify_published(published_import, entries=(), live_ledger_reader=lambda: entries)
+
+
+def test_status_never_accepts_missing_import_ledger(published_import, monkeypatch):
+    monkeypatch.setattr(runner.time, "sleep", lambda _: None)
+    with pytest.raises(DevelopmentInputError, match="current imported stage ledger"):
+        verify_published(published_import, entries=(), live_ledger_reader=lambda: ())
+
+
+def test_status_rejects_changed_import_ledger_evidence(published_import):
+    with pytest.raises(DevelopmentInputError, match="current imported stage ledger"):
+        verify_published(published_import, artifact_sha="f" * 64)
+
+
+@pytest.mark.parametrize("field", ["producer_seal_sha256", "compatibility_identity"])
+def test_status_rejects_changed_import_provenance(published_import, field):
+    _, _, destination, base, _, _, _, _, _ = published_import
+    seal_path = (destination / "seal.json" if destination.is_dir() else
+                 destination.with_name(destination.name + ".seal.json"))
+    seal = runner._read_json(seal_path)
+    seal["imported"][field] = "0" * 64
+    seal_path.write_text(runner.canonical_json(seal), encoding="utf-8")
+    with pytest.raises(DevelopmentInputError, match="imported stage provenance mismatch"):
+        runner._effective_stage_parents(destination, base)
+
+
+def test_status_rejects_comparator_primary_parent_mismatch(published_import):
+    _, stage, destination, base, _, _, _, _, _ = published_import
+    if stage != "F1_COMPARATOR":
+        pytest.skip("comparator only")
+    with pytest.raises(DevelopmentInputError, match="imported stage provenance mismatch"):
+        runner._effective_stage_parents(destination, {**base, "primary_stage": "f" * 64})
+
+
 @pytest.mark.parametrize("target", ["bytes", "seal"])
 def test_producer_tamper_fails_before_copy(import_fixture, target):
     source, seal, evidence, destination = import_fixture
